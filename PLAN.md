@@ -675,220 +675,92 @@ struct SearchResult {
 
 ---
 
-## 1.4 Orchestration State & Task Assignment
+## 1.4 Orchestration State & Dispatch
 
-Grove's orchestration layer manages **SQLite-backed state**, **multi-factor task scoring**, **context window monitoring**, and an extensible **approval engine** — all native Rust.
+Grove is bead-centric, not agent-centric. There are no agent types, no agent records, no assignment strategies. The entities are beads, runs, and sessions.
 
-### 1.4.1 Orchestration Schema & State Machines
+### 1.4.1 Canonical Status Enums
 
-**Entity status enums** (all persisted in SQLite):
-
-```rust
-enum SessionStatus { Active, Paused, Terminated }
-enum AgentStatus { Idle, Working, Error, Crashed }
-enum TaskStatus { Pending, Assigned, Working, Completed, Failed }
-enum ApprovalStatus { Pending, Approved, Denied, Expired }
-enum BeadStatus { Assigned, Working, Completed, Failed, Reassigned }
-```
-
-**Core entities**:
+These are defined once in `grove-types` and used everywhere:
 
 ```rust
-struct Session {
-    id: String,
-    status: SessionStatus,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-    config: serde_json::Value,
-}
-
-struct AgentRecord {
-    id: String,
-    session_id: String,
-    agent_type: String,        // "coder", "reviewer", "tester"
-    status: AgentStatus,
-    current_task_id: Option<String>,
-    context_usage_pct: f32,
-    last_heartbeat: DateTime<Utc>,
-}
-
-struct TaskRecord {
-    id: String,
-    session_id: String,
-    bead_id: Option<String>,
-    title: String,
-    status: TaskStatus,
-    assigned_agent_id: Option<String>,
-    priority: i32,
-    attempt_count: u32,
-    created_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
-}
-
-struct ReservationRecord {
-    id: i64,
-    agent_id: String,
-    path_pattern: String,      // glob pattern
-    exclusive: bool,
-    expires_at: DateTime<Utc>,
-    reason: Option<String>,
-}
+pub enum GroveBeadStatus { Idle, Ready, Running, Checkpointed, WaitingToRetry, Succeeded, Failed }
+pub enum RunStatus { Active, WaitingToRetry, Checkpointed, Succeeded, Failed }
+pub enum SessionStatus { Starting, Streaming, CheckpointRequested, Completed, TimedOut, RateLimited, PermissionDenied, Crashed, Killed }
+pub enum CircuitState { Closed, HalfOpen, Open }
 ```
 
-**SQLite migration** (embedded SQL):
+No other status enums exist in the codebase. `TaskStatus`, `AgentStatus`, `BeadStatus` from swarm patterns are explicitly not used.
 
-```sql
-CREATE TABLE sessions (
-    id TEXT PRIMARY KEY,
-    status TEXT NOT NULL DEFAULT 'active',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    config TEXT
-);
+### 1.4.2 Canonical Readiness Rule
 
-CREATE TABLE agents (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    agent_type TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'idle',
-    current_task_id TEXT,
-    context_usage_pct REAL DEFAULT 0.0,
-    last_heartbeat TEXT NOT NULL
-);
+> **A bead is dispatchable if and only if `br ready --json` reports it AND grove has no local blocker (active run, retry backoff, breaker open, reservation conflict).**
 
-CREATE TABLE tasks (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id),
-    bead_id TEXT,
-    title TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'pending',
-    assigned_agent_id TEXT REFERENCES agents(id),
-    priority INTEGER NOT NULL DEFAULT 2,
-    attempt_count INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL,
-    completed_at TEXT
-);
+Grove may only suppress readiness, never create it. If `br` does not report a bead as ready, grove must not dispatch it regardless of local state. The `GroveBeadStatus::Ready` field is a cache of this computed result, not an independent source of truth.
 
-CREATE TABLE reservations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    agent_id TEXT NOT NULL REFERENCES agents(id),
-    path_pattern TEXT NOT NULL,
-    exclusive INTEGER NOT NULL DEFAULT 1,
-    expires_at TEXT NOT NULL,
-    reason TEXT
-);
+### 1.4.3 Multi-Factor Bead Scoring
 
-CREATE TABLE events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
-    event_type TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
-    entity_id TEXT NOT NULL,
-    data TEXT,
-    created_at TEXT NOT NULL
-);
-```
-
-**Reservation conflict detection** uses GLOB-based path matching:
+The scheduler scores each dispatchable bead to decide dispatch priority:
 
 ```rust
-fn find_conflicts(db: &Database, agent_id: &str, patterns: &[String]) -> Vec<ReservationRecord> {
-    // For each requested pattern, find existing exclusive reservations
-    // where the GLOB patterns overlap and the reservation hasn't expired
-    // and belongs to a different agent
-}
-```
-
-**Event replay for crash recovery**: On startup, replay all events from `events` table to reconstruct in-memory state.
-
-### 1.4.2 Multi-Factor Task Scoring
-
-The task scorer computes a composite score for assigning tasks to agents:
-
-```rust
-struct TaskScore {
+struct BeadScore {
     total: i32,
     components: ScoreComponents,
 }
 
 struct ScoreComponents {
-    base: i32,                    // from task priority (P0=100, P1=80, P2=60, P3=40, P4=20)
+    base: i32,                    // from bead priority (P0=100, P1=80, P2=60, P3=40, P4=20)
     critical_path_bonus: i32,     // +20 if on critical path (from bv)
-    agent_type_bonus: i32,        // +15 if agent type matches task type
-    profile_tag_bonus: i32,       // +10 per matching tag (up to 3)
-    focus_pattern_bonus: i32,     // +10 if task files match agent's recent work area
+    bv_pagerank_bonus: i32,       // +N from bv --robot-priority
     file_overlap_penalty: i32,    // -1000 if reservation conflict exists
-    context_pressure_penalty: i32,// -5 per 10% context usage above 50%
-    retry_penalty: i32,           // -10 per previous attempt on this task
-    ready_age_bonus: i32,         // +1 per minute the task has been in ready state
+    retry_penalty: i32,           // -10 per previous attempt
+    ready_age_bonus: i32,         // +1 per minute in ready state
 }
 
-fn score_task(task: &TaskRecord, agent: &AgentRecord, config: &SchedulerConfig) -> TaskScore {
+fn score_bead(bead: &GroveBeadView, config: &SchedulerConfig) -> BeadScore {
     let mut s = ScoreComponents::default();
 
-    s.base = match task.priority {
+    s.base = match bead.bead.priority {
         0 => 100, 1 => 80, 2 => 60, 3 => 40, _ => 20,
     };
 
-    if is_on_critical_path(task) { s.critical_path_bonus = config.critical_path_bonus; }
-    if agent_type_matches(agent, task) { s.agent_type_bonus = 15; }
+    if bead.on_critical_path { s.critical_path_bonus = config.critical_path_bonus; }
 
-    let overlap = reservation_overlap(task, agent);
-    if overlap { s.file_overlap_penalty = -config.reservation_conflict_penalty; }
-
-    if agent.context_usage_pct > 0.5 {
-        let excess = ((agent.context_usage_pct - 0.5) * 10.0) as i32;
-        s.context_pressure_penalty = -5 * excess;
+    if has_reservation_conflict(bead) {
+        s.file_overlap_penalty = -config.reservation_conflict_penalty;
     }
 
-    s.retry_penalty = -(config.retry_penalty as i32) * task.attempt_count as i32;
+    s.retry_penalty = -(config.retry_penalty as i32) * bead.attempt_count as i32;
 
-    let ready_minutes = (Utc::now() - task.created_at).num_minutes();
+    let ready_minutes = bead.ready_since.map(|t| (Utc::now() - t).num_minutes()).unwrap_or(0);
     s.ready_age_bonus = (config.ready_age_bonus_per_min as i64 * ready_minutes) as i32;
 
-    TaskScore {
-        total: s.base + s.critical_path_bonus + s.agent_type_bonus
-             + s.profile_tag_bonus + s.focus_pattern_bonus
-             + s.file_overlap_penalty + s.context_pressure_penalty
-             + s.retry_penalty + s.ready_age_bonus,
+    BeadScore {
+        total: s.base + s.critical_path_bonus + s.bv_pagerank_bonus
+             + s.file_overlap_penalty + s.retry_penalty + s.ready_age_bonus,
         components: s,
     }
 }
 ```
 
-**Assignment strategies**:
+There are no assignment strategies (Balanced, Speed, Quality, RoundRobin). The scheduler scores beads, sorts by score descending, and dispatches up to `max_parallel` concurrency slots.
 
-| Strategy | Description |
-|----------|-------------|
-| Balanced | Load-aware: prefer agents with fewer active tasks |
-| Speed | Assign to first available agent with best score |
-| Quality | Pick best-scoring agent per task, even if busy |
-| Dependency | Process blockers first, then dependents |
-| RoundRobin | Cycle through agents evenly |
+### 1.4.4 Context Window Monitor
 
-### 1.4.3 Context Window Monitor
-
-Monitors per-agent context usage with multiple estimators:
+Monitors per-session context usage:
 
 ```rust
-trait ContextEstimator {
-    fn estimate(&self, agent: &AgentRecord) -> ContextEstimate;
-}
-
 struct ContextEstimate {
     usage_pct: f32,          // 0.0 to 1.0
     confidence: f32,         // 0.0 to 1.0
-    method: String,          // which estimator produced this
+    method: String,
 }
 
 struct ContextMonitor {
     warn_threshold: f32,     // default 0.70
     rotate_threshold: f32,   // default 0.82
-    estimators: Vec<Box<dyn ContextEstimator>>,
 }
 ```
-
-**Estimator types**:
 
 | Estimator | Method | Confidence |
 |-----------|--------|------------|
@@ -902,28 +774,18 @@ struct ContextMonitor {
 **Handoff trigger**:
 
 ```rust
-fn should_trigger_handoff(monitor: &ContextMonitor, agent: &AgentRecord) -> HandoffDecision {
-    let estimate = monitor.best_estimate(agent);
+fn should_trigger_handoff(monitor: &ContextMonitor, estimate: &ContextEstimate) -> HandoffDecision {
     if estimate.usage_pct >= monitor.rotate_threshold {
         HandoffDecision::RotateNow
     } else if estimate.usage_pct >= monitor.warn_threshold {
-        // Velocity-based prediction: if current rate would hit rotate_threshold
-        // within next 2 iterations, trigger early
-        let velocity = estimate_velocity(agent);
-        if will_exceed_soon(estimate.usage_pct, velocity, monitor.rotate_threshold) {
-            HandoffDecision::RotateSoon
-        } else {
-            HandoffDecision::Warn
-        }
+        HandoffDecision::Warn
     } else {
         HandoffDecision::Ok
     }
 }
 
-enum HandoffDecision { Ok, Warn, RotateSoon, RotateNow }
+enum HandoffDecision { Ok, Warn, RotateNow }
 ```
-
-**Model context limits**:
 
 | Model | Context window |
 |-------|---------------|
@@ -931,295 +793,75 @@ enum HandoffDecision { Ok, Warn, RotateSoon, RotateNow }
 | claude-opus | 1000k tokens |
 | claude-haiku | 200k tokens |
 
-Token count parsing supports k/M suffixes (e.g., "150k" = 150000).
+### 1.4.5 Reservation Conflict Detection
 
-### 1.4.4 Approval Engine (Future Extension)
-
-State machine for risky actions requiring human approval:
-
-```
-Pending --(approve)--> Approved
-Pending --(deny)--> Denied
-Pending --(timeout)--> Expired
-```
-
-**Approval record**:
+Reservations are per-bead (not per-agent). A bead declares file paths it intends to modify.
 
 ```rust
-struct ApprovalRequest {
-    id: String,              // timestamp + random hex
-    task_id: String,
-    agent_id: String,
-    action: String,          // e.g., "delete_file", "push_to_main"
-    risk_level: RiskLevel,   // Low, Medium, High, Critical
-    status: ApprovalStatus,
-    requested_at: DateTime<Utc>,
+struct ReservationRecord {
+    id: i64,
+    bead_id: BeadId,
+    run_id: RunId,
+    path_pattern: String,      // glob pattern
+    exclusive: bool,
     expires_at: DateTime<Utc>,
-    decided_at: Option<DateTime<Utc>>,
-    decided_by: Option<String>,
 }
 
-enum RiskLevel { Low, Medium, High, Critical }
-```
-
-**SLB (two-person rule)**: For Critical risk, require two independent approvals.
-
-Not in MVP — included here as a design blueprint for phase 3+.
-
-### 1.4.5 Grove Module Mapping
-
-| Concept | Grove module |
-|---------|-------------|
-| SQLite orchestration schema | `grove-db::migrations` |
-| Event history + replay | `grove-kernel::event` |
-| Reservation records + conflict detection | `grove-kernel::reservation` |
-| Multi-factor task scoring | `grove-orchestrator::scheduler` |
-| Context window monitoring | `grove-session::context_monitor` |
-| Approval engine (future) | `grove-orchestrator::approval` (phase 3+) |
-
----
-
-## 1.5 Task Queue & Coordination
-
-Grove's task execution layer implements a **priority queue**, **message bus**, and **session persistence** for coordinating concurrent Claude sessions.
-
-### 1.5.1 Task Model
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Priority {
-    Low = 0,
-    Medium = 1,
-    High = 2,
-    Critical = 3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskType {
-    Development,
-    Testing,
-    Documentation,
-    Review,
-    Refactoring,
-    BugFix,
-    Feature,
-    Infrastructure,
-}
-
-pub struct Task {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub priority: Priority,
-    pub task_type: TaskType,
-    pub dependencies: Vec<String>,
-    pub assigned_to: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub metadata: HashMap<String, String>,
-}
-
-pub struct TaskResult {
-    pub task_id: String,
-    pub success: bool,
-    pub output: Option<String>,
-    pub error: Option<String>,
-    pub duration: Duration,
-    pub artifacts: Vec<String>,
+fn find_conflicts(db: &Database, bead_id: &BeadId, patterns: &[String]) -> Vec<ReservationRecord> {
+    // Find existing exclusive reservations where GLOB patterns overlap,
+    // reservation hasn't expired, and belongs to a different bead
 }
 ```
 
-### 1.5.2 Priority Queue
+### 1.4.6 Event Bus
 
-Task lifecycle: `Pending -> Assigned -> InProgress -> Completed | Failed | Cancelled`
-
-```rust
-pub struct TaskQueue {
-    pending: HashMap<Priority, VecDeque<Task>>,
-    active: HashMap<String, ActiveTask>,
-    completed: VecDeque<CompletedTask>,
-    max_history: usize,         // cap completed history
-}
-
-struct ActiveTask {
-    task: Task,
-    status: TaskStatus,
-    assigned_at: DateTime<Utc>,
-    attempts: Vec<TaskExecutionAttempt>,
-}
-
-struct TaskExecutionAttempt {
-    attempt_no: u32,
-    started_at: DateTime<Utc>,
-    ended_at: Option<DateTime<Utc>>,
-    result: Option<TaskResult>,
-}
-
-struct CompletedTask {
-    task: Task,
-    result: TaskResult,
-    completed_at: DateTime<Utc>,
-}
-
-enum TaskStatus {
-    Pending,
-    Assigned,
-    InProgress,
-    Completed,
-    Failed,
-    Cancelled,
-}
-```
-
-**Queue operations**:
+Bounded-channel event bus for inter-component communication:
 
 ```rust
-impl TaskQueue {
-    fn enqueue(&mut self, task: Task) {
-        self.pending
-            .entry(task.priority)
-            .or_default()
-            .push_back(task);
-    }
-
-    fn get_next_task(&mut self) -> Option<Task> {
-        // Drain by priority: Critical -> High -> Medium -> Low
-        for priority in [Priority::Critical, Priority::High, Priority::Medium, Priority::Low] {
-            if let Some(queue) = self.pending.get_mut(&priority) {
-                if let Some(task) = queue.pop_front() {
-                    return Some(task);
-                }
-            }
-        }
-        None
-    }
-
-    fn finish_task(&mut self, task_id: &str, result: TaskResult) {
-        if let Some(active) = self.active.remove(task_id) {
-            self.completed.push_back(CompletedTask {
-                task: active.task,
-                result,
-                completed_at: Utc::now(),
-            });
-            while self.completed.len() > self.max_history {
-                self.completed.pop_front();
-            }
-        }
-    }
-
-    fn stats(&self) -> QueueStats {
-        QueueStats {
-            pending: self.pending.values().map(|q| q.len()).sum(),
-            active: self.active.len(),
-            completed: self.completed.len(),
-            by_priority: self.pending.iter()
-                .map(|(p, q)| (*p, q.len()))
-                .collect(),
-        }
-    }
-}
-```
-
-### 1.5.3 Message Bus
-
-Bounded-channel message bus for inter-component communication:
-
-```rust
-pub struct MessageBus {
-    sender: broadcast::Sender<UnifiedMessage>,
-    capacity: usize,
-}
-
-pub struct UnifiedMessage {
-    pub id: String,
-    pub from: String,
-    pub to: Option<String>,      // None = broadcast
-    pub content: MessageContent,
-    pub timestamp: DateTime<Utc>,
-}
-
-pub enum MessageContent {
-    TaskAssigned { task_id: String },
-    TaskCompleted { task_id: String, result: TaskResult },
-    TaskFailed { task_id: String, error: String },
-    ContextPressure { agent_id: String, usage_pct: f32 },
-    CheckpointSaved { task_id: String, checkpoint_id: String },
-    HandoffReady { from_task: String, to_task: String },
+pub enum OrchestratorEvent {
+    BeadDispatched { bead_id: BeadId, run_id: RunId },
+    SessionStarted { bead_id: BeadId, session_id: SessionId },
+    SessionEnded { bead_id: BeadId, session_id: SessionId, outcome: SessionStatus },
+    CheckpointSaved { bead_id: BeadId, checkpoint_id: CheckpointId },
+    HandoffPersisted { bead_id: BeadId },
+    BeadSucceeded { bead_id: BeadId },
+    BeadFailed { bead_id: BeadId, failure: FailureClass },
+    ContextPressure { bead_id: BeadId, usage_pct: f32 },
     Shutdown,
 }
 ```
 
-**Backpressure**: When the channel is full, new messages block (bounded channel with configurable capacity, default 1024).
+Backed by `tokio::sync::broadcast` with configurable capacity (default 1024).
 
-**Rate limiting** (atomic token bucket):
-
-```rust
-struct RateLimit {
-    tokens: AtomicU32,
-    max_tokens: u32,
-    window_start: AtomicI64,
-    window_secs: u64,
-}
-
-impl RateLimit {
-    fn try_acquire(&self) -> bool {
-        let now = Utc::now().timestamp();
-        let window = self.window_start.load(Ordering::Relaxed);
-        if now - window > self.window_secs as i64 {
-            self.window_start.store(now, Ordering::Relaxed);
-            self.tokens.store(self.max_tokens, Ordering::Relaxed);
-        }
-        self.tokens.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
-            if t > 0 { Some(t - 1) } else { None }
-        }).is_ok()
-    }
-}
-```
-
-### 1.5.4 Session Persistence
-
-File-based session metadata with in-memory cache:
-
-```rust
-struct SessionMetadata {
-    id: String,
-    status: String,            // "running", "completed", "failed", "terminated"
-    config: serde_json::Value,
-    started_at: DateTime<Utc>,
-    ended_at: Option<DateTime<Utc>>,
-    pid: Option<u32>,
-}
-```
-
-**Grove adaptation**: Instead of JSON files per session, grove uses `grove.db` SQLite tables for session metadata. The pattern of in-memory cache + durable persistence is preserved.
-
-### 1.5.5 Grove Module Mapping
+### 1.4.7 Grove Module Mapping
 
 | Concept | Grove module |
 |---------|-------------|
-| Task model + priority | `grove-kernel::task` (adapted for beads) |
-| Priority queue + lifecycle | `grove-orchestrator::queue` |
-| Multi-factor scoring | `grove-orchestrator::scheduler` |
-| Message bus + backpressure | `grove-orchestrator::events` |
-| Reservation coordination | `grove-orchestrator::reservations` |
-| Session persistence | `grove-kernel::session` / `grove-db` |
+| SQLite orchestration schema | `grove-db::migrations` |
+| Event history + replay | `grove-db::event_repo` |
+| Reservation records + conflict detection | `grove-db::reservation_repo` |
+| Multi-factor bead scoring | `grove-orchestrator::scheduler` |
+| Context window monitoring | `grove-session::context_monitor` |
+| Event bus | `grove-orchestrator::events` |
 
 ---
 
-## 1.6 Design Principle Summary
+## 1.5 Design Principle Summary
 
 The valuable patterns captured in Section 1 are:
 
-- domain models (task, session, checkpoint, bullet, conversation)
-- state machine transitions (circuit breaker, task lifecycle, maturity)
-- scoring algorithms (task scoring, evidence scoring, implicit feedback)
+- domain models (bead, run, session, checkpoint, handoff, bullet, conversation)
+- state machine transitions (circuit breaker, run lifecycle, maturity)
+- scoring algorithms (bead scoring, evidence scoring, implicit feedback)
 - persistence patterns (SQLite, WAL, migrations, watermarks)
 - curation logic (dedup, conflict, promotion/demotion)
 - retrieval patterns (FTS5, incremental ingest)
-- safety logic (circuit breaker, context monitoring, rate limiting)
+- safety logic (circuit breaker, context monitoring)
 - recovery logic (event replay, checkpoint/handoff, crash recovery)
 
 What grove explicitly avoids:
 
+- agent types, agent records, or assignment strategies (Balanced/Speed/Quality/RoundRobin)
 - wrapping external CLI tools as the primary integration model
 - tmux/provider glue for process management
 - product dashboards (TUI, web UI, reporting)
@@ -1349,64 +991,76 @@ grove/
 │   ├── grove-types/
 │   │   └── src/
 │   │       ├── lib.rs
-│   │       ├── id.rs
-│   │       ├── status.rs
+│   │       ├── ids.rs
+│   │       ├── time.rs
 │   │       ├── priority.rs
-│   │       ├── protocol.rs
-│   │       └── memory.rs
-│   │
-│   ├── grove-config/
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── config.rs
-│   │       ├── defaults.rs
-│   │       ├── load.rs
-│   │       ├── validate.rs
-│   │       └── path.rs
-│   │
-│   ├── grove-db/
-│   │   ├── migrations/
-│   │   │   ├── 0001_init.sql
-│   │   │   ├── 0002_archive.sql
-│   │   │   ├── 0003_playbook.sql
-│   │   │   └── 0004_reservations.sql
-│   │   └── src/
-│   │       ├── lib.rs
-│   │       ├── connection.rs
-│   │       ├── pragmas.rs
-│   │       ├── migrate.rs
-│   │       ├── tx.rs
-│   │       └── row.rs
-│   │
-│   ├── grove-kernel/
-│   │   └── src/
-│   │       ├── lib.rs
 │   │       ├── task.rs
-│   │       ├── dependency.rs
 │   │       ├── run.rs
 │   │       ├── session.rs
 │   │       ├── checkpoint.rs
 │   │       ├── handoff.rs
 │   │       ├── reservation.rs
 │   │       ├── event.rs
-│   │       ├── store.rs
-│   │       └── transition.rs
+│   │       ├── archive.rs
+│   │       ├── playbook.rs
+│   │       └── errors.rs
+│   │
+│   ├── grove-config/
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── model.rs
+│   │       ├── defaults.rs
+│   │       ├── loader.rs
+│   │       ├── validate.rs
+│   │       └── paths.rs
+│   │
+│   ├── grove-db/
+│   │   ├── migrations/
+│   │   │   └── 0001_init.sql
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── connection.rs
+│   │       ├── migrate.rs
+│   │       ├── sqlite.rs
+│   │       ├── tx.rs
+│   │       ├── task_repo.rs
+│   │       ├── run_repo.rs
+│   │       ├── session_repo.rs
+│   │       ├── checkpoint_repo.rs
+│   │       ├── handoff_repo.rs
+│   │       ├── reservation_repo.rs
+│   │       ├── archive_repo.rs
+│   │       ├── playbook_repo.rs
+│   │       ├── event_repo.rs
+│   │       └── coordinator_repo.rs
+│   │
+│   ├── grove-kernel/
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── services/
+│   │       │   ├── mod.rs
+│   │       │   ├── task_service.rs
+│   │       │   ├── dependency_service.rs
+│   │       │   ├── run_service.rs
+│   │       │   ├── reservation_service.rs
+│   │       │   ├── handoff_service.rs
+│   │       │   └── integrity_service.rs
 │   │
 │   ├── grove-session/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── backend.rs
-│   │       ├── prompt.rs
 │   │       ├── protocol.rs
 │   │       ├── parser.rs
 │   │       ├── analysis.rs
 │   │       ├── progress.rs
 │   │       ├── exit_policy.rs
-│   │       ├── circuit_breaker.rs
 │   │       ├── context_monitor.rs
-│   │       ├── checkpoint.rs
+│   │       ├── circuit_breaker.rs
 │   │       ├── classifier.rs
 │   │       ├── transcript.rs
+│   │       ├── prompt_builder.rs
+│   │       ├── prompt_materializer.rs
 │   │       └── runner.rs
 │   │
 │   ├── grove-memory/
@@ -1587,7 +1241,9 @@ expect_used = "deny"
 This crate contains only small, dependency-light shared types.
 Everything here should be reusable by `grove-br`, `grove-bv`, `grove-db`, `grove-session`, and `grove-cli` without dragging in IO-heavy dependencies.
 
-### `id.rs`
+File layout matches the canonical file map in Section 22.2: `ids.rs`, `time.rs`, `priority.rs`, `task.rs`, `run.rs`, `session.rs`, `checkpoint.rs`, `handoff.rs`, `reservation.rs`, `event.rs`, `archive.rs`, `playbook.rs`, `errors.rs`.
+
+### `ids.rs`
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1627,49 +1283,16 @@ pub enum BeadPriority {
 }
 ```
 
-### `status.rs`
+### Status enums (in `task.rs`, `run.rs`, `session.rs`)
 
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GroveBeadStatus {
-    Idle,
-    Ready,
-    Running,
-    Checkpointed,
-    WaitingToRetry,
-    Succeeded,
-    Failed,
-}
+Status enums are distributed across their domain files per the canonical file map (Section 22.2):
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RunStatus {
-    Active,
-    WaitingToRetry,
-    Checkpointed,
-    Succeeded,
-    Failed,
-}
+- `GroveBeadStatus` → `task.rs`
+- `RunStatus`, `FailureClass` → `run.rs`
+- `SessionStatus`, `StopReason` → `session.rs`
+- `CircuitState` → `session.rs`
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum SessionStatus {
-    Starting,
-    Streaming,
-    CheckpointRequested,
-    Completed,
-    TimedOut,
-    RateLimited,
-    PermissionDenied,
-    Crashed,
-    Killed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CircuitState {
-    Closed,
-    HalfOpen,
-    Open,
-}
-```
+See Section 1.4.1 for the canonical enum definitions.
 
 ### `protocol.rs`
 
@@ -1696,9 +1319,9 @@ pub enum ProtocolEvent {
 }
 ```
 
-### `memory.rs`
+### `playbook.rs`
 
-Adapt the playbook memory types from Section 1.2, but keep the runtime fully grove-native.
+Playbook memory types (adapted from Section 1.2). Canonical file name is `playbook.rs` per Section 22.2.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1742,6 +1365,8 @@ pub enum FeedbackKind {
 
 ## 8.2 `grove-config`
 
+File layout matches the canonical file map in Section 22.3: `model.rs`, `defaults.rs`, `loader.rs`, `validate.rs`, `paths.rs`.
+
 ### Goals
 
 - load `grove.toml`
@@ -1749,7 +1374,7 @@ pub enum FeedbackKind {
 - merge defaults + file + env + CLI overrides
 - validate impossible settings
 
-### Main structs
+### Main structs (in `model.rs`)
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1901,15 +1526,16 @@ persist_jsonl = true
 
 ## 8.3 `grove-db`
 
-This crate is intentionally tiny and boring.
+This crate owns all SQLite persistence: connection management, migrations, and every domain repository.
 
 ### Responsibilities
 
-- open SQLite connection
-- set PRAGMAs
+- open SQLite connection and set PRAGMAs
 - run migrations
 - expose transaction helper
-- no domain logic
+- domain repositories: `task_repo`, `run_repo`, `session_repo`, `checkpoint_repo`, `handoff_repo`, `reservation_repo`, `archive_repo`, `playbook_repo`, `event_repo`, `coordinator_repo`
+
+Each repo file groups SQL by domain. This keeps all SQL in one crate, avoids circular deps, and makes it easy to test persistence in isolation.
 
 ### `pragmas.rs`
 
@@ -3136,7 +2762,7 @@ Show:
 
 - stream transcript lines and structured events from latest run/session
 
-#### `grove inspect bead <bead-id>`
+#### `grove inspect <bead-id>`
 
 Show:
 
@@ -5561,7 +5187,7 @@ bd-e9b1d4  88     waiting age + no conflicts
 bd-a1bc22  76     medium priority, one reservation penalty
 ```
 
-## 25.9 `grove inspect bead <bead-id>`
+## 25.9 `grove inspect <bead-id>`
 
 ### Sections
 

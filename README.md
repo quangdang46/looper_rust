@@ -44,6 +44,66 @@ Grove didn't appear from nothing. The exit gate and circuit breaker come from [F
 
 ---
 
+## Workflow
+
+```
+You                         br / bv                        grove                          Claude
+ │                            │                              │                              │
+ ├─ br init                   │                              │                              │
+ ├─ br create "schema"  ──────▶ beads.jsonl                  │                              │
+ ├─ br create "auth"    ──────▶ beads.jsonl                  │                              │
+ ├─ br dep add auth schema ───▶ dependency recorded          │                              │
+ │                            │                              │                              │
+ ├─ grove init          ─────────────────────────────────────▶ .grove/grove.db created       │
+ ├─ grove run           ─────────────────────────────────────▶ orchestrator starts           │
+ │                            │                              │                              │
+ │  ┌─────────────────── coordinator loop ──────────────────────────────────────────┐       │
+ │  │                         │                              │                      │       │
+ │  │  sync ──────────────────▶ br ready --json              │                      │       │
+ │  │                         ◀── [bd-e9b1d4]                │                      │       │
+ │  │                         │                              │                      │       │
+ │  │  score ─────────────────▶ bv --robot-triage    ────────▶ rank by priority     │       │
+ │  │                         ◀── critical path, PageRank    │  + bv bonuses        │       │
+ │  │                                                        │  + reservation check │       │
+ │  │                                                        │                      │       │
+ │  │  dispatch ─────────────────────────────────────────────▶ build prompt         │       │
+ │  │                                                        │  (task + handoffs    │       │
+ │  │                                                        │   + archive snippets │       │
+ │  │                                                        │   + playbook rules)  │       │
+ │  │                                                        │                      │       │
+ │  │                                                        ├── claude -p "..."  ──▶ works │
+ │  │                                                        │                      ◀── stdout
+ │  │                                                        │                      │       │
+ │  │                                                        │  parse protocol:     │       │
+ │  │                                                        │   GROVE_RESULT       │       │
+ │  │                                                        │   GROVE_ARTIFACTS    │       │
+ │  │                                                        │   GROVE_LESSONS      │       │
+ │  │                                                        │   GROVE_EXIT: true   │       │
+ │  │                                                        │                      │       │
+ │  │  on success:                                           │                      │       │
+ │  │   persist handoff ─────────────────────────────────────▶ grove.db             │       │
+ │  │   index transcript ────────────────────────────────────▶ FTS5 archive         │       │
+ │  │   extract lessons ─────────────────────────────────────▶ playbook             │       │
+ │  │   mirror ──────────────▶ br close bd-e9b1d4            │                      │       │
+ │  │                         │                              │                      │       │
+ │  │  on context pressure:                                  │                      │       │
+ │  │   GROVE_CHECKPOINT ────────────────────────────────────▶ persist checkpoint   │       │
+ │  │   spawn new session ───────────────────────────────────▶ claude -p "resume…" ─▶ works │
+ │  │                                                        │                      │       │
+ │  │  on stuck loop:                                        │                      │       │
+ │  │   circuit breaker OPEN ────────────────────────────────▶ cooldown 30min       │       │
+ │  │   half-open test   ────────────────────────────────────▶ retry one iteration  │       │
+ │  │                                                        │                      │       │
+ │  │  next tick: br ready returns newly unblocked children  │                      │       │
+ │  │  repeat until all beads done                           │                      │       │
+ │  └───────────────────────────────────────────────────────────────────────────────┘       │
+ │                            │                              │                              │
+ ◀── grove status shows "all beads succeeded"                │                              │
+ │                            │                              │                              │
+```
+
+---
+
 ## How It Works
 
 Grove runs a continuous autonomous loop over your beads task graph. Each bead is dispatched to a Claude session. When context exhausts, grove checkpoints and spawns a fresh session automatically. Child beads inherit structured handoffs from parents. Parallel beads run concurrently with file reservation safety.
