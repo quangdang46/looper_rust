@@ -50,8 +50,8 @@ Grove didn't appear from nothing. The exit gate and circuit breaker come from [F
 You                         br / bv                        grove                          Claude
  │                            │                              │                              │
  ├─ br init                   │                              │                              │
- ├─ br create "schema"  ──────▶ beads.jsonl                  │                              │
- ├─ br create "auth"    ──────▶ beads.jsonl                  │                              │
+ ├─ br create "schema"  ──────▶ issues.jsonl                  │                              │
+ ├─ br create "auth"    ──────▶ issues.jsonl                  │                              │
  ├─ br dep add auth schema ───▶ dependency recorded          │                              │
  │                            │                              │                              │
  ├─ grove init          ─────────────────────────────────────▶ .grove/grove.db created       │
@@ -369,7 +369,7 @@ persist_jsonl = true
 ```
 my-project/
 ├── .beads/                    # br-owned task graph
-│   └── beads.jsonl
+│   └── issues.jsonl
 ├── .grove/                    # grove-owned runtime state
 │   ├── grove.db               # SQLite — authoritative runtime state
 │   ├── config.snapshot.json
