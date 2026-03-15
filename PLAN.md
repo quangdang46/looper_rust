@@ -844,6 +844,113 @@ Backed by `tokio::sync::broadcast` with configurable capacity (default 1024).
 | Multi-factor bead scoring | `grove-orchestrator::scheduler` |
 | Context window monitoring | `grove-session::context_monitor` |
 | Event bus | `grove-orchestrator::events` |
+| Bead execution contracts | `grove-session::contract` |
+| Stuck-loop rescue cards | `grove-session::rescue` |
+| Retry mutation planner | `grove-session::retry_plan` |
+| Verification modes | `grove-session::verify` |
+| Durable mirror outbox | `grove-orchestrator::mirror_outbox` |
+| Recovery capsules | `grove-orchestrator::capsule` |
+
+---
+
+### 1.4.8 High-Leverage Execution Enhancements
+
+These enhancements stay native to grove's Rust kernel and build on the existing run/session/checkpoint/handoff model. They are not separate services and do not introduce new external runtime dependencies.
+
+#### Bead execution contracts
+
+Each bead may optionally run under a lightweight execution contract that changes prompt composition, checkpoint guidance, rescue behavior, and success verification.
+
+```rust
+pub enum BeadContract {
+    Implement,
+    Debug,
+    Refactor,
+    Investigate,
+    Migration,
+    TestHardening,
+}
+```
+
+Contract affects:
+
+- prompt framing
+- required protocol emphasis
+- archive/playbook selection priority
+- checkpoint style
+- verification mode before close
+
+If no explicit contract exists, grove infers a default from bead metadata and title keywords.
+
+#### Stuck-loop rescue cards
+
+When the circuit breaker detects repeated no-progress or repeated-error conditions, grove may inject a compact rescue card into the next retry prompt.
+
+Examples:
+
+- state one root-cause hypothesis before editing
+- stop rerunning unchanged tests
+- inspect these files first
+- propose a 3-step repair plan before making more edits
+- explain why the last attempt failed
+
+A rescue card is a focused corrective hint, not a second task definition.
+
+#### Mirror outbox
+
+Success local to grove must survive temporary mirror failure back to `br`.
+
+Grove therefore owns a durable mirror outbox with:
+
+- pending mirror actions
+- idempotent retry
+- dedupe by bead/run/action type
+- explicit `mirror-pending` visibility in status and inspect
+
+This makes "completed locally, not yet mirrored" a first-class state instead of a vague failure bucket.
+
+#### Recovery capsules
+
+Each failed, interrupted, or checkpointed run may persist a compact recovery capsule containing:
+
+- what was attempted
+- strongest evidence observed
+- likely root cause
+- risky files / claimed paths
+- what should not be repeated
+- best next step
+
+Capsules are used by retries, checkpoint resumes, and operator inspection.
+
+#### Verification modes before close
+
+Before final success and mirror, grove may run a lightweight verification mode chosen by bead contract.
+
+Examples:
+
+- compile only
+- targeted test command
+- artifact existence check
+- protocol completeness check
+- narrow smoke validation
+
+Verification remains bounded and pragmatic. It is not a second autonomous workflow.
+
+#### Retry mutation planner
+
+A retry must not blindly replay the same failed attempt.
+
+Before retrying, grove mutates at least one of:
+
+- prompt framing
+- context slice
+- archive snippet selection
+- playbook rule selection
+- rescue card injection
+- verification-first ordering
+- narrower claimed path scope
+
+This reduces repeated wasted retries and helps the circuit breaker converge faster.
 
 ---
 
@@ -1061,6 +1168,10 @@ grove/
 │   │       ├── transcript.rs
 │   │       ├── prompt_builder.rs
 │   │       ├── prompt_materializer.rs
+│   │       ├── contract.rs
+│   │       ├── rescue.rs
+│   │       ├── retry_plan.rs
+│   │       ├── verify.rs
 │   │       └── runner.rs
 │   │
 │   ├── grove-memory/
@@ -1110,6 +1221,8 @@ grove/
 │   │       ├── recovery.rs
 │   │       ├── leader.rs
 │   │       ├── events.rs
+│   │       ├── mirror_outbox.rs
+│   │       ├── capsule.rs
 │   │       └── coordinator.rs
 │   │
 │   └── grove-cli/
@@ -2640,9 +2753,13 @@ A node runner owns one `TaskRun` and may create multiple Claude sessions over it
 - spawn one Claude session
 - record session result
 - if checkpoint => create fresh session using checkpoint
-- if success => persist handoff and mark task succeeded
+- if success => choose verification mode before final success, then persist handoff and mark task succeeded
 - if recoverable failure => backoff and retry up to budget
 - update reservations throughout
+- persist recovery capsule on checkpoint/failure/interruption
+- enqueue mirror action into durable outbox on success
+- apply retry mutation plan before spawning retry session
+- inject rescue card when breaker history indicates stuck-loop recovery is needed
 
 ### High-level pseudocode
 
@@ -3208,6 +3325,8 @@ For each task dispatch, prompt assembly uses:
 5. selected playbook bullets
 6. selected transcript snippets
 7. grove protocol contract
+8. bead execution contract if present
+9. rescue card if retry path requires one
 
 ## 11.2 Prompt segment model
 
@@ -3220,6 +3339,8 @@ pub enum PromptSegmentKind {
     Playbook,
     ArchiveSnippet,
     Protocol,
+    Contract,
+    RescueCard,
 }
 
 pub struct PromptSegment {
@@ -3323,6 +3444,8 @@ On success persist:
 
 Child tasks consume parent handoffs directly.
 They must not scrape parent transcripts by default.
+
+On failure or interruption, grove may persist a recovery capsule alongside retry metadata. The capsule captures what was attempted, strongest evidence observed, likely root cause, risky files, what should not be repeated, and best next step. Retries and `grove inspect` consume capsules directly.
 
 ---
 
@@ -3573,6 +3696,9 @@ This section is intentionally near-code.
 - exit policy
 - classifier
 - simple session runner
+- bead execution contracts (`contract.rs`)
+- stuck-loop rescue cards (`rescue.rs`)
+- retry mutation planner (`retry_plan.rs`)
 
 ### Acceptance
 
@@ -3580,6 +3706,8 @@ This section is intentionally near-code.
 - transcript file created
 - success only when explicit protocol + exit gate satisfied
 - timeout/rate-limit/permission-denied classified separately
+- different bead contracts produce measurably different prompt framing
+- stuck-loop retries inject rescue cards and are not identical to the failed attempt
 
 ---
 
@@ -3595,6 +3723,8 @@ This section is intentionally near-code.
 - handoff persistence
 - startup recovery
 - retry/backoff
+- durable mirror outbox (`mirror_outbox.rs`)
+- recovery capsules (`capsule.rs`)
 
 ### Acceptance
 
@@ -3603,6 +3733,8 @@ This section is intentionally near-code.
 - checkpoints respawn new sessions
 - parent handoffs unblock children
 - orchestrator survives restart and recovers state
+- successful local completion survives temporary mirror failure and appears as `mirror-pending`
+- failed or interrupted runs produce a recovery capsule usable by retries and inspect
 
 ---
 
@@ -3623,7 +3755,7 @@ This section is intentionally near-code.
 
 ---
 
-## Phase 5 — Basic playbook memory
+## Phase 5 — Basic playbook memory and verification modes
 
 ### Build
 
@@ -3632,12 +3764,14 @@ This section is intentionally near-code.
 - feedback events
 - evidence gate
 - prompt injection of active bullets
+- verification modes before close (`verify.rs`)
 
 ### Acceptance
 
 - repeated lessons become active rules
 - one-off noisy lessons remain weak candidates
 - no external memory tool dependency exists anywhere in runtime
+- optional verification can run before final mirror without introducing a second orchestration layer
 
 ---
 
@@ -6097,6 +6231,19 @@ Refine selector and pruning.
 
 ---
 
+## 29.7 Cross-phase acceptance for high-leverage execution enhancements
+
+These criteria apply across the phases where the six enhancements land:
+
+- grove can vary prompt/retry/verification behavior by bead contract
+- stuck-loop retries are measurably different from the immediately previous failed attempt
+- successful local completion survives temporary mirror failure and appears as `mirror-pending`
+- failed or interrupted runs produce a recovery capsule usable by retries and inspect
+- optional verification can run before final mirror without introducing a second orchestration layer
+- all enhancements remain native to grove-owned Rust modules with no new runtime CLI dependencies
+
+---
+
 ## 30. Final Implementation Discipline Rules
 
 These rules are here to prevent the plan from drifting back toward wrapper architecture during coding.
@@ -7556,14 +7703,23 @@ async fn mirror_success(
 }
 ```
 
+### Durable mirror outbox
+
+Mirror actions are written to a durable outbox first, then attempted against `br`. If a mirror attempt fails, grove preserves successful local completion state and marks the bead `mirror-pending`. A dedicated retry path may flush pending mirror actions without rerunning Claude work. The outbox is:
+
+- persisted in SQLite alongside run/session records
+- idempotent: duplicate flush of the same action is safe
+- deduped by `(bead_id, run_id, action_type)`
+- visible in `grove status` and `grove inspect` as `mirror-pending` items
+
 ### Mirror failure handling
 
 If `br close` fails:
 
 1. Record `BrMirrorFailed` event
 2. Keep grove's internal `Succeeded` status intact
-3. Mark the mirror as pending retry
-4. Next coordinator tick will retry the mirror
+3. Outbox entry remains with `pending` status
+4. Next coordinator tick will retry from the outbox
 5. After 3 failed mirror attempts, log a warning and move on
 
 The local handoff is always authoritative. `br` mirror is best-effort.
