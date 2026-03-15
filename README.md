@@ -34,7 +34,7 @@ You become the orchestrator. A human one. Manually chaining sessions, one at a t
 
 **Grove closes this loop.**
 
-Define your tasks with `br`. Type `grove run`. Walk away. Come back when it's done — all tasks completed, all sessions handled, context rotations managed, memory passed between nodes automatically.
+Define your tasks with `br`. Type `grove run`. Walk away. Come back to completed work — sessions handled, context rotations managed, memory passed between beads automatically. Anything that failed or couldn't mirror back to `br` is flagged, not silently lost.
 
 ---
 
@@ -98,7 +98,7 @@ You                         br / bv                        grove                
  │  │  repeat until all beads done                           │                      │       │
  │  └───────────────────────────────────────────────────────────────────────────────┘       │
  │                            │                              │                              │
- ◀── grove status shows "all beads succeeded"                │                              │
+ ◀── grove status shows results (succeeded / failed / mirror-pending)                │                              │
  │                            │                              │                              │
 ```
 
@@ -251,7 +251,7 @@ grove init
 grove run
 ```
 
-Grove handles everything from here. When it's done, all your beads are closed and the project is ready.
+Grove handles everything from here. When it finishes, your beads are closed and mirrored back to `br`. If a mirror fails, grove preserves the local result and flags it for retry — run `grove status` to see what landed and what needs attention.
 
 ---
 
@@ -320,7 +320,7 @@ workspace_root = "."
 timeout_minutes = 60
 
 [scheduler]
-max_parallel = 1              # start sequential, increase when confident
+max_parallel = 5              # parallel sessions, bounded by reservation safety
 poll_interval_ms = 1000
 retry_max = 3
 retry_backoff_secs = 30
@@ -411,11 +411,10 @@ That's it. No external memory, search, or orchestration tools. Grove handles eve
 
 - Phase 1 — Project skeleton, beads integration kernel, `grove init` + `grove status`
 - Phase 2 — Claude session runtime, protocol parser, exit policy, circuit breaker
-- Phase 3 — Sequential orchestrator, checkpoint/resume, handoff persistence, crash recovery
+- Phase 3 — Parallel orchestrator, checkpoint/resume, handoff persistence, file reservations, crash recovery
 - Phase 4 — Native transcript archive, FTS5 search, prompt retrieval
 - Phase 5 — Playbook memory, lesson ingestion, evidence scoring, prompt injection
-- Phase 6 — Parallel scheduler, file reservations, conflict-aware dispatch
-- Phase 7 — Rich curation, diaries, anti-pattern inversion, playbook compaction
+- Phase 6 — Rich curation, diaries, anti-pattern inversion, playbook compaction
 
 ---
 

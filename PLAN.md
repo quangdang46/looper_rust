@@ -111,7 +111,7 @@ struct IterationAnalysis {
 1. **Explicit exit signal**: Looks for `GROVE_EXIT`, `TASK_COMPLETE`, or structured `Exit { value: true }` in protocol markers
 2. **Completion language** (heuristic): Regex patterns like `all tests pass`, `implementation complete`, `no remaining work`
 3. **Test-only loop**: Detects when Claude is only running tests without making code changes — `files_modified.is_empty() && output mentions test execution`
-4. **Progress evidence**: Any of — git diff shows changes, files reported modified, new test passes, build succeeds
+4. **Progress evidence**: Any of — `GROVE_ARTIFACTS` lists new files, `GROVE_RESULT` emitted, `progress_indicators > 0` in transcript analysis
 5. **Permission denial**: Detects `permission denied`, `Operation not permitted`, or tool use rejections
 6. **Stuck detection**: Compares `error_lines` across last 3 iterations using string similarity; if >80% overlap → `is_stuck = true`
 
@@ -162,15 +162,16 @@ struct CircuitBreakerState {
 | Closed | `consecutive_same_error >= same_error_threshold` (default 5) | Open |
 | Closed | `consecutive_permission_denials >= permission_denial_threshold` (default 2) | Open |
 | Open | `now - opened_at >= cooldown_minutes` | HalfOpen |
-| HalfOpen | progress detected (git changes, completion signal, file mods) | Closed (reset all counters) |
+| HalfOpen | progress detected (protocol markers, transcript evidence) | Closed (reset all counters) |
 | HalfOpen | no recovery in next iteration | Open (reset cooldown timer) |
 
 **Progress detection** (any one resets counters):
 
-- `git diff --stat` shows changes since last check
+- `GROVE_RESULT` or `GROVE_ARTIFACTS` emitted in transcript
 - `analysis.has_completion_signal == true`
-- `analysis.files_modified.len() > 0`
 - `analysis.progress_indicators > 0`
+
+Grove does not shell out to `git diff` for progress detection. All progress signals come from protocol markers and transcript analysis. See Section 8.5.5 `progress.rs` for the authoritative implementation.
 
 ### 1.1.3 Main Orchestration Loop
 
@@ -1386,6 +1387,7 @@ pub struct GroveConfig {
     pub circuit_breaker: CircuitBreakerConfig,
     pub memory: MemoryConfig,
     pub reservations: ReservationConfig,
+    pub safety: SafetyConfig,
     pub logging: LoggingConfig,
 }
 
@@ -1451,6 +1453,12 @@ pub struct ReservationConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SafetyConfig {
+    pub scan_transcripts: bool,
+    pub inject_safety_preamble: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
     pub level: String,
     pub persist_jsonl: bool,
@@ -1506,6 +1514,10 @@ semantic_enabled = false
 [reservations]
 enabled = true
 default_ttl_minutes = 60
+
+[safety]
+scan_transcripts = true
+inject_safety_preamble = true
 
 [logging]
 level = "info"
@@ -3431,7 +3443,7 @@ Testing must focus on the kernel, not only the CLI.
 ### `grove-kernel`
 
 - legal/illegal task transitions
-- cycle detection for dependencies
+- defensive sanity checks on cached dependency snapshots (not authoritative graph enforcement — that belongs to `br`)
 - latest run selection
 - reservation active/expired classification
 
@@ -3494,7 +3506,7 @@ Golden fixtures for:
 
 ## 15.4 Property tests
 
-- dependency DAG acyclic invariants
+- cached dependency snapshot sanity (detect malformed `br` output, not enforce graph validity)
 - reservation overlap symmetry
 - dedup hash idempotence
 - recovery idempotence on repeated startup scans
@@ -5892,7 +5904,7 @@ Create `grove-kernel` with:
 
 - task service
 - dependency service
-- cycle detection
+- dependency cache sanity checks (defensive, not authoritative)
 - readiness recompute
 - inspect/status query helpers
 
@@ -8021,8 +8033,8 @@ pub enum OrchestrationError {
     #[error("dispatch error: no capacity (running {running}/{max})")]
     NoCapacity { running: usize, max: usize },
 
-    #[error("dependency cycle detected: {cycle:?}")]
-    CycleDetected { cycle: Vec<String> },
+    #[error("malformed dependency snapshot: cycle in cached data: {cycle:?}")]
+    MalformedDependencySnapshot { cycle: Vec<String> },
 }
 ```
 
@@ -9206,8 +9218,8 @@ mod proptests {
 
     proptest! {
         #[test]
-        fn dependency_dag_acyclic(edges in prop::collection::vec((0..100usize, 0..100usize), 0..50)) {
-            // adding edges should detect cycles
+        fn dependency_snapshot_rejects_malformed_cycles(edges in prop::collection::vec((0..100usize, 0..100usize), 0..50)) {
+            // sanity check: if br output contains a cycle, grove flags it as malformed rather than silently dispatching
         }
 
         #[test]
