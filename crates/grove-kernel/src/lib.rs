@@ -1,3 +1,6 @@
+pub mod inspect_view;
+pub mod status_view;
+
 use grove_types::{
     CircuitState, GroveBeadRecord, GroveBeadStatus, ReservationConflict, RunId, Timestamp,
 };
