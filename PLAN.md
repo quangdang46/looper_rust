@@ -2889,10 +2889,13 @@ Show:
 - checkpointed tasks
 - failed tasks with failure class
 - reservation conflicts
+- `mirror-pending` items with retry state
+- concise blocking reasons for undispatched ready beads
 
 #### `grove log <bead-id>`
 
 - stream transcript lines and structured events from latest run/session
+- show retry/resume boundaries so operators can see where prompt strategy changed
 
 #### `grove inspect <bead-id>`
 
@@ -2905,6 +2908,8 @@ Show:
 - latest handoff
 - archive retrieval summary
 - selected playbook bullets
+- prompt provenance manifest / context bundle summary
+- latest recovery capsule and retry delta if present
 
 ---
 
@@ -3096,8 +3101,10 @@ CREATE TABLE reservations (
   path_pattern TEXT NOT NULL,
   exclusive INTEGER NOT NULL,
   reason TEXT,
+  acquired_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   released_at TEXT,
+  release_reason TEXT,
   FOREIGN KEY (bead_id) REFERENCES bead_cache(bead_id) ON DELETE CASCADE,
   FOREIGN KEY (run_id) REFERENCES task_runs(id) ON DELETE SET NULL
 );
@@ -3105,6 +3112,8 @@ CREATE TABLE reservations (
 CREATE INDEX idx_reservations_active ON reservations(released_at, expires_at);
 CREATE INDEX idx_reservations_bead ON reservations(bead_id);
 ```
+
+Reservation lifecycle must be observable, not inferred. Grove should be able to explain when a reservation was acquired, whether it is still active, whether it auto-expired as stale state, and why it was explicitly released.
 
 ## 9.9 Event log
 
@@ -3351,6 +3360,19 @@ pub struct PromptSegment {
 }
 ```
 
+### Prompt provenance manifest
+
+Every prompt materialization must also produce a durable manifest that records:
+
+- the final segment order actually sent to Claude
+- provenance IDs for included context (`handoff_id`, `checkpoint_id`, `bullet_id`, `snippet_id`)
+- estimated token budget by segment kind
+- dropped candidates and trim reasons
+- retrieval query / ranking summary when archive snippets were considered
+- retry delta summary when a retry or resume prompt intentionally differs from the previous attempt
+
+This manifest is the inspectable context bundle for a run. `grove inspect` should render a compact view of it directly instead of forcing the operator to reconstruct prompt inputs from raw logs.
+
 ## 11.3 Budget trimming
 
 When prompt is too large:
@@ -3367,6 +3389,8 @@ Never drop:
 - task body
 - latest checkpoint
 - protocol contract
+
+Every dropped segment should be recorded in the prompt provenance manifest together with the trim reason so later retries and operator inspection can explain why context changed.
 
 ## 11.4 Protocol block
 
@@ -3447,6 +3471,8 @@ They must not scrape parent transcripts by default.
 
 On failure or interruption, grove may persist a recovery capsule alongside retry metadata. The capsule captures what was attempted, strongest evidence observed, likely root cause, risky files, what should not be repeated, and best next step. Retries and `grove inspect` consume capsules directly.
 
+If a retry or resumed session changes prompt framing, retrieved snippets, selected playbook bullets, reservation scope, or verification order, grove should persist a compact retry delta explanation so the next attempt is inspectably different rather than implicitly different.
+
 ---
 
 ## 13. Scheduler, Dispatch, and Parallel Safety
@@ -3489,6 +3515,18 @@ A fixed path like `Cargo.lock` conflicts with:
 
 - exact same path
 - broader glob that includes it
+
+### Reservation lifecycle semantics
+
+Reservation handling must cover the full lifecycle, not only overlap checks:
+
+- acquire with explicit reason and timestamp
+- expose active versus expired versus released state
+- auto-expire stale reservations during recovery without pretending they were cleanly released
+- preserve a release reason such as `completed`, `retry-reset`, `startup-recovery-expiry`, or `operator-clear`
+- surface conflict explanations in `grove status` and `grove inspect` using concrete overlapping paths/patterns
+
+This keeps parallel safety explainable after crashes and retries instead of reducing reservation state to a hidden scheduler detail.
 
 ## 13.4 Dispatch rules
 
