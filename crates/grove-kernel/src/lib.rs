@@ -1,11 +1,161 @@
 pub mod inspect_view;
 pub mod status_view;
 
+use anyhow::Result;
+use grove_br::{BrClient, BrDependencySnapshot};
+use grove_config::GroveConfig;
+use grove_db::Database;
 use grove_types::{
-    CircuitState, GroveBeadRecord, GroveBeadStatus, ReservationConflict, RunId, Timestamp,
+    BeadId, CircuitState, GroveBeadRecord, GroveBeadStatus, ReservationConflict, RunId, Timestamp,
 };
+use std::collections::BTreeMap;
+
+pub use inspect_view::BeadInspectView;
+pub use status_view::WorkspaceStatusView;
 
 pub const CRATE_PURPOSE: &str = "Core Grove runtime domain and service boundaries.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencySnapshotIssue {
+    SelfBlockedBy,
+    SelfBlocks,
+    DuplicateBlockedBy { bead_id: BeadId, occurrences: usize },
+    DuplicateBlocks { bead_id: BeadId, occurrences: usize },
+}
+
+impl DependencySnapshotIssue {
+    #[must_use]
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::SelfBlockedBy => "self_blocked_by",
+            Self::SelfBlocks => "self_blocks",
+            Self::DuplicateBlockedBy { .. } => "duplicate_blocked_by",
+            Self::DuplicateBlocks { .. } => "duplicate_blocks",
+        }
+    }
+
+    #[must_use]
+    pub fn summary(&self) -> String {
+        match self {
+            Self::SelfBlockedBy => {
+                "cached dependency snapshot lists the bead as blocking itself".to_owned()
+            }
+            Self::SelfBlocks => {
+                "cached dependency snapshot lists the bead as its own dependent".to_owned()
+            }
+            Self::DuplicateBlockedBy {
+                bead_id,
+                occurrences,
+            } => format!(
+                "cached dependency snapshot repeats blocker {} {} times",
+                bead_id.as_str(),
+                occurrences
+            ),
+            Self::DuplicateBlocks {
+                bead_id,
+                occurrences,
+            } => format!(
+                "cached dependency snapshot repeats dependent {} {} times",
+                bead_id.as_str(),
+                occurrences
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DependencySnapshotSanity {
+    pub snapshot: BrDependencySnapshot,
+    pub issues: Vec<DependencySnapshotIssue>,
+}
+
+impl DependencySnapshotSanity {
+    #[must_use]
+    pub fn is_sane(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+#[must_use]
+pub fn validate_dependency_snapshot(
+    snapshot: &BrDependencySnapshot,
+) -> Vec<DependencySnapshotIssue> {
+    let mut issues = Vec::new();
+
+    if snapshot.blocked_by.iter().any(|id| id == &snapshot.bead_id) {
+        issues.push(DependencySnapshotIssue::SelfBlockedBy);
+    }
+
+    if snapshot.blocks.iter().any(|id| id == &snapshot.bead_id) {
+        issues.push(DependencySnapshotIssue::SelfBlocks);
+    }
+
+    issues.extend(
+        duplicate_dependency_ids(&snapshot.blocked_by)
+            .into_iter()
+            .map(
+                |(bead_id, occurrences)| DependencySnapshotIssue::DuplicateBlockedBy {
+                    bead_id,
+                    occurrences,
+                },
+            ),
+    );
+    issues.extend(duplicate_dependency_ids(&snapshot.blocks).into_iter().map(
+        |(bead_id, occurrences)| DependencySnapshotIssue::DuplicateBlocks {
+            bead_id,
+            occurrences,
+        },
+    ));
+
+    issues
+}
+
+pub fn inspect_dependency_snapshot(
+    db: &Database,
+    bead_id: &BeadId,
+) -> Result<Option<DependencySnapshotSanity>> {
+    if db.get_bead_record(bead_id)?.is_none() {
+        return Ok(None);
+    }
+
+    let snapshot = db.dependency_snapshot(bead_id)?;
+    let issues = validate_dependency_snapshot(&snapshot);
+    Ok(Some(DependencySnapshotSanity { snapshot, issues }))
+}
+
+pub fn load_workspace_status_view<C: BrClient>(
+    db: &Database,
+    br: &C,
+    workspace_root: &str,
+    config: &GroveConfig,
+) -> Result<WorkspaceStatusView> {
+    Ok(status_view::load_status_snapshot(db, br, workspace_root, config)?.into_view())
+}
+
+pub fn load_bead_inspect_view<C: BrClient>(
+    db: &Database,
+    br: &C,
+    bead_id: &BeadId,
+    config: &GroveConfig,
+) -> Result<Option<BeadInspectView>> {
+    Ok(
+        inspect_view::load_inspect_snapshot(db, br, bead_id, config)?
+            .map(|snapshot| snapshot.into_view()),
+    )
+}
+
+fn duplicate_dependency_ids(ids: &[BeadId]) -> Vec<(BeadId, usize)> {
+    let mut counts = BTreeMap::<String, usize>::new();
+    for bead_id in ids {
+        *counts.entry(bead_id.as_str().to_owned()).or_default() += 1;
+    }
+
+    counts
+        .into_iter()
+        .filter(|(_, occurrences)| *occurrences > 1)
+        .map(|(bead_id, occurrences)| (BeadId::new(bead_id), occurrences))
+        .collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct DispatchEligibilityContext {
@@ -84,7 +234,10 @@ pub fn dispatch_suppression_label(labels: &[String]) -> Option<String> {
 
 #[must_use]
 pub fn is_non_executable_issue_type(issue_type: &str) -> bool {
-    matches!(issue_type.trim().to_ascii_lowercase().as_str(), "epic" | "tracking")
+    matches!(
+        issue_type.trim().to_ascii_lowercase().as_str(),
+        "epic" | "tracking"
+    )
 }
 
 fn collect_local_suppressions(
@@ -114,7 +267,11 @@ fn collect_local_suppressions(
             });
         }
         GroveBeadStatus::WaitingToRetry => {
-            if bead.retry_after.is_none() || bead.retry_after.as_ref().is_some_and(|ts| ts > &context.now)
+            if bead.retry_after.is_none()
+                || bead
+                    .retry_after
+                    .as_ref()
+                    .is_some_and(|ts| ts > &context.now)
             {
                 reasons.push(LocalSuppressionReason::RetryBackoffPending {
                     retry_after: bead.retry_after,
@@ -176,13 +333,7 @@ mod tests {
 
     #[test]
     fn label_and_issue_type_can_both_suppress_dispatch() -> TestResult {
-        let bead = sample_bead(
-            GroveBeadStatus::Ready,
-            "epic",
-            &["dispatch:no"],
-            None,
-            None,
-        )?;
+        let bead = sample_bead(GroveBeadStatus::Ready, "epic", &["dispatch:no"], None, None)?;
         let context = sample_context(true, CircuitState::Closed, Vec::new())?;
 
         let eligibility = evaluate_dispatch_eligibility(&bead, &context);
@@ -196,13 +347,7 @@ mod tests {
 
     #[test]
     fn active_run_status_suppresses_dispatch() -> TestResult {
-        let bead = sample_bead(
-            GroveBeadStatus::Running,
-            "task",
-            &[],
-            Some("run_123"),
-            None,
-        )?;
+        let bead = sample_bead(GroveBeadStatus::Running, "task", &[], Some("run_123"), None)?;
         let context = sample_context(true, CircuitState::Closed, Vec::new())?;
 
         let eligibility = evaluate_dispatch_eligibility(&bead, &context);
@@ -291,6 +436,50 @@ mod tests {
         assert!(suppression_codes(&succeeded_eligibility).contains(&"already_succeeded"));
         assert!(suppression_codes(&failed_eligibility).contains(&"failed_awaiting_manual_retry"));
         Ok(())
+    }
+
+    #[test]
+    fn dependency_snapshot_sanity_detects_self_edges_and_duplicates() {
+        let snapshot = BrDependencySnapshot {
+            bead_id: BeadId::new("grove-1"),
+            blocked_by: vec![
+                BeadId::new("grove-parent"),
+                BeadId::new("grove-1"),
+                BeadId::new("grove-parent"),
+            ],
+            blocks: vec![
+                BeadId::new("grove-1"),
+                BeadId::new("grove-child"),
+                BeadId::new("grove-child"),
+            ],
+            rows: Vec::new(),
+        };
+
+        let issues = validate_dependency_snapshot(&snapshot);
+        let codes: Vec<_> = issues.iter().map(DependencySnapshotIssue::code).collect();
+
+        assert!(codes.contains(&"self_blocked_by"));
+        assert!(codes.contains(&"self_blocks"));
+        assert!(codes.contains(&"duplicate_blocked_by"));
+        assert!(codes.contains(&"duplicate_blocks"));
+    }
+
+    #[test]
+    fn dependency_snapshot_sanity_accepts_unique_non_self_edges() {
+        let snapshot = BrDependencySnapshot {
+            bead_id: BeadId::new("grove-1"),
+            blocked_by: vec![BeadId::new("grove-parent")],
+            blocks: vec![BeadId::new("grove-child")],
+            rows: Vec::new(),
+        };
+
+        let sanity = DependencySnapshotSanity {
+            snapshot: snapshot.clone(),
+            issues: validate_dependency_snapshot(&snapshot),
+        };
+
+        assert!(sanity.is_sane());
+        assert!(sanity.issues.is_empty());
     }
 
     fn sample_context(

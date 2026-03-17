@@ -10,7 +10,15 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
 grove-br = { path = "../grove-br" }
 grove-bv = { path = "../grove-bv" }
+grove-config = { path = "../grove-config" }
 grove-db = { path = "../grove-db" }
+grove-session = { path = "../grove-session" }
 grove-types = { path = "../grove-types" }
+
+[dev-dependencies]
+camino.workspace = true
+rusqlite.workspace = true
+tempfile = "3"

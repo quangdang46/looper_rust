@@ -2,7 +2,7 @@ use crate::{BeadId, CheckpointId, SessionId, Timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CheckpointPayload {
     pub progress: String,
     pub next_step: String,
@@ -27,7 +27,7 @@ pub struct CheckpointRecord {
 
 pub type ResumeGeneration = u32;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProtocolEvent {
     Result { summary: String },
     Artifacts { items: Vec<String> },
@@ -38,7 +38,7 @@ pub enum ProtocolEvent {
     Checkpoint { payload: CheckpointPayload },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ProtocolState {
     pub result_summary: Option<String>,
     pub artifacts: Vec<String>,

@@ -1,5 +1,5 @@
 use grove_types::{BeadId, BeadPriority, Timestamp};
-use serde::{Deserialize, de::Error as DeError};
+use serde::{de::Error as DeError, Deserialize};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -135,7 +135,8 @@ impl BvClient for CliBvClient {
     fn capability(&self) -> Result<BvCapability, BvError> {
         let beads_dir_exists = self.working_dir.join(".beads").exists();
         let output = self.run(&["--version"])?;
-        let version = first_non_empty_line(&output.stdout).or_else(|| first_non_empty_line(&output.stderr));
+        let version =
+            first_non_empty_line(&output.stdout).or_else(|| first_non_empty_line(&output.stderr));
         Ok(BvCapability {
             available: true,
             version,
@@ -635,7 +636,19 @@ struct VelocityWire {
     #[serde(default)]
     avg_days_to_close: Option<f64>,
     #[serde(default)]
-    weekly: Vec<usize>,
+    weekly: Vec<WeeklyVelocityEntryWire>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum WeeklyVelocityEntryWire {
+    Count(usize),
+    Bucket(WeeklyVelocityBucketWire),
+}
+
+#[derive(Debug, Deserialize)]
+struct WeeklyVelocityBucketWire {
+    closed: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -895,7 +908,8 @@ impl TryFrom<TriageWire> for BvTriageOutput {
         commands.sort_by(|left, right| left.label.cmp(&right.label));
 
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             meta: value.triage.meta.try_into()?,
             quick_ref: value.triage.quick_ref.try_into()?,
@@ -930,7 +944,8 @@ impl TryFrom<TriageMetaWire> for BvTriageMeta {
     fn try_from(value: TriageMetaWire) -> Result<Self, Self::Error> {
         Ok(Self {
             version: value.version,
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             phase2_ready: value.phase2_ready,
             issue_count: value.issue_count,
             compute_time_ms: value.compute_time_ms,
@@ -1057,7 +1072,8 @@ impl TryFrom<NextWire> for BvNextOutput {
 
     fn try_from(value: NextWire) -> Result<Self, Self::Error> {
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             id: BeadId::new(value.id),
             title: value.title,
@@ -1075,7 +1091,8 @@ impl TryFrom<PlanWire> for BvPlanOutput {
 
     fn try_from(value: PlanWire) -> Result<Self, Self::Error> {
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             analysis_config_json: value.analysis_config,
             status: metric_status_map(value.status),
@@ -1155,7 +1172,8 @@ impl TryFrom<InsightsWire> for BvInsightsOutput {
             .unwrap_or_else(|| full_stats.articulation_points.clone());
 
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             analysis_config_json: value.analysis_config,
             status: metric_status_map(value.status),
@@ -1194,7 +1212,20 @@ impl From<VelocityWire> for BvVelocitySummary {
             closed_last_7_days: value.closed_last_7_days,
             closed_last_30_days: value.closed_last_30_days,
             avg_days_to_close: value.avg_days_to_close,
-            weekly: value.weekly,
+            weekly: value
+                .weekly
+                .into_iter()
+                .map(WeeklyVelocityEntryWire::closed_count)
+                .collect(),
+        }
+    }
+}
+
+impl WeeklyVelocityEntryWire {
+    fn closed_count(self) -> usize {
+        match self {
+            Self::Count(count) => count,
+            Self::Bucket(bucket) => bucket.closed,
         }
     }
 }
@@ -1263,7 +1294,8 @@ impl TryFrom<PriorityAuditWire> for BvPriorityAuditOutput {
 
     fn try_from(value: PriorityAuditWire) -> Result<Self, Self::Error> {
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             analysis_config_json: value.analysis_config,
             field_descriptions_json: value.field_descriptions,
@@ -1306,7 +1338,8 @@ impl TryFrom<AlertsWire> for BvAlertsOutput {
 
     fn try_from(value: AlertsWire) -> Result<Self, Self::Error> {
         Ok(Self {
-            generated_at: parse_timestamp(&value.generated_at).map_err(serde_json::Error::custom)?,
+            generated_at: parse_timestamp(&value.generated_at)
+                .map_err(serde_json::Error::custom)?,
             data_hash: value.data_hash,
             output_format: value.output_format,
             alerts: value.alerts,
@@ -1340,13 +1373,15 @@ pub(crate) fn first_non_empty_line(text: &str) -> Option<String> {
 }
 
 fn metric_status_map(input: HashMap<String, MetricStatusWire>) -> HashMap<String, BvMetricStatus> {
-    input.into_iter()
+    input
+        .into_iter()
         .map(|(name, status)| (name, status.into()))
         .collect()
 }
 
 fn scored_issues(input: Vec<ScoredIssueWire>) -> Vec<BvScoredIssue> {
-    input.into_iter()
+    input
+        .into_iter()
         .map(|item| BvScoredIssue {
             id: BeadId::new(item.id),
             value: item.value,
@@ -1359,7 +1394,10 @@ fn bead_ids(values: Vec<String>) -> Vec<BeadId> {
 }
 
 fn bead_id_map<T>(input: HashMap<String, T>) -> HashMap<BeadId, T> {
-    input.into_iter().map(|(id, value)| (BeadId::new(id), value)).collect()
+    input
+        .into_iter()
+        .map(|(id, value)| (BeadId::new(id), value))
+        .collect()
 }
 
 fn parse_timestamp(input: &str) -> Result<Timestamp, String> {
@@ -1483,7 +1521,10 @@ mod tests {
                             "closed_last_7_days":5,
                             "closed_last_30_days":5,
                             "avg_days_to_close":0.3,
-                            "weekly":[2,3]
+                            "weekly":[
+                                {"week_start":"2026-03-10T00:00:00Z","closed":2},
+                                {"week_start":"2026-03-03T00:00:00Z","closed":3}
+                            ]
                         }
                     },
                     "commands":{
@@ -1497,9 +1538,72 @@ mod tests {
 
         assert_eq!(parsed.quick_ref.top_picks[0].id.as_str(), "grove-1j9.5.6");
         assert_eq!(parsed.recommendations[0].priority, BeadPriority::P0);
-        assert_eq!(parsed.recommendations[0].unblocks[0].as_str(), "grove-1j9.5.9");
+        assert_eq!(
+            parsed.recommendations[0].unblocks[0].as_str(),
+            "grove-1j9.5.9"
+        );
         assert_eq!(parsed.commands.len(), 2);
         assert_eq!(parsed.commands[0].label, "claim_top");
+        assert_eq!(parsed.project_health.velocity.weekly, vec![2, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn parse_triage_accepts_numeric_weekly_velocity() -> TestResult {
+        let parsed = parse_triage_output(
+            r#"{
+                "generated_at":"2026-03-16T03:27:38Z",
+                "data_hash":"abc123",
+                "triage":{
+                    "meta":{
+                        "version":"1.0.0",
+                        "generated_at":"2026-03-16T10:27:38+07:00",
+                        "phase2_ready":true,
+                        "issue_count":58,
+                        "compute_time_ms":0
+                    },
+                    "quick_ref":{
+                        "open_count":53,
+                        "actionable_count":2,
+                        "blocked_count":51,
+                        "in_progress_count":2,
+                        "top_picks":[]
+                    },
+                    "recommendations":[],
+                    "quick_wins":[],
+                    "blockers_to_clear":[],
+                    "project_health":{
+                        "counts":{
+                            "total":58,
+                            "open":53,
+                            "closed":5,
+                            "blocked":51,
+                            "actionable":2,
+                            "by_status":{"open":53},
+                            "by_type":{"task":50},
+                            "by_priority":{"0":20}
+                        },
+                        "graph":{
+                            "node_count":58,
+                            "edge_count":107,
+                            "density":0.03,
+                            "has_cycles":false,
+                            "phase2_ready":true
+                        },
+                        "velocity":{
+                            "closed_last_7_days":5,
+                            "closed_last_30_days":5,
+                            "avg_days_to_close":0.3,
+                            "weekly":[2,3]
+                        }
+                    },
+                    "commands":{}
+                },
+                "usage_hints":[]
+            }"#,
+        )?;
+
+        assert_eq!(parsed.project_health.velocity.weekly, vec![2, 3]);
         Ok(())
     }
 
@@ -1561,7 +1665,10 @@ mod tests {
         )?;
 
         assert_eq!(parsed.tracks[0].items[0].priority, BeadPriority::P1);
-        assert_eq!(parsed.summary.highest_impact.as_ref().map(BeadId::as_str), Some("grove-1j9.5.6"));
+        assert_eq!(
+            parsed.summary.highest_impact.as_ref().map(BeadId::as_str),
+            Some("grove-1j9.5.6")
+        );
         assert_eq!(parsed.status["Slack"].state, "computed");
         Ok(())
     }
@@ -1632,7 +1739,10 @@ mod tests {
         assert_eq!(parsed.bottlenecks[0].id.as_str(), "grove-1j9.5.8");
         assert_eq!(parsed.articulation_points[0].as_str(), "grove-1j9.5.6");
         assert_eq!(parsed.cycles[0][0].as_str(), "grove-a");
-        assert_eq!(parsed.full_stats.page_rank[&BeadId::new("grove-1j9.5.6")], 0.0198);
+        assert_eq!(
+            parsed.full_stats.page_rank[&BeadId::new("grove-1j9.5.6")],
+            0.0198
+        );
         Ok(())
     }
 
@@ -1664,7 +1774,10 @@ mod tests {
         )?;
 
         assert_eq!(parsed.recommendations[0].current_priority, BeadPriority::P1);
-        assert_eq!(parsed.recommendations[0].suggested_priority, BeadPriority::P0);
+        assert_eq!(
+            parsed.recommendations[0].suggested_priority,
+            BeadPriority::P0
+        );
         assert_eq!(parsed.status["PageRank"].state, "computed");
         Ok(())
     }
@@ -1689,7 +1802,10 @@ mod tests {
 
     #[test]
     fn first_non_empty_line_prefers_stdout_content() {
-        assert_eq!(first_non_empty_line("\n hello \nworld\n"), Some("hello".to_owned()));
+        assert_eq!(
+            first_non_empty_line("\n hello \nworld\n"),
+            Some("hello".to_owned())
+        );
     }
 
     #[cfg(unix)]
@@ -1763,7 +1879,10 @@ mod tests {
         .err()
         .ok_or_else(|| IoError::other("expected parse error"))?;
 
-        assert!(err.to_string().contains("unsupported bead priority`9`") || err.to_string().contains("unsupported bead priority `9`"));
+        assert!(
+            err.to_string().contains("unsupported bead priority`9`")
+                || err.to_string().contains("unsupported bead priority `9`")
+        );
         Ok(())
     }
 }

@@ -286,6 +286,7 @@ dependencies = [
  "grove-db",
  "grove-kernel",
  "grove-types",
+ "tempfile",
  "toml",
 ]
 
@@ -320,10 +321,29 @@ name = "grove-kernel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "camino",
+ "chrono",
  "grove-br",
  "grove-bv",
+ "grove-config",
  "grove-db",
+ "grove-session",
  "grove-types",
+ "rusqlite",
+ "tempfile",
+]
+
+[[package]]
+name = "grove-session"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "camino",
+ "grove-types",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]

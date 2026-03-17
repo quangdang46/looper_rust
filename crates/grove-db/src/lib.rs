@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use grove_br::{
@@ -8,10 +8,11 @@ use grove_br::{
 };
 use grove_types::{
     BeadId, BeadPriority, BeadRef, CheckpointId, CheckpointRecord, ClaudeSessionRecord, EventKind,
-    EventLogRecord, FailureClass, GroveBeadRecord, GroveBeadStatus, HandoffRecord, RunId,
-    RunStatus, SessionId, SessionStatus, StopReason, TaskRunRecord, Timestamp,
+    EventLogRecord, FailureClass, GroveBeadRecord, GroveBeadStatus, HandoffRecord, ReservationMode,
+    ReservationRecord, RunId, RunStatus, SessionId, SessionStatus, StopReason, TaskRunRecord,
+    Timestamp,
 };
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde_json::Value;
 
 pub const CRATE_PURPOSE: &str = "SQLite bootstrap, migrations, and runtime persistence.";
@@ -136,6 +137,18 @@ struct RawEventLogRow {
     session_id: Option<String>,
     payload_json: String,
     created_at: String,
+}
+
+#[derive(Debug)]
+struct RawReservationRow {
+    id: i64,
+    bead_id: String,
+    run_id: Option<String>,
+    path_pattern: String,
+    exclusive: bool,
+    reason: Option<String>,
+    expires_at: String,
+    released_at: Option<String>,
 }
 
 impl Database {
@@ -407,6 +420,30 @@ impl Database {
             .context("collect event log rows")?
             .into_iter()
             .map(raw_event_log_into_record)
+            .collect()
+    }
+
+    pub fn list_active_reservations(&self) -> Result<Vec<ReservationRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, bead_id, run_id, path_pattern, exclusive, reason, expires_at, released_at \
+                 FROM reservations \
+                 WHERE released_at IS NULL \
+                   AND expires_at > ?1 \
+                 ORDER BY bead_id ASC, id ASC",
+            )
+            .context("prepare active reservation list query")?;
+
+        let now = now_timestamp_string();
+        let rows = stmt
+            .query_map([&now], raw_reservation_row)
+            .context("query active reservations")?;
+
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("collect active reservation rows")?
+            .into_iter()
+            .map(raw_reservation_into_record)
             .collect()
     }
 
@@ -742,6 +779,19 @@ fn raw_event_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEventLogRow
     })
 }
 
+fn raw_reservation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawReservationRow> {
+    Ok(RawReservationRow {
+        id: row.get(0)?,
+        bead_id: row.get(1)?,
+        run_id: row.get(2)?,
+        path_pattern: row.get(3)?,
+        exclusive: row.get::<_, i64>(4)? != 0,
+        reason: row.get(5)?,
+        expires_at: row.get(6)?,
+        released_at: row.get(7)?,
+    })
+}
+
 fn raw_bead_record_into_record(row: RawBeadRecordRow) -> Result<GroveBeadRecord> {
     let raw_json: Value = parse_json(&row.raw_json, "raw bead JSON")?;
     let synced_at = parse_timestamp(&row.synced_at)?;
@@ -831,7 +881,11 @@ fn raw_session_into_record(row: RawSessionRow) -> Result<ClaudeSessionRecord> {
         estimated_input_tokens: row.estimated_input_tokens,
         estimated_output_tokens: row.estimated_output_tokens,
         exit_code: row.exit_code,
-        stop_reason: row.stop_reason.as_deref().map(parse_stop_reason).transpose()?,
+        stop_reason: row
+            .stop_reason
+            .as_deref()
+            .map(parse_stop_reason)
+            .transpose()?,
         transcript_path: row.transcript_path,
     })
 }
@@ -872,6 +926,27 @@ fn raw_event_log_into_record(row: RawEventLogRow) -> Result<EventLogRecord> {
         session_id: row.session_id.map(SessionId::new),
         payload: parse_json(&row.payload_json, "event log payload")?,
         created_at: parse_timestamp(&row.created_at)?,
+    })
+}
+
+fn raw_reservation_into_record(row: RawReservationRow) -> Result<ReservationRecord> {
+    Ok(ReservationRecord {
+        id: row.id,
+        bead_id: BeadId::new(row.bead_id),
+        run_id: row.run_id.map(RunId::new),
+        path_pattern: row.path_pattern,
+        mode: if row.exclusive {
+            ReservationMode::Exclusive
+        } else {
+            ReservationMode::Shared
+        },
+        reason: row.reason,
+        expires_at: parse_timestamp(&row.expires_at)?,
+        released_at: row
+            .released_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
     })
 }
 
@@ -1046,10 +1121,10 @@ mod tests {
     use anyhow::Result;
     use camino::Utf8PathBuf;
     use grove_br::{
-        BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError, BrIssueDetail,
-        BrIssueSummary, BrVersion, sync_bead_cache,
+        sync_bead_cache, BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError,
+        BrIssueDetail, BrIssueSummary, BrVersion,
     };
-    use grove_types::{BeadId, BeadPriority, RunId, Timestamp};
+    use grove_types::{BeadId, BeadPriority, ReservationMode, RunId, Timestamp};
     use rusqlite::OptionalExtension;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1369,26 +1444,46 @@ mod tests {
             ],
         )?;
 
+        db.connection().execute(
+            "INSERT INTO reservations(\
+                bead_id, run_id, path_pattern, exclusive, reason, expires_at, released_at\
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+            rusqlite::params![
+                "grove-query",
+                "run-query",
+                "crates/grove-db/src/lib.rs",
+                1,
+                "query helper work",
+                "2099-03-16T12:30:00Z",
+            ],
+        )?;
+
         let runs = db.list_task_runs_for_bead(&BeadId::new("grove-query"))?;
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id.as_str(), "run-query");
         assert_eq!(format!("{:?}", runs[0].status), "Checkpointed");
         assert_eq!(format!("{:?}", runs[0].failure_class), "Some(RateLimit)");
-        assert_eq!(runs[0].last_checkpoint_id.as_ref().map(|id| id.as_str()), Some("chk-query"));
+        assert_eq!(
+            runs[0].last_checkpoint_id.as_ref().map(|id| id.as_str()),
+            Some("chk-query")
+        );
 
-        let session = db.latest_session_for_run(&RunId::new("run-query"))?
+        let session = db
+            .latest_session_for_run(&RunId::new("run-query"))?
             .ok_or_else(|| anyhow::anyhow!("expected latest session"))?;
         assert_eq!(session.id.as_str(), "ses-query");
         assert_eq!(format!("{:?}", session.status), "Checkpointed");
         assert_eq!(format!("{:?}", session.stop_reason), "Some(Checkpoint)");
 
-        let checkpoint = db.latest_checkpoint_for_bead(&BeadId::new("grove-query"))?
+        let checkpoint = db
+            .latest_checkpoint_for_bead(&BeadId::new("grove-query"))?
             .ok_or_else(|| anyhow::anyhow!("expected latest checkpoint"))?;
         assert_eq!(checkpoint.id.as_str(), "chk-query");
         assert_eq!(checkpoint.resume_generation, 3);
         assert_eq!(checkpoint.progress, "halfway there");
 
-        let handoff = db.handoff_for_bead(&BeadId::new("grove-query"))?
+        let handoff = db
+            .handoff_for_bead(&BeadId::new("grove-query"))?
             .ok_or_else(|| anyhow::anyhow!("expected handoff"))?;
         assert_eq!(handoff.summary, "finished query helpers");
         assert_eq!(handoff.artifacts, vec!["artifact-1"]);
@@ -1396,8 +1491,21 @@ mod tests {
         let events = db.list_event_logs_for_bead(&BeadId::new("grove-query"))?;
         assert_eq!(events.len(), 1);
         assert_eq!(format!("{:?}", events[0].kind), "BrMirrorFailed");
-        assert_eq!(events[0].run_id.as_ref().map(|id| id.as_str()), Some("run-query"));
+        assert_eq!(
+            events[0].run_id.as_ref().map(|id| id.as_str()),
+            Some("run-query")
+        );
         assert!(events[0].payload.to_string().contains("network hiccup"));
+
+        let reservations = db.list_active_reservations()?;
+        assert_eq!(reservations.len(), 1);
+        assert_eq!(reservations[0].bead_id.as_str(), "grove-query");
+        assert_eq!(
+            reservations[0].run_id.as_ref().map(|id| id.as_str()),
+            Some("run-query")
+        );
+        assert_eq!(reservations[0].path_pattern, "crates/grove-db/src/lib.rs");
+        assert_eq!(reservations[0].mode, ReservationMode::Exclusive);
         Ok(())
     }
 
