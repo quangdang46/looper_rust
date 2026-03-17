@@ -53,6 +53,14 @@ pub enum SessionTerminalClass {
     UnknownFailure,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ContextPressureLevel {
+    Ok,
+    Warn,
+    Rotate,
+    HardStop,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IterationAnalysis {
     pub output_lines: usize,
@@ -63,6 +71,7 @@ pub struct IterationAnalysis {
     pub checkpoint_emitted: bool,
     pub probable_progress: ProgressSignal,
     pub permission_denials: u32,
+    pub rate_limit_markers: u32,
     pub repeated_error_fingerprint: Option<String>,
     pub artifacts_mentioned: Vec<String>,
     pub lessons: Vec<String>,
@@ -95,8 +104,20 @@ pub struct SessionOutcome {
     pub protocol_events: Vec<ProtocolEvent>,
     pub analysis: IterationAnalysis,
     pub terminal_class: SessionTerminalClass,
+    pub context_pressure_pct: Option<f32>,
+    pub context_pressure_level: ContextPressureLevel,
     pub stdout_tail: Vec<String>,
     pub stderr_tail: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CircuitBreakerState {
+    pub state: CircuitState,
+    pub no_progress_count: u32,
+    pub same_error_count: u32,
+    pub permission_denial_count: u32,
+    pub last_error_fingerprint: Option<String>,
+    pub opened_at: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,5 +201,24 @@ impl CircuitState {
                 | (HalfOpen, Open)
                 | (Open, HalfOpen)
         )
+    }
+}
+
+impl Default for ContextPressureLevel {
+    fn default() -> Self {
+        Self::Ok
+    }
+}
+
+impl Default for CircuitBreakerState {
+    fn default() -> Self {
+        Self {
+            state: CircuitState::Closed,
+            no_progress_count: 0,
+            same_error_count: 0,
+            permission_denial_count: 0,
+            last_error_fingerprint: None,
+            opened_at: None,
+        }
     }
 }

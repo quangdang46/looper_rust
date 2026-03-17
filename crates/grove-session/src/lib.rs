@@ -9,8 +9,9 @@ mod transcript;
 
 pub use analysis::{analyze_iteration, AnalysisInput};
 pub use analyzer::{
-    analyze_session_outcome, evaluate_exit_policy, evaluate_outcome_exit_policy,
-    SessionAnalysisContext,
+    analyze_session_outcome, classify_session_outcome, evaluate_exit_policy,
+    evaluate_outcome_exit_policy, update_circuit_breaker, ContextMonitor, ContextPressure,
+    ContextPressureDecision, SessionAnalysisContext,
 };
 pub use backend::{ClaudeBackend, CliClaudeBackend, RunningSession, StartSessionRequest};
 pub use exit_policy::{ExitDecision, ExitPolicy};

@@ -23,6 +23,8 @@ const PERMISSION_DENIAL_PATTERNS: [&str; 8] = [
     "denied by user",
 ];
 
+const RATE_LIMIT_PATTERNS: [&str; 4] = ["rate limit", "rate-limit", "ratelimit", "rate limited"];
+
 const ERROR_PATTERNS: [&str; 10] = [
     "error",
     "failed",
@@ -50,6 +52,7 @@ pub struct AnalysisInput<'a> {
 pub fn analyze_iteration(input: AnalysisInput<'_>) -> IterationAnalysis {
     let repeated_error_fingerprint =
         detect_repeated_error_fingerprint(input.stdout_lines, input.stderr_lines);
+    let warnings = merged_warnings(input.protocol_state, input.protocol_warnings);
 
     IterationAnalysis {
         output_lines: input.stdout_lines.len() + input.stderr_lines.len(),
@@ -65,11 +68,16 @@ pub fn analyze_iteration(input: AnalysisInput<'_>) -> IterationAnalysis {
             repeated_error_fingerprint.as_deref(),
         ),
         permission_denials: count_permission_denials(input.stdout_lines, input.stderr_lines),
+        rate_limit_markers: count_rate_limit_markers(
+            input.stdout_lines,
+            input.stderr_lines,
+            &warnings,
+        ),
         repeated_error_fingerprint,
         artifacts_mentioned: input.protocol_state.artifacts.clone(),
         lessons: input.protocol_state.lessons.clone(),
         decisions: input.protocol_state.decisions.clone(),
-        warnings: merged_warnings(input.protocol_state, input.protocol_warnings),
+        warnings,
         estimated_prompt_tokens: input.estimated_prompt_tokens,
         estimated_output_tokens: input.estimated_output_tokens,
     }
@@ -121,6 +129,26 @@ fn count_permission_denials(stdout_lines: &[String], stderr_lines: &[String]) ->
 fn is_permission_denial(line: &str) -> bool {
     let normalized = normalize_line(line);
     PERMISSION_DENIAL_PATTERNS
+        .iter()
+        .any(|pattern| normalized.contains(pattern))
+}
+
+fn count_rate_limit_markers(
+    stdout_lines: &[String],
+    stderr_lines: &[String],
+    warnings: &[String],
+) -> u32 {
+    stdout_lines
+        .iter()
+        .chain(stderr_lines.iter())
+        .filter(|line| is_rate_limit_marker(line))
+        .count() as u32
+        + warnings.iter().filter(|warning| is_rate_limit_marker(warning)).count() as u32
+}
+
+fn is_rate_limit_marker(line: &str) -> bool {
+    let normalized = normalize_line(line);
+    RATE_LIMIT_PATTERNS
         .iter()
         .any(|pattern| normalized.contains(pattern))
 }
@@ -381,5 +409,30 @@ mod tests {
         });
 
         assert!(analysis.checkpoint_emitted);
+    }
+
+    #[test]
+    fn rate_limit_markers_are_counted_from_output_and_warnings() {
+        let stdout_lines = vec![
+            "Rate limit exceeded while requesting model output".to_owned(),
+            "temporary rate-limit backoff triggered".to_owned(),
+        ];
+        let stderr_lines = vec!["ratelimit retry window still active".to_owned()];
+        let protocol_warnings = vec![ProtocolWarning {
+            line: 12,
+            raw_line: "warning".to_owned(),
+            reason: "rate limit warning surfaced from parser".to_owned(),
+        }];
+
+        let analysis = analyze_iteration(AnalysisInput {
+            protocol_state: &ProtocolState::default(),
+            protocol_warnings: &protocol_warnings,
+            stdout_lines: &stdout_lines,
+            stderr_lines: &stderr_lines,
+            estimated_prompt_tokens: 0,
+            estimated_output_tokens: 0,
+        });
+
+        assert_eq!(analysis.rate_limit_markers, 4);
     }
 }

@@ -31,8 +31,9 @@ pub use priority::BeadPriority;
 pub use reservation::{ReservationConflict, ReservationMode, ReservationRecord};
 pub use run::{FailureClass, RetryPolicy, RunStatus, TaskRunRecord};
 pub use session::{
-    CircuitState, ClaudeSessionRecord, IterationAnalysis, ProgressSignal, SessionOutcome,
-    SessionStatus, SessionTerminalClass, StopReason, TranscriptEvent,
+    CircuitBreakerState, CircuitState, ClaudeSessionRecord, ContextPressureLevel,
+    IterationAnalysis, ProgressSignal, SessionOutcome, SessionStatus, SessionTerminalClass,
+    StopReason, TranscriptEvent,
 };
 pub use task::{BeadRef, BeadRuntimePatch, GroveBeadRecord, GroveBeadStatus};
 pub use time::Timestamp;
