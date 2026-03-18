@@ -2,13 +2,13 @@ use crate::{
     CheckpointPromptInput, ClaudeBackend, ContextMonitor, ExitPolicy, ParserLineKind,
     PromptMaterializationInput, ProtocolParser, ProtocolWarning, StartSessionRequest,
     TranscriptError, TranscriptWriter, analyze_session_outcome,
-    classify_session_outcome_with_policy, materialize_prompt,
+    classify_session_outcome_with_policy, materialize_prompt, plan_retry_mutation,
 };
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use grove_types::{
-    BeadId, ClaudeSessionRecord, ExecutionContract, PromptId, ProtocolState, RunId, SessionId,
-    SessionOutcome, SessionStatus, SessionTerminalClass, StopReason,
+    BeadId, ClaudeSessionRecord, ExecutionContract, FailureClass, PromptId, ProtocolState, RunId,
+    SessionId, SessionOutcome, SessionStatus, SessionTerminalClass, StopReason,
 };
 use std::{fs, path::Path};
 use thiserror::Error;
@@ -32,6 +32,8 @@ pub struct SingleTaskSessionRequest {
     pub reservation_hints: Vec<String>,
     pub parent_handoffs: Vec<String>,
     pub checkpoint: Option<CheckpointPromptInput>,
+    pub previous_failure_class: Option<FailureClass>,
+    pub previous_outcome: Option<SessionOutcome>,
     pub rescue_card: Option<String>,
     pub retry_delta_summary: Option<String>,
     pub token_budget: Option<u32>,
@@ -44,6 +46,23 @@ pub struct SingleTaskSessionResult {
     pub outcome: SessionOutcome,
     pub protocol_state: ProtocolState,
     pub protocol_warnings: Vec<ProtocolWarning>,
+}
+
+impl SingleTaskSessionRequest {
+    #[must_use]
+    pub fn with_retry_context(
+        mut self,
+        failure_class: FailureClass,
+        previous_outcome: Option<SessionOutcome>,
+    ) -> Self {
+        let plan = plan_retry_mutation(failure_class, previous_outcome.as_ref());
+        self.contract = plan.next_contract;
+        self.previous_failure_class = Some(failure_class);
+        self.previous_outcome = previous_outcome;
+        self.retry_delta_summary = Some(plan.retry_delta_summary);
+        self.rescue_card = Some(plan.rescue_card);
+        self
+    }
 }
 
 #[derive(Debug, Error)]
@@ -275,7 +294,7 @@ fn stop_reason_from_terminal_class(terminal_class: SessionTerminalClass) -> Stop
 mod tests {
     use super::*;
     use crate::{CliClaudeBackend, replay_transcript};
-    use grove_types::{PromptManifest, PromptSegmentKind};
+    use grove_types::{FailureClass, IterationAnalysis, ProgressSignal, PromptManifest, PromptSegmentKind};
     use std::{error::Error, fs, io, time::Duration};
     use tempfile::tempdir;
 
@@ -317,6 +336,8 @@ exit "${EXIT_CODE:-0}"
             reservation_hints: vec!["crates/grove-session/src/**".to_owned()],
             parent_handoffs: vec!["Phase 2 components are ready to be joined.".to_owned()],
             checkpoint: None,
+            previous_failure_class: None,
+            previous_outcome: None,
             rescue_card: None,
             retry_delta_summary: None,
             token_budget: Some(2_000),
@@ -475,6 +496,102 @@ exit "${EXIT_CODE:-0}"
         assert_eq!(
             result.outcome.stderr_tail,
             vec!["ratelimit retry window still active".to_owned()]
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn with_retry_context_derives_retry_rescue_metadata_from_previous_outcome() -> TestResult {
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(&workspace_dir)?;
+        let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+            .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+
+        let script_path = dir.path().join("fake-claude");
+        write_fake_claude_script(&script_path)?;
+        let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+        let previous_outcome = SessionOutcome {
+            session: ClaudeSessionRecord {
+                id: SessionId::new("ses-prev"),
+                run_id: RunId::new("run-prev"),
+                external_session_id: None,
+                ordinal_in_run: 1,
+                status: SessionStatus::UnknownFailure,
+                started_at: Utc::now(),
+                ended_at: Some(Utc::now()),
+                prompt_id: None,
+                prompt_manifest_path: None,
+                prompt_bytes: 0,
+                estimated_input_tokens: 0,
+                estimated_output_tokens: 0,
+                exit_code: Some(1),
+                stop_reason: Some(StopReason::Unknown),
+                transcript_path: ".grove/transcripts/grove-1j9.6.7/ses-prev.jsonl".to_owned(),
+            },
+            protocol_events: vec![],
+            analysis: IterationAnalysis {
+                probable_progress: ProgressSignal::Weak,
+                repeated_error_fingerprint: Some(
+                    "error: protocol marker was malformed and failed to parse".to_owned(),
+                ),
+                has_explicit_exit_false: true,
+                ..IterationAnalysis::default()
+            },
+            terminal_class: SessionTerminalClass::UnknownFailure,
+            context_pressure_pct: None,
+            context_pressure_level: grove_types::ContextPressureLevel::Ok,
+            stdout_tail: Vec::new(),
+            stderr_tail: Vec::new(),
+        };
+
+        let mut request = sample_request(workspace_dir.clone())
+            .with_retry_context(FailureClass::RepeatedError, Some(previous_outcome));
+        request.env = vec![
+            (
+                "STDOUT_SCRIPT".to_owned(),
+                concat!(
+                    "retry attempt with changed approach\n",
+                    "GROVE_RESULT: retry mutation applied\n",
+                    "GROVE_EXIT: true\n",
+                    "implementation complete\n"
+                )
+                .to_owned(),
+            ),
+            ("STDERR_SCRIPT".to_owned(), String::new()),
+            ("EXIT_CODE".to_owned(), "0".to_owned()),
+        ];
+
+        assert_eq!(request.previous_failure_class, Some(FailureClass::RepeatedError));
+        assert_eq!(request.contract, ExecutionContract::RetryRescue);
+        assert!(request.retry_delta_summary.as_deref().is_some_and(|summary| {
+            summary.contains("repeated error path")
+        }));
+        assert!(request
+            .rescue_card
+            .as_deref()
+            .is_some_and(|card| card.contains("Previous repeated error to avoid")));
+
+        let result = execute_single_task_session(&backend, request)?;
+
+        let prompt_path = workspace_dir.join(".grove/prompts/prompt-1.json");
+        let manifest: PromptManifest =
+            serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
+        assert_eq!(manifest.contract, ExecutionContract::RetryRescue);
+        assert!(manifest.retry_delta_summary.as_deref().is_some_and(|summary| {
+            summary.contains("repeated error path")
+        }));
+        let rescue_card = manifest
+            .sections
+            .iter()
+            .find(|section| section.kind == PromptSegmentKind::RescueCard)
+            .ok_or("missing rescue-card section")?;
+        assert!(rescue_card.preview.contains("Do not repeat the same failing path"));
+        assert_eq!(
+            result.protocol_state.result_summary.as_deref(),
+            Some("retry mutation applied")
         );
         Ok(())
     }

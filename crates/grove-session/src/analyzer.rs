@@ -371,6 +371,47 @@ mod tests {
     }
 
     #[test]
+    fn evaluate_outcome_exit_policy_respects_explicit_exit_false_override() {
+        let started_at: Timestamp = "2026-03-17T08:00:00Z".parse().expect("timestamp");
+        let outcome = SessionOutcome {
+            session: ClaudeSessionRecord {
+                id: SessionId::new("ses-2"),
+                run_id: RunId::new("run-2"),
+                external_session_id: None,
+                ordinal_in_run: 1,
+                status: SessionStatus::UnknownFailure,
+                started_at,
+                ended_at: Some(started_at),
+                prompt_id: None,
+                prompt_manifest_path: None,
+                prompt_bytes: 0,
+                estimated_input_tokens: 0,
+                estimated_output_tokens: 0,
+                exit_code: Some(0),
+                stop_reason: Some(StopReason::Unknown),
+                transcript_path: "transcripts/ses-2.jsonl".to_owned(),
+            },
+            protocol_events: vec![ProtocolEvent::Exit { value: false }, ProtocolEvent::Exit { value: true }],
+            analysis: IterationAnalysis {
+                completion_indicators: 4,
+                has_explicit_exit_true: true,
+                has_explicit_exit_false: true,
+                ..IterationAnalysis::default()
+            },
+            terminal_class: SessionTerminalClass::UnknownFailure,
+            context_pressure_pct: None,
+            context_pressure_level: ContextPressureLevel::Ok,
+            stdout_tail: Vec::new(),
+            stderr_tail: Vec::new(),
+        };
+
+        assert_eq!(
+            evaluate_outcome_exit_policy(&ExitPolicy::default(), &outcome),
+            ExitDecision::Continue
+        );
+    }
+
+    #[test]
     fn context_monitor_reports_warn_rotate_and_hard_stop() {
         let analysis = IterationAnalysis {
             estimated_prompt_tokens: 60,
@@ -396,6 +437,21 @@ mod tests {
 
         assert_eq!(
             classify_session_outcome(&analysis, Some(1), false),
+            SessionTerminalClass::Checkpoint
+        );
+    }
+
+    #[test]
+    fn checkpoint_beats_apparent_success_signals() {
+        let analysis = IterationAnalysis {
+            checkpoint_emitted: true,
+            completion_indicators: 4,
+            has_explicit_exit_true: true,
+            ..IterationAnalysis::default()
+        };
+
+        assert_eq!(
+            classify_session_outcome(&analysis, Some(0), false),
             SessionTerminalClass::Checkpoint
         );
     }
@@ -440,6 +496,19 @@ mod tests {
     }
 
     #[test]
+    fn classifies_rate_limit_from_warning_text_without_markers() {
+        let analysis = IterationAnalysis {
+            warnings: vec!["rate-limit retry window still active".to_owned()],
+            ..IterationAnalysis::default()
+        };
+
+        assert_eq!(
+            classify_session_outcome(&analysis, Some(1), false),
+            SessionTerminalClass::RateLimit
+        );
+    }
+
+    #[test]
     fn classifies_success_only_after_clean_exit_path() {
         assert_eq!(
             classify_session_outcome(&sample_analysis(), Some(0), false),
@@ -448,6 +517,17 @@ mod tests {
         assert_eq!(
             classify_session_outcome(&sample_analysis(), Some(1), false),
             SessionTerminalClass::Crash
+        );
+    }
+
+    #[test]
+    fn explicit_exit_false_prevents_success_classification() {
+        let mut analysis = sample_analysis();
+        analysis.has_explicit_exit_false = true;
+
+        assert_eq!(
+            classify_session_outcome(&analysis, Some(0), false),
+            SessionTerminalClass::UnknownFailure
         );
     }
 

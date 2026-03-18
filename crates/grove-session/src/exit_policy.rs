@@ -118,4 +118,19 @@ mod tests {
 
         assert_eq!(policy.evaluate(&analysis), ExitDecision::Success);
     }
+
+    #[test]
+    fn explicit_exit_false_blocks_threshold_only_success_when_explicit_exit_not_required() {
+        let analysis = IterationAnalysis {
+            completion_indicators: 4,
+            has_explicit_exit_false: true,
+            ..IterationAnalysis::default()
+        };
+        let policy = ExitPolicy {
+            completion_indicator_threshold: 2,
+            require_explicit_exit: false,
+        };
+
+        assert_eq!(policy.evaluate(&analysis), ExitDecision::Continue);
+    }
 }
