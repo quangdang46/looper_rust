@@ -77,6 +77,8 @@ pub struct PromptSectionProvenance {
     pub bullet_ids: Vec<BulletId>,
     pub checkpoint_id: Option<CheckpointId>,
     pub handoff_run_id: Option<RunId>,
+    pub archive_message_id: Option<String>,
+    pub playbook_bullet_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +191,8 @@ mod tests {
                     bullet_ids: vec![BulletId::new("bullet-1")],
                     checkpoint_id: Some(CheckpointId::new("chk-1")),
                     handoff_run_id: Some(RunId::new("run-parent")),
+                    archive_message_id: None,
+                    playbook_bullet_id: None,
                 },
                 preview: "Progress: routes done".to_owned(),
             }],

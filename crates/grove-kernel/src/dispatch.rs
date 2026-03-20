@@ -255,6 +255,7 @@ fn build_session_request(
         retry_delta_summary: None,
         token_budget: None,
         ordinal_in_run: 1,
+        archive_bundle: None,
         env: Vec::new(),
     }
 }
@@ -386,6 +387,11 @@ pub fn run_dispatch_loop<B: ClaudeBackend, C: BrClient>(
             eprintln!("grove mirror: failed to process outbox: {error:#}");
         }
 
+        // Run playbook scoring pass (handles decay and promotion/demotion)
+        if let Err(error) = crate::scoring::run_scoring_pass(db, &crate::scoring::ScoringConfig::default()) {
+            eprintln!("grove playbook: scoring pass failed: {error:#}");
+        }
+
         // Enforce bounded concurrency.
         let running_count = count_running_beads(db)?;
         if running_count >= config.scheduler.max_parallel {
@@ -503,6 +509,50 @@ pub fn run_dispatch_loop<B: ClaudeBackend, C: BrClient>(
             &session_id,
             parent_handoffs,
         );
+
+        // Populate archive retrieval bundle
+        let mut search_tokens: Vec<String> = bead.bead.title
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+            .collect::<String>()
+            .split_whitespace()
+            .map(|s| s.to_string())
+            .collect();
+            
+        if let Some(desc) = bead.bead.description.as_deref() {
+            search_tokens.extend(
+                desc.chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+                    .collect::<String>()
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+            );
+        }
+        
+        // Take top 5 keywords based on length (simplistic heuristic)
+        search_tokens.sort_by_key(|a| std::cmp::Reverse(a.len()));
+        search_tokens.truncate(5);
+        let fts_query = search_tokens.join(" OR ");
+        
+        if !fts_query.is_empty() {
+            if let Ok(bundle) = db.search_archive_fts(&fts_query, 5) {
+                request.archive_bundle = Some(bundle);
+            }
+        }
+
+        // Populate playbook rules
+        if let Ok(mut active_rules) = db.list_active_bullets(None) {
+            // Sort by maturity and score (already mostly sorted by DB query, but let's enforce limit)
+            active_rules.sort_by(|a, b| {
+                b.effective_score
+                    .unwrap_or(0.0)
+                    .partial_cmp(&a.effective_score.unwrap_or(0.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            // Take top 5 to avoid overwhelming context
+            active_rules.truncate(5);
+            request.playbook_rules = active_rules;
+        }
 
         if let Some(failure_class) = bead.last_failure_class {
             request = request.with_retry_context(failure_class, None);

@@ -9,6 +9,7 @@ mod protocol;
 mod retry;
 mod runner;
 mod transcript;
+mod verify;
 
 pub use analysis::{AnalysisInput, analyze_iteration};
 pub use analyzer::{
@@ -35,6 +36,7 @@ pub use runner::{
     execute_single_task_session_with_hooks,
 };
 pub use transcript::{TranscriptError, TranscriptReplay, TranscriptWriter, replay_transcript};
+pub use verify::{VerificationMode, run_verification};
 
 pub const CRATE_PURPOSE: &str =
     "Claude session protocol parsing, transcript capture, and session analysis helpers.";

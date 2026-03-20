@@ -39,6 +39,8 @@ pub struct SingleTaskSessionRequest {
     pub retry_delta_summary: Option<String>,
     pub token_budget: Option<u32>,
     pub ordinal_in_run: i32,
+    pub archive_bundle: Option<grove_types::archive::RetrievalBundle>,
+    pub playbook_rules: Vec<grove_types::playbook::PlaybookBulletRecord>,
     pub env: Vec<(String, String)>,
 }
 
@@ -133,6 +135,8 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
         rescue_card: request.rescue_card.clone(),
         token_budget: request.token_budget,
         retry_delta_summary: request.retry_delta_summary.clone(),
+        archive_bundle: request.archive_bundle.clone(),
+        playbook_rules: request.playbook_rules.clone(),
     });
 
     let transcript_abs = resolve_under_working_dir(&request.working_dir, &request.transcript_path);
@@ -219,12 +223,28 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
         });
         let context_pressure = request.context_monitor.estimate(&analysis);
         let context_pressure_level = request.context_monitor.classify(&analysis);
-        let terminal_class = classify_session_outcome_with_policy(
+        let mut terminal_class = classify_session_outcome_with_policy(
             &request.exit_policy,
             &analysis,
             status.code(),
             false,
         );
+
+        // Run Verification before closing out Success.
+        if terminal_class == SessionTerminalClass::Success {
+            let mode = crate::verify::VerificationMode::infer(
+                request.contract,
+                &request.working_dir,
+            );
+            if let Err(verify_err) = crate::verify::run_verification(mode, &request.working_dir, &materialized.manifest) {
+                // If verification failed, log it to stderr so it's captured in the analysis tail
+                // and fail the terminal class.
+                let msg = format!("grove verification failed:\n{}", verify_err);
+                eprintln!("{}", msg);
+                stderr_lines.push(msg);
+                terminal_class = SessionTerminalClass::VerifyFailed;
+            }
+        }
 
         let session = ClaudeSessionRecord {
             id: request.session_id.clone(),
@@ -417,6 +437,7 @@ fn status_from_terminal_class(terminal_class: SessionTerminalClass) -> SessionSt
         SessionTerminalClass::RateLimit => SessionStatus::RateLimited,
         SessionTerminalClass::PermissionDenied => SessionStatus::PermissionDenied,
         SessionTerminalClass::Crash => SessionStatus::Crashed,
+        SessionTerminalClass::VerifyFailed => SessionStatus::Failed,
         SessionTerminalClass::UnknownFailure => SessionStatus::UnknownFailure,
     }
 }
@@ -429,6 +450,7 @@ fn stop_reason_from_terminal_class(terminal_class: SessionTerminalClass) -> Stop
         SessionTerminalClass::RateLimit => StopReason::RateLimit,
         SessionTerminalClass::PermissionDenied => StopReason::PermissionDenied,
         SessionTerminalClass::Crash => StopReason::Crash,
+        SessionTerminalClass::VerifyFailed => StopReason::Unknown, // we don't have a specific StopReason for verify failure yet
         SessionTerminalClass::UnknownFailure => StopReason::Unknown,
     }
 }
@@ -487,6 +509,8 @@ exit "${EXIT_CODE:-0}"
             retry_delta_summary: None,
             token_budget: Some(2_000),
             ordinal_in_run: 1,
+            archive_bundle: None,
+            playbook_rules: vec![],
             env: Vec::new(),
         }
     }

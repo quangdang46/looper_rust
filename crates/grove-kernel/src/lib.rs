@@ -2,6 +2,8 @@ pub mod dispatch;
 pub mod inspect_view;
 pub mod status_view;
 pub mod archive;
+pub mod lesson_ingest;
+pub mod scoring;
 
 use anyhow::{Context, Result};
 use grove_br::{BrClient, BrDependencySnapshot};
@@ -260,8 +262,19 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
                     metadata_json: serde_json::json!({}),
                 };
                 let _ = self.db.insert_source_record(&source_record);
-                let _ = self.db.insert_conversation_record(&archived);
+                // Idempotent: skips if this session was already ingested (watermark check)
+                let _ = self.db.insert_conversation_idempotent(&archived);
             }
+        }
+
+        // Ingest GROVE_LESSONS from protocol state into playbook as draft candidates
+        if !result.protocol_state.lessons.is_empty() {
+            let _ = crate::lesson_ingest::ingest_lessons(
+                self.db,
+                &self.bead_id,
+                &self.run_id,
+                &result.protocol_state.lessons,
+            );
         }
 
         self.latest_outcome = Some(result.outcome.clone());
@@ -1442,6 +1455,7 @@ exit "${EXIT_CODE:-0}"
             retry_delta_summary: None,
             token_budget: Some(2_000),
             ordinal_in_run: 1,
+            archive_bundle: None,
             env: Vec::new(),
         }
     }

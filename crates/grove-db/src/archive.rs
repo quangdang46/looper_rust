@@ -143,4 +143,68 @@ impl Database {
             conversations: conversations.into_iter().collect(),
         })
     }
+
+    /// Check if a session has already been ingested for a given source.
+    pub fn is_session_ingested(&self, source_id: &str, session_id: &str) -> Result<bool> {
+        let count: i64 = self.connection().query_row(
+            "SELECT COUNT(*) FROM archive_watermarks WHERE source_id = ?1 AND session_id = ?2",
+            params![source_id, session_id],
+            |row| row.get(0),
+        ).context("check archive watermark")?;
+        Ok(count > 0)
+    }
+
+    /// Record a watermark after successful ingest.
+    pub fn record_ingest_watermark(
+        &mut self,
+        source_id: &str,
+        session_id: &str,
+        record_count: i64,
+    ) -> Result<()> {
+        let now = timestamp_string(&chrono::Utc::now());
+        self.connection().execute(
+            "INSERT OR REPLACE INTO archive_watermarks(source_id, session_id, ingested_at, record_count)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![source_id, session_id, now, record_count],
+        ).context("record ingest watermark")?;
+        Ok(())
+    }
+
+    /// Idempotent conversation insert — skips if already archived for this source+session.
+    pub fn insert_conversation_idempotent(&mut self, record: &ConversationRecord) -> Result<Option<i64>> {
+        if self.is_session_ingested(record.source_id.as_str(), record.session_id.as_str())? {
+            return Ok(None);
+        }
+
+        let conversation_id = self.insert_conversation_record(record)?;
+
+        let message_count = record.messages.len() as i64;
+        self.record_ingest_watermark(
+            record.source_id.as_str(),
+            record.session_id.as_str(),
+            message_count,
+        )?;
+
+        Ok(Some(conversation_id))
+    }
+
+    /// List all watermarks for a given source.
+    pub fn list_watermarks_for_source(&self, source_id: &str) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT session_id, ingested_at, record_count FROM archive_watermarks WHERE source_id = ?1 ORDER BY ingested_at DESC"
+        )?;
+        let rows = stmt.query_map(params![source_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row?);
+        }
+        Ok(results)
+    }
 }
+

@@ -31,6 +31,8 @@ pub struct PromptMaterializationInput {
     pub rescue_card: Option<String>,
     pub token_budget: Option<u32>,
     pub retry_delta_summary: Option<String>,
+    pub archive_bundle: Option<grove_types::archive::RetrievalBundle>,
+    pub playbook_rules: Vec<grove_types::playbook::PlaybookBulletRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,6 +66,44 @@ pub fn materialize_prompt(input: PromptMaterializationInput) -> PromptMaterializ
             "Parent handoff",
             handoff,
         ));
+    }
+
+    if let Some(archive_bundle) = &input.archive_bundle {
+        for snippet in &archive_bundle.snippets {
+            let heading = format!("Historical snippet (Score: {:.2})", snippet.score);
+            let mut text = String::new();
+            if let Some(path) = &snippet.file_path {
+                text.push_str(&format!("From {}\n", path));
+            }
+            text.push_str(&snippet.snippet);
+            sections.push(PromptSegment {
+                kind: PromptSegmentKind::ArchiveSnippet,
+                priority: 30, // lower priority than most standard context
+                heading,
+                estimated_tokens: estimate_tokens(&text),
+                text,
+                provenance: grove_types::PromptSectionProvenance {
+                    archive_message_id: Some(snippet.message_id.to_string()),
+                    ..Default::default()
+                },
+            });
+        }
+    }
+
+    for rule in &input.playbook_rules {
+        let heading = format!("Playbook {} (Maturity: {:?})", rule.category, rule.maturity);
+        let text = format!("[{}] {}", rule.category.to_uppercase(), rule.text);
+        sections.push(PromptSegment {
+            kind: PromptSegmentKind::Playbook,
+            priority: 40, // higher priority than archive snippets, but below direct instructions
+            heading,
+            estimated_tokens: estimate_tokens(&text),
+            text,
+            provenance: grove_types::PromptSectionProvenance {
+                bullet_ids: vec![rule.id.clone()],
+                ..Default::default()
+            },
+        });
     }
 
     if let Some(checkpoint) = &input.checkpoint {
@@ -335,6 +375,8 @@ mod tests {
             rescue_card: None,
             token_budget: None,
             retry_delta_summary: None,
+            archive_bundle: None,
+            playbook_rules: vec![],
         }
     }
 
