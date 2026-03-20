@@ -8,7 +8,7 @@ use grove_db::Database;
 use grove_types::{
     BulletId,
     playbook::{
-        BulletMaturity, BulletState, FeedbackKind, PlaybookBulletRecord,
+        BulletMaturity, BulletScope, BulletState, BulletType, FeedbackKind, PlaybookBulletRecord,
     },
 };
 
@@ -133,6 +133,15 @@ pub fn target_maturity(
         return BulletMaturity::Deprecated;
     }
 
+    // Auto-prune stale drafts that never got traction
+    if bullet.state == BulletState::Draft {
+        let now = chrono::Utc::now();
+        let age_days = (now - bullet.created_at).num_days().max(0) as u32;
+        if age_days > config.staleness_days && total_events < config.min_events_for_promotion {
+            return BulletMaturity::Deprecated;
+        }
+    }
+
     // Promotion gates
     if total_events < config.min_events_for_promotion {
         return bullet.maturity; // not enough evidence yet
@@ -174,12 +183,59 @@ pub fn run_scoring_pass(db: &mut Database, config: &ScoringConfig) -> Result<usi
         };
 
         if new_maturity != bullet.maturity || new_state != bullet.state {
-            db.update_bullet_maturity(
-                &bullet.id,
-                new_state,
-                new_maturity,
-                Some(score as f32),
-            )?;
+            if new_maturity == BulletMaturity::Deprecated {
+                let mut replaced_by: Option<BulletId> = None;
+
+                // Invert Rule into an AntiPattern if we have enough statistical evidence
+                // that this rule is systematically harmful.
+                let total_events = bullet.helpful_count + bullet.harmful_count;
+                if bullet.bullet_type == BulletType::Rule && total_events >= config.min_events_for_promotion {
+                    let anti_text = format!("AVOID: {}", bullet.text);
+                    let inverted_id = BulletId::new(format!("{}-inv", bullet.id.as_str()));
+
+                    let anti_bullet = PlaybookBulletRecord {
+                        id: inverted_id.clone(),
+                        scope: bullet.scope,
+                        scope_key: bullet.scope_key.clone(),
+                        category: format!("{}_inverted", bullet.category),
+                        text: anti_text,
+                        bullet_type: BulletType::AntiPattern,
+                        state: BulletState::Draft,
+                        maturity: BulletMaturity::Candidate,
+                        helpful_count: 0,
+                        harmful_count: 0,
+                        feedback_events: vec![],
+                        confidence_decay_half_life_days: bullet.confidence_decay_half_life_days,
+                        pinned: false,
+                        deprecated: false,
+                        replaced_by: None,
+                        deprecation_reason: None,
+                        source_bead_ids: bullet.source_bead_ids.clone(),
+                        source_run_ids: bullet.source_run_ids.clone(),
+                        tags: bullet.tags.clone(),
+                        effective_score: Some(1.0), // give it a fresh start
+                        created_at: chrono::Utc::now(),
+                        updated_at: chrono::Utc::now(),
+                    };
+
+                    if db.insert_playbook_bullet(&anti_bullet).is_ok() {
+                        replaced_by = Some(inverted_id);
+                    }
+                }
+
+                db.deprecate_bullet(
+                    &bullet.id,
+                    "rule was inverted to anti-pattern due to consecutive harmful outcome ratios or negative score thresholds",
+                    replaced_by.as_ref(), // Pass the reference
+                )?;
+            } else {
+                db.update_bullet_maturity(
+                    &bullet.id,
+                    new_state,
+                    new_maturity,
+                    Some(score as f32),
+                )?;
+            }
 
             db.log_curation_action(
                 &bullet.id,

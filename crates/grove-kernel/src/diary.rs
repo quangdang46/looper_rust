@@ -107,13 +107,12 @@ pub fn apply_outcome_feedback(
         .with_context(|| format!("parse prompt manifest at {manifest_path}"))?;
 
     // Find injected playbook bullets
-    let active_bullet_ids: Vec<BulletId> = manifest
-        .sections
-        .into_iter()
-        .filter(|s| s.kind == PromptSegmentKind::PlaybookRule)
-        .filter_map(|s| s.provenance.playbook_bullet_id.clone())
-        .map(|id| BulletId::new(id.as_str()))
-        .collect();
+    let mut active_bullet_ids: Vec<BulletId> = Vec::new();
+    for section in manifest.sections {
+        if section.kind == PromptSegmentKind::Playbook && section.included {
+            active_bullet_ids.extend(section.provenance.bullet_ids.into_iter());
+        }
+    }
 
     let now = Utc::now();
     let context_msg = format!("Implicit diary feedback (Duration: {}s, Errors: {})", diary.duration_secs, diary.error_count);
