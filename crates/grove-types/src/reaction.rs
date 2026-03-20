@@ -230,6 +230,7 @@ pub fn default_reactions() -> Vec<ReactionRule> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

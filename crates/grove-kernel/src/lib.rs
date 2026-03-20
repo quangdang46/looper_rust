@@ -1,3 +1,4 @@
+pub mod dispatch;
 pub mod inspect_view;
 pub mod status_view;
 
@@ -25,6 +26,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub use dispatch::{DispatchExitReason, DispatchLoopConfig, DispatchLoopOutcome, run_dispatch_loop};
 pub use inspect_view::BeadInspectView;
 pub use status_view::WorkspaceStatusView;
 
@@ -343,14 +345,28 @@ fn recovery_capsule_from_outcome(
         })
         .unwrap_or(&[]);
 
+    let mut enriched_detail = failure_detail.unwrap_or_default().to_string();
+    if !outcome.stderr_tail.is_empty() {
+        if !enriched_detail.is_empty() {
+            enriched_detail.push_str("\n\n");
+        }
+        enriched_detail.push_str("Recent stderr:\n");
+        enriched_detail.push_str(&outcome.stderr_tail.join("\n"));
+    }
+
     grove_types::RecoveryCapsule::from_parts(
         outcome_kind,
         failure_class,
-        failure_detail,
+        if enriched_detail.is_empty() { None } else { Some(enriched_detail.as_str()) },
         checkpoint.map(|payload| payload.progress.as_str()),
         checkpoint.map(|payload| payload.next_step.as_str()),
         None,
-        None,
+        outcome.session.prompt_manifest_path.as_ref().and_then(|_| {
+            // Note: In a complete implementation, we'd load the prompt manifest
+            // to fetch `retry_delta_summary`. For now we rely on it being populated
+            // via the with_retry_context in the dispatch loop.
+            None
+        }),
         artifacts,
     )
 }

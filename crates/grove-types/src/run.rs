@@ -229,6 +229,7 @@ impl RecoveryCapsule {
     }
 
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn from_parts(
         outcome: RecoveryCapsuleOutcome,
         failure_class: Option<FailureClass>,
@@ -532,6 +533,7 @@ impl MirrorStatus {
     }
 
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),

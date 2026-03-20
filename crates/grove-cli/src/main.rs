@@ -11,7 +11,7 @@ use grove_db::Database;
 use grove_kernel::{
     BeadInspectView, LeaderLeaseConfig, LeaderLeaseManager, StartupRecoveryReport,
     WorkspaceStatusView, acquire_startup_coordinator, load_bead_inspect_view,
-    load_workspace_status_view,
+    load_workspace_status_view, run_dispatch_loop, DispatchLoopConfig,
 };
 use grove_types::{BeadId, BeadPriority, LeaderLeaseRecord};
 use std::{cmp, env, fs};
@@ -209,17 +209,35 @@ fn handle_run() -> Result<()> {
         .map_err(|error| anyhow!(error.to_string()))?;
 
     let startup_result = run_startup_checks(&mut db, &lease_config, startup);
+    startup_result?;
+    println!("Startup recovery checks complete. Beginning dispatch loop.");
+
+    let backend = grove_session::CliClaudeBackend::new(loaded.config.runtime.claude_bin.clone());
+    let loop_config = DispatchLoopConfig {
+        max_total_runs: None,
+        max_poll_cycles: None,
+        working_dir: loaded.paths.workspace_root().to_owned(),
+    };
+
+    let outcome = run_dispatch_loop(
+        &mut db,
+        &backend,
+        &br,
+        &loaded.config,
+        &lease_config,
+        &loop_config,
+    )?;
+
+    println!("Dispatch loop exited: {}", outcome.exit_reason);
+    println!("Total runs dispatched: {}", outcome.dispatched_count);
+    println!("Total poll cycles: {}", outcome.poll_cycles);
+
     let release_at = chrono::Utc::now();
     let release_result =
         LeaderLeaseManager::release(&mut db, &lease_config.owner_label, release_at)
-            .context("release leader lease after startup checks")?;
+            .context("release leader lease after dispatch loop")?;
 
-    startup_result?;
     print_run_startup_report(&loaded, &release_result);
-    let ready_count = br.ready().map(|ready| ready.len()).unwrap_or(0);
-    println!("Ready candidates observed: {ready_count}");
-    println!("Concurrency cap: {}", loaded.config.scheduler.max_parallel);
-    println!("Run dispatch loop is not implemented yet in this slice.");
     Ok(())
 }
 
