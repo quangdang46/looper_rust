@@ -140,9 +140,11 @@ mod tests {
             ParserLineKind::PlainStdout("GROVE_EXIT: maybe".to_owned())
         );
         assert_eq!(parser.warnings().len(), 1);
-        assert!(parser.warnings()[0]
-            .reason
-            .contains("invalid GROVE_EXIT value"));
+        assert!(
+            parser.warnings()[0]
+                .reason
+                .contains("invalid GROVE_EXIT value")
+        );
         assert!(parser.state().explicit_exit.is_none());
     }
 

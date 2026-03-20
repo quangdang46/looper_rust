@@ -1,6 +1,4 @@
-use crate::{
-    BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, Timestamp,
-};
+use crate::{BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

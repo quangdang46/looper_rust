@@ -1,4 +1,4 @@
-use crate::{analyze_iteration, AnalysisInput, ExitDecision, ExitPolicy, ProtocolWarning};
+use crate::{AnalysisInput, ExitDecision, ExitPolicy, ProtocolWarning, analyze_iteration};
 use chrono::Duration;
 use grove_types::{
     CircuitBreakerState, CircuitState, ContextPressureLevel, IterationAnalysis, ProgressSignal,
@@ -61,7 +61,12 @@ pub fn evaluate_outcome_exit_policy(policy: &ExitPolicy, outcome: &SessionOutcom
 
 impl ContextMonitor {
     #[must_use]
-    pub fn new(warn_pct: f32, rotate_pct: f32, hard_stop_pct: f32, max_context_bytes: usize) -> Self {
+    pub fn new(
+        warn_pct: f32,
+        rotate_pct: f32,
+        hard_stop_pct: f32,
+        max_context_bytes: usize,
+    ) -> Self {
         Self {
             warn_pct,
             rotate_pct,
@@ -391,7 +396,10 @@ mod tests {
                 stop_reason: Some(StopReason::Unknown),
                 transcript_path: "transcripts/ses-2.jsonl".to_owned(),
             },
-            protocol_events: vec![ProtocolEvent::Exit { value: false }, ProtocolEvent::Exit { value: true }],
+            protocol_events: vec![
+                ProtocolEvent::Exit { value: false },
+                ProtocolEvent::Exit { value: true },
+            ],
             analysis: IterationAnalysis {
                 completion_indicators: 4,
                 has_explicit_exit_true: true,
@@ -626,15 +634,7 @@ mod tests {
             ..CircuitBreakerState::default()
         };
 
-        let next = update_circuit_breaker(
-            state,
-            &IterationAnalysis::default(),
-            now,
-            3,
-            5,
-            2,
-            30,
-        );
+        let next = update_circuit_breaker(state, &IterationAnalysis::default(), now, 3, 5, 2, 30);
         assert_eq!(next.state, CircuitState::HalfOpen);
     }
 

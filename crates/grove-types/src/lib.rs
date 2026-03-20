@@ -7,6 +7,7 @@ mod ids;
 mod playbook;
 mod priority;
 mod prompt;
+mod reaction;
 mod reservation;
 mod run;
 mod session;
@@ -21,7 +22,9 @@ pub use checkpoint::{
     CheckpointPayload, CheckpointRecord, ProtocolEvent, ProtocolState, ResumeGeneration,
 };
 pub use errors::{GroveTypesError, InvalidTransition};
-pub use event::{EventKind, EventLogRecord};
+pub use event::{
+    ContextSnapshot, EventError, EventKind, EventLogRecord, EventOutcome, RunMetrics, RunReport,
+};
 pub use handoff::HandoffRecord;
 pub use ids::{BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, TickId};
 pub use playbook::{
@@ -33,10 +36,15 @@ pub use prompt::{
     ExecutionContract, PromptManifest, PromptManifestSection, PromptSectionProvenance,
     PromptSegment, PromptSegmentKind, PromptTrimReason,
 };
+pub use reaction::{
+    MutationStrategy, ReactionAction, ReactionContextSnapshot, ReactionOutcome, ReactionRecord,
+    ReactionRule, ReactionTrigger, default_reactions,
+};
 pub use reservation::{ReservationConflict, ReservationMode, ReservationRecord};
 pub use run::{
-    FailureClass, LeaderLeaseRecord, RecoveryCapsule, RecoveryCapsuleOutcome, RetryPolicy,
-    RunStatus, TaskRunRecord,
+    AgentActivity, AutonomousAction, EscalationPolicy, EscalationTier, FailureClass,
+    LeaderLeaseRecord, MirrorOutboxRecord, MirrorStatus, RecoveryCapsule, RecoveryCapsuleOutcome,
+    RetryPolicy, RunStatus, TaskRunRecord,
 };
 pub use session::{
     CircuitBreakerState, CircuitState, ClaudeSessionRecord, ContextPressureLevel,
@@ -145,6 +153,162 @@ mod tests {
         ] {
             let _encoded = serde_json::to_string(&status)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn recovery_capsule_outcomes_and_helpers() -> TestResult {
+        for outcome in [
+            RecoveryCapsuleOutcome::Failed,
+            RecoveryCapsuleOutcome::Interrupted,
+            RecoveryCapsuleOutcome::Checkpointed,
+        ] {
+            let _encoded = serde_json::to_string(&outcome)?;
+            assert!(!outcome.as_str().is_empty());
+        }
+
+        let capsule = RecoveryCapsule::from_parts(
+            RecoveryCapsuleOutcome::Checkpointed,
+            None,
+            None,
+            Some("partial progress"),
+            Some("resume verification"),
+            Some("verification-first"),
+            Some("narrowed prompt framing"),
+            &[],
+        )
+        .ok_or_else(|| IoError::other("expected checkpoint capsule"))?;
+        assert_eq!(capsule.recommended_next_step(), Some("resume verification"));
+        Ok(())
+    }
+
+    #[test]
+    fn agent_activity_all_variants_serialize() -> TestResult {
+        for activity in [
+            AgentActivity::Active,
+            AgentActivity::Ready,
+            AgentActivity::Idle,
+            AgentActivity::Blocked,
+            AgentActivity::Exited,
+        ] {
+            let _encoded = serde_json::to_string(&activity)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn agent_activity_maps_to_autonomous_action() {
+        assert!(matches!(
+            AgentActivity::Active.autonomous_action(),
+            AutonomousAction::Continue
+        ));
+        assert!(matches!(
+            AgentActivity::Ready.autonomous_action(),
+            AutonomousAction::CheckpointOrHandoff
+        ));
+        assert!(matches!(
+            AgentActivity::Idle.autonomous_action(),
+            AutonomousAction::InjectRescuePrompt
+        ));
+        assert!(matches!(
+            AgentActivity::Blocked.autonomous_action(),
+            AutonomousAction::RetryWithMutation
+        ));
+        assert!(matches!(
+            AgentActivity::Exited.autonomous_action(),
+            AutonomousAction::RecoverOrFail
+        ));
+    }
+
+    #[test]
+    fn escalation_tier_progression() {
+        assert_eq!(EscalationTier::FirstAttempt.tier_number(), 0);
+        assert_eq!(EscalationTier::SecondAttempt.tier_number(), 1);
+        assert_eq!(EscalationTier::ThirdAttempt.tier_number(), 2);
+        assert_eq!(EscalationTier::FinalAttempt.tier_number(), 3);
+        assert_eq!(EscalationTier::GiveUp.tier_number(), 4);
+
+        assert!(matches!(
+            EscalationTier::FirstAttempt.escalate(),
+            EscalationTier::SecondAttempt
+        ));
+        assert!(matches!(
+            EscalationTier::SecondAttempt.escalate(),
+            EscalationTier::ThirdAttempt
+        ));
+        assert!(matches!(
+            EscalationTier::ThirdAttempt.escalate(),
+            EscalationTier::FinalAttempt
+        ));
+        assert!(matches!(
+            EscalationTier::FinalAttempt.escalate(),
+            EscalationTier::GiveUp
+        ));
+        assert!(matches!(
+            EscalationTier::GiveUp.escalate(),
+            EscalationTier::GiveUp
+        ));
+
+        assert!(!EscalationTier::FirstAttempt.is_terminal());
+        assert!(!EscalationTier::SecondAttempt.is_terminal());
+        assert!(!EscalationTier::ThirdAttempt.is_terminal());
+        assert!(!EscalationTier::FinalAttempt.is_terminal());
+        assert!(EscalationTier::GiveUp.is_terminal());
+    }
+
+    #[test]
+    fn escalation_tier_default() {
+        assert!(matches!(
+            EscalationTier::default(),
+            EscalationTier::FirstAttempt
+        ));
+    }
+
+    #[test]
+    fn event_outcome_serializes() -> TestResult {
+        for outcome in [
+            EventOutcome::Success,
+            EventOutcome::Failure,
+            EventOutcome::Partial,
+        ] {
+            let _encoded = serde_json::to_string(&outcome)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn event_kind_includes_recovery_capsule_created() -> TestResult {
+        let encoded = serde_json::to_string(&EventKind::RecoveryCapsuleCreated)?;
+        assert!(encoded.contains("RecoveryCapsuleCreated"));
+        Ok(())
+    }
+
+    #[test]
+    fn event_log_record_builder_pattern() -> TestResult {
+        use chrono::Utc;
+        let record = EventLogRecord::minimal(1, EventKind::RunStarted, Utc::now())
+            .with_correlation("corr-123")
+            .with_operation("spawn")
+            .with_outcome(EventOutcome::Success)
+            .with_duration(150)
+            .with_error("timeout", "operation timed out", true);
+
+        let json = serde_json::to_value(&record)?;
+        assert_eq!(json["correlation_id"], "corr-123");
+        assert_eq!(json["operation"], "spawn");
+        assert_eq!(json["duration_ms"], 150);
+        Ok(())
+    }
+
+    #[test]
+    fn context_snapshot_serializes() -> TestResult {
+        let snapshot = ContextSnapshot {
+            context_usage_pct: Some(75.5),
+            reservation_count: Some(3),
+            escalation_tier: Some("SecondAttempt".into()),
+            activity_state: Some("Active".into()),
+        };
+        let _encoded = serde_json::to_string(&snapshot)?;
         Ok(())
     }
 

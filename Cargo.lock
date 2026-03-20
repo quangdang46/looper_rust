@@ -285,6 +285,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "camino",
+ "chrono",
  "clap",
  "grove-br",
  "grove-bv",
@@ -292,6 +293,8 @@ dependencies = [
  "grove-db",
  "grove-kernel",
  "grove-types",
+ "rusqlite",
+ "serde_json",
  "tempfile",
  "toml",
 ]

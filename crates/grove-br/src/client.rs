@@ -2,12 +2,48 @@ use crate::schema::{
     BrCapability, BrDependencySnapshot, BrIssueDetail, BrIssueSummary, BrVersion, ShowParseError,
     parse_dep_list_output, parse_list_output, parse_ready_output, parse_show_output,
 };
-use grove_types::BeadId;
+use grove_types::{BeadId, HandoffRecord};
 use std::{
     fmt,
     path::{Path, PathBuf},
     process::Command,
 };
+
+fn bullet_list(items: &[String]) -> String {
+    items
+        .iter()
+        .map(|item| format!("- {item}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn build_handoff_comment(handoff: &HandoffRecord) -> Option<String> {
+    let mut sections = Vec::new();
+
+    if !handoff.summary.is_empty() {
+        sections.push(format!("**Summary:** {}", handoff.summary));
+    }
+    if !handoff.artifacts.is_empty() {
+        sections.push(format!(
+            "**Artifacts:**\n{}",
+            bullet_list(&handoff.artifacts)
+        ));
+    }
+    if !handoff.lessons.is_empty() {
+        sections.push(format!("**Lessons:**\n{}", bullet_list(&handoff.lessons)));
+    }
+    if !handoff.decisions.is_empty() {
+        sections.push(format!(
+            "**Decisions:**\n{}",
+            bullet_list(&handoff.decisions)
+        ));
+    }
+    if !handoff.warnings.is_empty() {
+        sections.push(format!("**Warnings:**\n{}", bullet_list(&handoff.warnings)));
+    }
+
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
+}
 
 pub trait BrClient {
     fn ready(&self) -> Result<Vec<BrIssueSummary>, BrError>;
@@ -15,6 +51,16 @@ pub trait BrClient {
     fn show(&self, id: &BeadId) -> Result<BrIssueDetail, BrError>;
     fn dep_list(&self, id: &BeadId) -> Result<BrDependencySnapshot, BrError>;
     fn capability(&self) -> Result<BrCapability, BrError>;
+
+    // Mirror outbox operations for grove-1j9.7.6
+    fn close_bead(&self, id: &BeadId, reason: Option<&str>) -> Result<(), BrError>;
+    fn add_comment(&self, id: &BeadId, text: &str) -> Result<(), BrError>;
+    fn mirror_handoff(
+        &self,
+        id: &BeadId,
+        handoff: &HandoffRecord,
+        close_bead: bool,
+    ) -> Result<(), BrError>;
 }
 
 #[derive(Debug, Clone)]
@@ -123,8 +169,8 @@ impl BrClient for CliBrClient {
     fn capability(&self) -> Result<BrCapability, BrError> {
         let beads_dir_exists = self.working_dir.join(".beads").exists();
         let output = self.run(&["--version"])?;
-        let version_line = first_non_empty_line(&output.stdout)
-            .or_else(|| first_non_empty_line(&output.stderr));
+        let version_line =
+            first_non_empty_line(&output.stdout).or_else(|| first_non_empty_line(&output.stderr));
         let version = version_line.as_deref().and_then(parse_version_line);
         Ok(BrCapability {
             available: true,
@@ -132,6 +178,50 @@ impl BrClient for CliBrClient {
             version,
             beads_dir_exists,
         })
+    }
+
+    // Mirror outbox operations (grove-1j9.7.6)
+
+    fn close_bead(&self, id: &BeadId, reason: Option<&str>) -> Result<(), BrError> {
+        let mut args = vec!["close", id.as_str()];
+        if let Some(reason_text) = reason {
+            args.extend(["--reason", reason_text]);
+        }
+        // Use --json to ensure we get structured output
+        args.push("--json");
+
+        let _output = self.run(&args)?;
+        // We don't need to parse the output, just check it succeeded
+        Ok(())
+    }
+
+    fn add_comment(&self, id: &BeadId, text: &str) -> Result<(), BrError> {
+        let args = ["comment", "add", id.as_str(), text, "--json"];
+        let _output = self.run(&args)?;
+        // Comment succeeded if we got here
+        Ok(())
+    }
+
+    fn mirror_handoff(
+        &self,
+        id: &BeadId,
+        handoff: &HandoffRecord,
+        close_bead: bool,
+    ) -> Result<(), BrError> {
+        if let Some(comment) = build_handoff_comment(handoff) {
+            self.add_comment(id, &comment)?;
+        }
+
+        if close_bead {
+            let close_reason = if handoff.warnings.is_empty() {
+                Some("Completed successfully")
+            } else {
+                Some("Completed with warnings")
+            };
+            self.close_bead(id, close_reason)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -221,6 +311,7 @@ impl fmt::Display for CliBrClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use grove_types::{BeadId, RunId, Timestamp};
     use std::{error::Error, fs, io::Error as IoError};
     use tempfile::tempdir;
 
@@ -228,12 +319,16 @@ mod tests {
 
     #[test]
     fn first_non_empty_line_prefers_stdout_content() {
-        assert_eq!(first_non_empty_line("\n hello \nworld\n"), Some("hello".to_owned()));
+        assert_eq!(
+            first_non_empty_line("\n hello \nworld\n"),
+            Some("hello".to_owned())
+        );
     }
 
     #[test]
     fn parse_version_line_extracts_semver() -> TestResult {
-        let version = parse_version_line("br 0.1.12").ok_or_else(|| IoError::other("missing version"))?;
+        let version =
+            parse_version_line("br 0.1.12").ok_or_else(|| IoError::other("missing version"))?;
         assert_eq!(version.major, Some(0));
         assert_eq!(version.minor, Some(1));
         assert_eq!(version.patch, Some(12));
@@ -257,5 +352,45 @@ mod tests {
         let client = CliBrClient::new("definitely-not-a-real-br-binary", std::env::temp_dir());
         let err = client.capability().err();
         assert!(matches!(err, Some(BrError::NotFound { .. })));
+    }
+
+    #[test]
+    fn build_handoff_comment_combines_sections_into_one_comment() -> TestResult {
+        let completed_at: Timestamp = "2026-03-20T05:00:00Z".parse()?;
+        let handoff = HandoffRecord {
+            bead_id: BeadId::new("grove-1j9.7.6"),
+            run_id: RunId::new("run-123"),
+            summary: "done".into(),
+            artifacts: vec!["a.rs".into(), "b.rs".into()],
+            lessons: vec!["lesson one".into()],
+            decisions: vec!["decision one".into()],
+            warnings: vec!["warning one".into()],
+            completed_at,
+        };
+
+        let comment =
+            build_handoff_comment(&handoff).ok_or_else(|| IoError::other("missing comment"))?;
+        assert!(comment.contains("**Summary:** done"));
+        assert!(comment.contains("**Artifacts:**\n- a.rs\n- b.rs"));
+        assert!(comment.contains("**Lessons:**\n- lesson one"));
+        assert!(comment.contains("**Decisions:**\n- decision one"));
+        assert!(comment.contains("**Warnings:**\n- warning one"));
+        Ok(())
+    }
+
+    #[test]
+    fn build_handoff_comment_returns_none_for_empty_handoff() {
+        let handoff = HandoffRecord {
+            bead_id: BeadId::new("grove-1j9.7.6"),
+            run_id: RunId::new("run-123"),
+            summary: String::new(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: "2026-03-20T05:00:00Z".parse().unwrap(),
+        };
+
+        assert!(build_handoff_comment(&handoff).is_none());
     }
 }

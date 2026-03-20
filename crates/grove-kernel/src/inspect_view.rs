@@ -1,20 +1,20 @@
 use crate::status_view::{
+    DispatchExplanationView, MirrorPendingView, ReservationConflictView, ScoreComponentView,
     conflicts_for_bead, find_reservation_conflicts, latest_mirror_pending_for_bead,
-    ready_age_minutes, triage_context_for_bead, DispatchExplanationView, MirrorPendingView,
-    ReservationConflictView, ScoreComponentView,
+    ready_age_minutes, triage_context_for_bead,
 };
-use crate::{evaluate_dispatch_eligibility, DispatchEligibilityContext};
+use crate::{DispatchEligibilityContext, evaluate_dispatch_eligibility};
 use anyhow::Result;
 use chrono::Utc;
 use grove_br::BrClient;
 use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
-use grove_db::Database;
+use grove_db::{Database, RecoveryCapsuleEvent};
 use grove_types::{
     BeadId, CheckpointRecord, ClaudeSessionRecord, EventLogRecord, GroveBeadRecord,
     GroveBeadStatus, HandoffRecord, PlaybookBulletRecord, PromptManifest, RecoveryCapsule,
-    RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, SessionOutcome,
-    TaskRunRecord, Timestamp,
+    RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord,
+    Timestamp,
 };
 use std::fs;
 
@@ -111,12 +111,16 @@ pub fn load_inspect_snapshot<C: BrClient>(
         _ => None,
     };
     let latest_handoff = db.handoff_for_bead(bead_id)?;
+    let persisted_recovery_capsule = db.latest_recovery_capsule_for_bead(bead_id)?;
     let latest_recovery_capsule = recovery_capsule_for_inspect(
         &bead,
         latest_run,
         latest_checkpoint.as_ref(),
-        latest_session.as_ref().and_then(|session| session.prompt_provenance.as_ref()),
+        latest_session
+            .as_ref()
+            .and_then(|session| session.prompt_provenance.as_ref()),
         latest_handoff.as_ref(),
+        persisted_recovery_capsule.as_ref(),
     );
     let mirror_actions = db
         .list_event_logs_for_bead(bead_id)?
@@ -639,7 +643,12 @@ fn recovery_capsule_for_inspect(
     latest_checkpoint: Option<&CheckpointSummaryView>,
     prompt_provenance: Option<&PromptProvenanceView>,
     latest_handoff: Option<&HandoffRecord>,
+    persisted_capsule: Option<&RecoveryCapsuleEvent>,
 ) -> Option<RecoveryCapsuleView> {
+    if let Some(event) = persisted_capsule {
+        return Some(RecoveryCapsuleView::from(event.capsule.clone()));
+    }
+
     let run = latest_run?;
     let outcome = match bead.grove_status {
         GroveBeadStatus::Checkpointed => RecoveryCapsuleOutcome::Checkpointed,
@@ -660,7 +669,9 @@ fn recovery_capsule_for_inspect(
         latest_checkpoint.map(|checkpoint| checkpoint.next_step.as_str()),
         prompt_provenance.map(|prompt| prompt.contract.as_str()),
         prompt_provenance.and_then(|prompt| prompt.retry_delta_summary.as_deref()),
-        latest_handoff.map(|handoff| handoff.artifacts.as_slice()).unwrap_or(&[]),
+        latest_handoff
+            .map(|handoff| handoff.artifacts.as_slice())
+            .unwrap_or(&[]),
     )
     .map(RecoveryCapsuleView::from)
 }
@@ -804,15 +815,63 @@ mod tests {
         BrCapability, BrComment, BrDependencySnapshot, BrError, BrIssueDetail, BrIssueSummary,
         BrVersion,
     };
-    use grove_db::Database;
+    use grove_db::{Database, RecoveryCapsuleEvent};
     use grove_types::{
         BeadPriority, BeadRef, EventKind, GroveBeadStatus, IterationAnalysis, MessageRole,
-        PromptManifest, ProtocolEvent, SessionStatus, SessionTerminalClass, StopReason,
+        PromptManifest, ProtocolEvent, RecoveryCapsule, RecoveryCapsuleOutcome, SessionStatus,
+        SessionTerminalClass, StopReason,
     };
     use std::{collections::BTreeMap, error::Error, io::Error as IoError};
     use tempfile::tempdir;
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    #[test]
+    fn recovery_capsule_for_inspect_prefers_persisted_capsule() -> TestResult {
+        let persisted = RecoveryCapsuleEvent {
+            capsule: RecoveryCapsule::from_parts(
+                RecoveryCapsuleOutcome::Interrupted,
+                Some(grove_types::FailureClass::Interrupted),
+                Some("persisted detail"),
+                None,
+                Some("resume from persisted state"),
+                None,
+                None,
+                &[],
+            )
+            .ok_or_else(|| IoError::other("expected recovery capsule"))?,
+            source_event_id: 9,
+            created_at: parse_ts("2026-03-20T06:50:00Z")?,
+        };
+
+        let bead = sample_bead()?;
+        let run = TaskRunRecord {
+            id: RunId::new("run-persisted"),
+            bead_id: bead.bead.id.clone(),
+            attempt_no: 1,
+            status: grove_types::RunStatus::Failed,
+            failure_class: Some(grove_types::FailureClass::Interrupted),
+            failure_detail: Some("stale detail".to_owned()),
+            started_at: parse_ts("2026-03-16T10:00:00Z")?,
+            ended_at: Some(parse_ts("2026-03-16T10:10:00Z")?),
+            session_count: 1,
+            checkpoint_count: 0,
+            last_checkpoint_id: None,
+            activity: None,
+            last_activity_at: None,
+            escalation_tier: Default::default(),
+        };
+
+        let view =
+            recovery_capsule_for_inspect(&bead, Some(&run), None, None, None, Some(&persisted))
+                .ok_or_else(|| IoError::other("expected inspect recovery capsule"))?;
+        assert_eq!(view.outcome, "interrupted");
+        assert_eq!(
+            view.checkpoint_next_step.as_deref(),
+            Some("resume from persisted state")
+        );
+        Ok(())
+    }
 
     #[test]
     fn mirror_action_view_maps_mirror_events_only() -> TestResult {
@@ -824,6 +883,13 @@ mod tests {
             session_id: None,
             payload: "{\"error\":\"boom\"}".parse()?,
             created_at: parse_ts("2026-03-16T12:00:00Z")?,
+            // New observability fields
+            correlation_id: None,
+            operation: None,
+            outcome: None,
+            duration_ms: None,
+            error: None,
+            context_snapshot: None,
         };
 
         let view = MirrorActionView::from_event(&event).ok_or("expected mirror action")?;
@@ -985,6 +1051,10 @@ mod tests {
                 session_count: 1,
                 checkpoint_count: 0,
                 last_checkpoint_id: None,
+                // New fields for autonomous patterns
+                activity: None,
+                last_activity_at: None,
+                escalation_tier: Default::default(),
             }],
             latest_session: None,
             latest_checkpoint: None,
@@ -1219,16 +1289,26 @@ mod tests {
                 "2026-03-16T11:12:00Z",
             ],
         )?;
-        db.connection().execute(
-            "INSERT INTO event_log(kind, bead_id, run_id, session_id, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![
-                "BrMirrorFailed",
-                "grove-child",
-                "run-child",
-                "ses-child",
-                "{\"error\":\"network hiccup\"}",
-                "2026-03-16T11:13:00Z",
-            ],
+        let mirror_operation = db.enqueue_mirror_outbox(
+            &BeadId::new("grove-child"),
+            &RunId::new("run-child"),
+            &grove_types::HandoffRecord {
+                bead_id: BeadId::new("grove-child"),
+                run_id: RunId::new("run-child"),
+                summary: "inspect work in progress".to_owned(),
+                artifacts: vec!["artifact-1".to_owned()],
+                lessons: vec!["lesson-1".to_owned()],
+                decisions: vec!["decision-1".to_owned()],
+                warnings: Vec::new(),
+                completed_at: parse_ts("2026-03-16T11:12:00Z")?,
+            },
+            false,
+        )?;
+        db.record_mirror_failure(
+            &mirror_operation.id,
+            &RunId::new("run-child"),
+            "network hiccup",
+            None,
         )?;
 
         let mut br = FakeBrClient::new(vec![bead_summary(
@@ -1329,17 +1409,16 @@ mod tests {
                 .map(|handoff| handoff.summary.as_str()),
             Some("inspect work in progress")
         );
-        assert_eq!(snapshot.mirror_actions.len(), 1);
+        assert_eq!(snapshot.mirror_actions.len(), 2);
         assert_eq!(snapshot.mirror_actions[0].action, "failed");
         assert!(snapshot.latest_dispatch.is_some());
-        assert!(snapshot
-            .latest_dispatch
-            .as_ref()
-            .is_some_and(|dispatch| dispatch
+        assert!(snapshot.latest_dispatch.as_ref().is_some_and(|dispatch| {
+            dispatch
                 .dispatch
                 .local_suppression_reasons
                 .iter()
-                .any(|reason| reason.code == "checkpoint_pending_resume")));
+                .any(|reason| reason.code == "checkpoint_pending_resume")
+        }));
         assert!(snapshot.mirror_pending.is_some());
         assert!(snapshot.retrieval_bundle.is_none());
         assert!(snapshot.selected_playbook_bullets.is_empty());
@@ -1861,6 +1940,26 @@ mod tests {
                 }),
                 beads_dir_exists: true,
             })
+        }
+
+        fn close_bead(&self, _id: &BeadId, _resolution: Option<&str>) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
+        }
+
+        fn add_comment(&self, _id: &BeadId, _text: &str) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
+        }
+
+        fn mirror_handoff(
+            &self,
+            _id: &BeadId,
+            _handoff: &grove_types::HandoffRecord,
+            _close_bead: bool,
+        ) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
         }
     }
 

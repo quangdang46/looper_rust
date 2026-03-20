@@ -57,7 +57,10 @@ pub struct SyncResult {
     pub errors: Vec<SyncError>,
 }
 
-pub fn sync_bead_cache<C: BrClient, S: BeadCacheStore>(br: &C, store: &mut S) -> Result<SyncResult> {
+pub fn sync_bead_cache<C: BrClient, S: BeadCacheStore>(
+    br: &C,
+    store: &mut S,
+) -> Result<SyncResult> {
     let open_beads = br.list_open()?;
     let ready_beads = br.ready()?;
     let ready_ids: HashSet<BeadId> = ready_beads.into_iter().map(|bead| bead.id).collect();
@@ -150,7 +153,7 @@ pub fn sync_bead_cache<C: BrClient, S: BeadCacheStore>(br: &C, store: &mut S) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grove_types::{BeadPriority, Timestamp};
+    use grove_types::{BeadPriority, HandoffRecord, Timestamp};
     use serde_json::json;
     use std::{collections::BTreeMap, error::Error, io::Error as IoError};
 
@@ -266,6 +269,23 @@ mod tests {
                 beads_dir_exists: true,
             })
         }
+
+        fn close_bead(&self, _id: &BeadId, _reason: Option<&str>) -> Result<(), BrError> {
+            Ok(())
+        }
+
+        fn add_comment(&self, _id: &BeadId, _text: &str) -> Result<(), BrError> {
+            Ok(())
+        }
+
+        fn mirror_handoff(
+            &self,
+            _id: &BeadId,
+            _handoff: &HandoffRecord,
+            _close_bead: bool,
+        ) -> Result<(), BrError> {
+            Ok(())
+        }
     }
 
     #[test]
@@ -293,10 +313,16 @@ mod tests {
         assert_eq!(result.beads_added, 1);
         assert_eq!(result.dependencies_updated, 1);
         assert!(result.errors.is_empty());
-        assert_eq!(store.statuses.get(bead.id.as_str()), Some(&GroveBeadStatus::Ready));
+        assert_eq!(
+            store.statuses.get(bead.id.as_str()),
+            Some(&GroveBeadStatus::Ready)
+        );
         assert_eq!(
             store.dependencies.get(bead.id.as_str()),
-            Some(&(vec![BeadId::new("grove-1j9.5.4")], vec![BeadId::new("grove-1j9.5.10")])),
+            Some(&(
+                vec![BeadId::new("grove-1j9.5.4")],
+                vec![BeadId::new("grove-1j9.5.10")]
+            )),
         );
         Ok(())
     }
@@ -313,7 +339,10 @@ mod tests {
             ready: vec![bead.clone()],
             list_open: vec![bead.clone()],
             dep_snapshots: BTreeMap::new(),
-            dep_failures: BTreeMap::from([(bead.id.as_str().to_owned(), "should not be called".into())]),
+            dep_failures: BTreeMap::from([(
+                bead.id.as_str().to_owned(),
+                "should not be called".into(),
+            )]),
         };
         let mut store = FakeStore::default();
 
@@ -323,7 +352,10 @@ mod tests {
         assert!(result.errors.is_empty());
         assert_eq!(
             store.dependencies.get(bead.id.as_str()),
-            Some(&(vec![BeadId::new("grove-1j9.5.4")], vec![BeadId::new("grove-1j9.5.8")])),
+            Some(&(
+                vec![BeadId::new("grove-1j9.5.4")],
+                vec![BeadId::new("grove-1j9.5.8")]
+            )),
         );
         Ok(())
     }

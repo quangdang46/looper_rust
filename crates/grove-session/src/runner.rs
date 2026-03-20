@@ -85,7 +85,10 @@ pub enum SingleTaskSessionRunnerError {
     #[error(transparent)]
     Transcript(#[from] TranscriptError),
     #[error("failed to persist prompt manifest {path}: {source}")]
-    PersistPromptManifest { path: String, source: std::io::Error },
+    PersistPromptManifest {
+        path: String,
+        source: std::io::Error,
+    },
     #[error("failed to encode prompt manifest {path}: {source}")]
     EncodePromptManifest {
         path: String,
@@ -160,7 +163,8 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
         stop_reason: None,
         transcript_path: request.transcript_path.to_string(),
     };
-    hooks.on_session_started(&started_session)
+    hooks
+        .on_session_started(&started_session)
         .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
 
     let mut parser = ProtocolParser::default();
@@ -196,7 +200,10 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
             }
         }
 
-        let status = running.child.wait().map_err(SingleTaskSessionRunnerError::Wait)?;
+        let status = running
+            .child
+            .wait()
+            .map_err(SingleTaskSessionRunnerError::Wait)?;
         let ended_at = Utc::now();
         transcript.append_session_ended(status.code(), ended_at)?;
 
@@ -264,13 +271,15 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
                 &stderr_lines,
                 &error,
             );
-            hooks.on_session_finished(&result)
+            hooks
+                .on_session_finished(&result)
                 .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
             return Err(error);
         }
     };
 
-    hooks.on_session_finished(&result)
+    hooks
+        .on_session_finished(&result)
         .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
 
     Ok(result)
@@ -302,10 +311,12 @@ fn persist_prompt_manifest(
             source,
         }
     })?;
-    fs::write(path, encoded).map_err(|source| SingleTaskSessionRunnerError::PersistPromptManifest {
-        path: path.display().to_string(),
-        source,
-    })
+    fs::write(path, encoded).map_err(
+        |source| SingleTaskSessionRunnerError::PersistPromptManifest {
+            path: path.display().to_string(),
+            source,
+        },
+    )
 }
 
 fn failure_result_from_error(
@@ -426,7 +437,9 @@ fn stop_reason_from_terminal_class(terminal_class: SessionTerminalClass) -> Stop
 mod tests {
     use super::*;
     use crate::{CliClaudeBackend, replay_transcript};
-    use grove_types::{FailureClass, IterationAnalysis, ProgressSignal, PromptManifest, PromptSegmentKind};
+    use grove_types::{
+        FailureClass, IterationAnalysis, ProgressSignal, PromptManifest, PromptSegmentKind,
+    };
     use std::{error::Error, fs, io, time::Duration};
     use tempfile::tempdir;
 
@@ -514,12 +527,18 @@ exit "${EXIT_CODE:-0}"
         assert_eq!(result.outcome.session.id.as_str(), "ses-1");
         assert_eq!(result.outcome.session.status, SessionStatus::Completed);
         assert_eq!(result.outcome.terminal_class, SessionTerminalClass::Success);
-        assert_eq!(result.protocol_state.result_summary.as_deref(), Some("session runner wired"));
+        assert_eq!(
+            result.protocol_state.result_summary.as_deref(),
+            Some("session runner wired")
+        );
         assert_eq!(
             result.protocol_state.artifacts,
             vec!["crates/grove-session/src/runner.rs".to_owned()]
         );
-        assert_eq!(result.outcome.context_pressure_level, grove_types::ContextPressureLevel::Ok);
+        assert_eq!(
+            result.outcome.context_pressure_level,
+            grove_types::ContextPressureLevel::Ok
+        );
 
         let prompt_path = workspace_dir.join(".grove/prompts/prompt-1.json");
         let transcript_path = workspace_dir.join(".grove/transcripts/grove-1j9.6.8/ses-1.jsonl");
@@ -567,15 +586,27 @@ exit "${EXIT_CODE:-0}"
 
         let result = execute_single_task_session(&backend, request)?;
 
-        assert_eq!(result.outcome.session.prompt_id.as_ref().map(|id| id.as_str()), Some("prompt-1"));
+        assert_eq!(
+            result
+                .outcome
+                .session
+                .prompt_id
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("prompt-1")
+        );
         assert_eq!(
             result.outcome.session.prompt_manifest_path.as_deref(),
             Some(".grove/prompts/prompt-1.json")
         );
 
         let prompt_path = workspace_dir.join(".grove/prompts/prompt-1.json");
-        let manifest: PromptManifest = serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
-        assert_eq!(manifest.session_id.as_ref().map(|id| id.as_str()), Some("ses-1"));
+        let manifest: PromptManifest =
+            serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
+        assert_eq!(
+            manifest.session_id.as_ref().map(|id| id.as_str()),
+            Some("ses-1")
+        );
         assert_eq!(manifest.contract, ExecutionContract::RetryRescue);
         assert_eq!(
             manifest.retry_delta_summary.as_deref(),
@@ -587,7 +618,11 @@ exit "${EXIT_CODE:-0}"
             .find(|section| section.kind == PromptSegmentKind::RescueCard)
             .ok_or("missing rescue-card section")?;
         assert!(rescue_card.included);
-        assert!(rescue_card.preview.contains("Avoid replaying the repeated parse failure."));
+        assert!(
+            rescue_card
+                .preview
+                .contains("Avoid replaying the repeated parse failure.")
+        );
         Ok(())
     }
 
@@ -619,7 +654,10 @@ exit "${EXIT_CODE:-0}"
 
         let result = execute_single_task_session(&backend, request)?;
 
-        assert_eq!(result.outcome.terminal_class, SessionTerminalClass::RateLimit);
+        assert_eq!(
+            result.outcome.terminal_class,
+            SessionTerminalClass::RateLimit
+        );
         assert_eq!(result.outcome.session.status, SessionStatus::RateLimited);
         assert_eq!(
             result.outcome.stdout_tail,
@@ -696,15 +734,23 @@ exit "${EXIT_CODE:-0}"
             ("EXIT_CODE".to_owned(), "0".to_owned()),
         ];
 
-        assert_eq!(request.previous_failure_class, Some(FailureClass::RepeatedError));
+        assert_eq!(
+            request.previous_failure_class,
+            Some(FailureClass::RepeatedError)
+        );
         assert_eq!(request.contract, ExecutionContract::RetryRescue);
-        assert!(request.retry_delta_summary.as_deref().is_some_and(|summary| {
-            summary.contains("repeated error path")
-        }));
-        assert!(request
-            .rescue_card
-            .as_deref()
-            .is_some_and(|card| card.contains("Previous repeated error to avoid")));
+        assert!(
+            request
+                .retry_delta_summary
+                .as_deref()
+                .is_some_and(|summary| { summary.contains("repeated error path") })
+        );
+        assert!(
+            request
+                .rescue_card
+                .as_deref()
+                .is_some_and(|card| card.contains("Previous repeated error to avoid"))
+        );
 
         let result = execute_single_task_session(&backend, request)?;
 
@@ -712,15 +758,22 @@ exit "${EXIT_CODE:-0}"
         let manifest: PromptManifest =
             serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
         assert_eq!(manifest.contract, ExecutionContract::RetryRescue);
-        assert!(manifest.retry_delta_summary.as_deref().is_some_and(|summary| {
-            summary.contains("repeated error path")
-        }));
+        assert!(
+            manifest
+                .retry_delta_summary
+                .as_deref()
+                .is_some_and(|summary| { summary.contains("repeated error path") })
+        );
         let rescue_card = manifest
             .sections
             .iter()
             .find(|section| section.kind == PromptSegmentKind::RescueCard)
             .ok_or("missing rescue-card section")?;
-        assert!(rescue_card.preview.contains("Do not repeat the same failing path"));
+        assert!(
+            rescue_card
+                .preview
+                .contains("Do not repeat the same failing path")
+        );
         assert_eq!(
             result.protocol_state.result_summary.as_deref(),
             Some("retry mutation applied")

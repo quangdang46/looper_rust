@@ -1,7 +1,7 @@
 use grove_types::{ProtocolEvent, SessionId, Timestamp, TranscriptEvent};
 use std::{
     convert::TryFrom,
-    fs::{create_dir_all, File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all},
     io::{BufRead, BufReader, BufWriter, Write},
     path::Path,
 };

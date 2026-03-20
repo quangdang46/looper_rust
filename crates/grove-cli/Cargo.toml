@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 camino.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
 clap.workspace = true
 grove-br = { path = "../grove-br" }
 grove-bv = { path = "../grove-bv" }
@@ -25,4 +26,6 @@ grove-types = { path = "../grove-types" }
 toml.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
+serde_json.workspace = true
 tempfile = "3"

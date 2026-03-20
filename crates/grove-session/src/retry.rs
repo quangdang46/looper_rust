@@ -34,13 +34,14 @@ fn retry_delta_summary_for_failure(
     failure_class: FailureClass,
     previous_outcome: Option<&SessionOutcome>,
 ) -> String {
-    let progress_clause = if previous_outcome.is_some_and(|outcome| outcome.analysis.has_explicit_exit_false) {
-        " and keeps the retry focused on unfinished work the last attempt explicitly left open"
-    } else if had_progress(previous_outcome) {
-        " and preserves any durable partial progress instead of replaying setup"
-    } else {
-        ""
-    };
+    let progress_clause =
+        if previous_outcome.is_some_and(|outcome| outcome.analysis.has_explicit_exit_false) {
+            " and keeps the retry focused on unfinished work the last attempt explicitly left open"
+        } else if had_progress(previous_outcome) {
+            " and preserves any durable partial progress instead of replaying setup"
+        } else {
+            ""
+        };
 
     match failure_class {
         FailureClass::Timeout => format!(
@@ -141,9 +142,8 @@ fn rescue_card_for_failure(
 }
 
 fn had_progress(previous_outcome: Option<&SessionOutcome>) -> bool {
-    previous_outcome.is_some_and(|outcome| {
-        !matches!(outcome.analysis.probable_progress, ProgressSignal::None)
-    })
+    previous_outcome
+        .is_some_and(|outcome| !matches!(outcome.analysis.probable_progress, ProgressSignal::None))
 }
 
 fn repeated_error_excerpt(previous_outcome: Option<&SessionOutcome>) -> Option<String> {
@@ -173,7 +173,10 @@ mod tests {
         SessionStatus, SessionTerminalClass, StopReason, Timestamp,
     };
 
-    fn sample_outcome(analysis: IterationAnalysis, terminal_class: SessionTerminalClass) -> SessionOutcome {
+    fn sample_outcome(
+        analysis: IterationAnalysis,
+        terminal_class: SessionTerminalClass,
+    ) -> SessionOutcome {
         let started_at: Timestamp = chrono::Utc::now();
         SessionOutcome {
             session: ClaudeSessionRecord {
@@ -219,7 +222,10 @@ mod tests {
 
         assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
         assert!(plan.retry_delta_summary.contains("repeated error path"));
-        assert!(plan.rescue_card.contains("Previous repeated error to avoid"));
+        assert!(
+            plan.rescue_card
+                .contains("Previous repeated error to avoid")
+        );
         assert!(plan.rescue_card.contains("failed to parse"));
     }
 
@@ -237,8 +243,14 @@ mod tests {
         let plan = plan_retry_mutation(FailureClass::PermissionDenied, Some(&outcome));
 
         assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
-        assert!(plan.retry_delta_summary.contains("avoids the blocked operation"));
-        assert!(plan.rescue_card.contains("Do not repeat the blocked operation unchanged"));
+        assert!(
+            plan.retry_delta_summary
+                .contains("avoids the blocked operation")
+        );
+        assert!(
+            plan.rescue_card
+                .contains("Do not repeat the blocked operation unchanged")
+        );
         assert!(plan.rescue_card.contains("`GROVE_EXIT: false`"));
     }
 
@@ -255,8 +267,14 @@ mod tests {
         let plan = plan_retry_mutation(FailureClass::Timeout, Some(&outcome));
 
         assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
-        assert!(plan.retry_delta_summary.contains("narrowed the retry scope"));
-        assert!(plan.retry_delta_summary.contains("preserves any durable partial progress"));
+        assert!(
+            plan.retry_delta_summary
+                .contains("narrowed the retry scope")
+        );
+        assert!(
+            plan.retry_delta_summary
+                .contains("preserves any durable partial progress")
+        );
         assert!(plan.rescue_card.contains("Checkpoint earlier"));
     }
 
@@ -273,8 +291,14 @@ mod tests {
         let plan = plan_retry_mutation(FailureClass::Interrupted, Some(&outcome));
 
         assert_eq!(plan.next_contract, ExecutionContract::Resume);
-        assert!(plan.retry_delta_summary.contains("resumes from durable progress"));
-        assert!(plan.rescue_card.contains("Resume from the first unfinished step only"));
+        assert!(
+            plan.retry_delta_summary
+                .contains("resumes from durable progress")
+        );
+        assert!(
+            plan.rescue_card
+                .contains("Resume from the first unfinished step only")
+        );
     }
 
     #[test]
@@ -282,8 +306,14 @@ mod tests {
         let plan = plan_retry_mutation(FailureClass::BrMirrorFailed, None);
 
         assert_eq!(plan.next_contract, ExecutionContract::Resume);
-        assert!(plan.retry_delta_summary.contains("completed implementation state"));
-        assert!(plan.rescue_card.contains("Do not re-implement completed code"));
+        assert!(
+            plan.retry_delta_summary
+                .contains("completed implementation state")
+        );
+        assert!(
+            plan.rescue_card
+                .contains("Do not re-implement completed code")
+        );
     }
 
     #[test]
@@ -293,6 +323,9 @@ mod tests {
         assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
         assert!(!plan.retry_delta_summary.is_empty());
         assert!(!plan.rescue_card.is_empty());
-        assert!(plan.rescue_card.contains("Finish with accurate GROVE protocol markers"));
+        assert!(
+            plan.rescue_card
+                .contains("Finish with accurate GROVE protocol markers")
+        );
     }
 }

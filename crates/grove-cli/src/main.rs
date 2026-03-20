@@ -1,18 +1,20 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
-use grove_br::{sync_bead_cache, BrClient, BrIssueDetail, CliBrClient};
+use grove_br::{BrClient, BrIssueDetail, CliBrClient, sync_bead_cache};
 use grove_bv::{BvClient, BvTriageOutput, CliBvClient};
 use grove_config::{
-    detect_required_tooling, load_from_workspace, GroveConfig, GrovePaths, LoadedConfig,
-    RequiredTooling, ToolCapability,
+    GroveConfig, GrovePaths, LoadedConfig, RequiredTooling, ToolCapability,
+    detect_required_tooling, load_from_workspace,
 };
 use grove_db::Database;
 use grove_kernel::{
-    load_bead_inspect_view, load_workspace_status_view, BeadInspectView, WorkspaceStatusView,
+    BeadInspectView, LeaderLeaseConfig, LeaderLeaseManager, StartupRecoveryReport,
+    WorkspaceStatusView, acquire_startup_coordinator, load_bead_inspect_view,
+    load_workspace_status_view,
 };
-use grove_types::{BeadId, BeadPriority};
-use std::{env, fs};
+use grove_types::{BeadId, BeadPriority, LeaderLeaseRecord};
+use std::{cmp, env, fs};
 
 #[derive(Parser)]
 #[command(name = "grove")]
@@ -39,6 +41,7 @@ fn main() -> Result<()> {
         Some(Command::Init) => handle_init(),
         Some(Command::Status) => handle_status(),
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id)),
+        Some(Command::Run) => handle_run(),
         Some(command) => {
             println!(
                 "{} is not implemented yet in the Phase 1 CLI surface.",
@@ -177,7 +180,7 @@ fn handle_inspect(bead_id: &BeadId) -> Result<()> {
         &loaded.config,
         triage.as_ref(),
     )
-        .with_context(|| format!("load inspect view for {bead_id}"))?;
+    .with_context(|| format!("load inspect view for {bead_id}"))?;
 
     if issue_detail.is_none() && view.is_none() {
         bail!("bead {bead_id} was not found in br or the local Grove cache");
@@ -188,6 +191,46 @@ fn handle_inspect(bead_id: &BeadId) -> Result<()> {
         issue_detail.as_ref(),
         view.as_ref(),
     );
+    Ok(())
+}
+
+fn handle_run() -> Result<()> {
+    let (loaded, mut db, br) = open_runtime()?;
+    let owner_label = format!("{}:{}", loaded.paths.workspace_root(), std::process::id());
+    let lease_ttl = chrono::Duration::milliseconds(
+        cmp::max(1, loaded.config.scheduler.poll_interval_ms as i64) * 2,
+    );
+    let lease_config = LeaderLeaseConfig {
+        owner_label,
+        lease_ttl,
+    };
+    let now = chrono::Utc::now();
+    let startup = acquire_startup_coordinator(&mut db, &lease_config, None, now)
+        .map_err(|error| anyhow!(error.to_string()))?;
+
+    let startup_result = run_startup_checks(&mut db, &lease_config, startup);
+    let release_at = chrono::Utc::now();
+    let release_result =
+        LeaderLeaseManager::release(&mut db, &lease_config.owner_label, release_at)
+            .context("release leader lease after startup checks")?;
+
+    startup_result?;
+    print_run_startup_report(&loaded, &release_result);
+    let ready_count = br.ready().map(|ready| ready.len()).unwrap_or(0);
+    println!("Ready candidates observed: {ready_count}");
+    println!("Concurrency cap: {}", loaded.config.scheduler.max_parallel);
+    println!("Run dispatch loop is not implemented yet in this slice.");
+    Ok(())
+}
+
+fn run_startup_checks(
+    db: &mut Database,
+    lease_config: &LeaderLeaseConfig,
+    startup: grove_kernel::StartupCoordinatorState,
+) -> Result<()> {
+    LeaderLeaseManager::heartbeat(db, lease_config, chrono::Utc::now())?
+        .ok_or_else(|| anyhow!("leader lease heartbeat failed after acquisition"))?;
+    print_startup_recovery_report(&startup.leader, &startup.recovery);
     Ok(())
 }
 
@@ -781,10 +824,16 @@ fn print_inspect_report(
                         display_option(capsule.checkpoint_next_step.as_deref())
                     );
                     if !capsule.strongest_evidence.is_empty() {
-                        println!("- strongest evidence: {}", capsule.strongest_evidence.join(" | "));
+                        println!(
+                            "- strongest evidence: {}",
+                            capsule.strongest_evidence.join(" | ")
+                        );
                     }
                     if !capsule.likely_root_causes.is_empty() {
-                        println!("- likely root causes: {}", capsule.likely_root_causes.join(" | "));
+                        println!(
+                            "- likely root causes: {}",
+                            capsule.likely_root_causes.join(" | ")
+                        );
                     }
                     if !capsule.risky_paths.is_empty() {
                         println!("- risky paths: {}", capsule.risky_paths.join(" | "));
@@ -883,6 +932,58 @@ fn print_inspect_report(
             println!("\nNo local Grove runtime record is available for this bead yet.");
         }
     }
+}
+
+fn print_startup_recovery_report(leader: &LeaderLeaseRecord, recovery: &StartupRecoveryReport) {
+    println!("Leader lease acquired.");
+    println!("- owner: {}", leader.owner_label);
+    println!("- acquired at: {}", leader.acquired_at);
+    println!("- heartbeat at: {}", leader.heartbeat_at);
+    println!("- expires at: {}", leader.expires_at);
+
+    println!("\nStartup reconciliation:");
+    println!("- interrupted runs: {}", recovery.interrupted_runs.len());
+    for interrupted in &recovery.interrupted_runs {
+        println!(
+            "  - {} run {} -> {:?}",
+            interrupted.bead_id, interrupted.run.id, interrupted.run.status
+        );
+    }
+    println!(
+        "- recovered reservations: {}",
+        recovery.reservations.recovered.len()
+    );
+    for recovered in &recovery.reservations.recovered {
+        println!(
+            "  - {} {}",
+            recovered.reservation.bead_id, recovered.reservation.path_pattern
+        );
+    }
+    println!(
+        "- expired reservations: {}",
+        recovery.reservations.expired.len()
+    );
+    for expired in &recovery.reservations.expired {
+        println!("  - {} {}", expired.bead_id, expired.path_pattern);
+    }
+}
+
+fn print_run_startup_report(loaded: &LoadedConfig, released_lease: &Option<LeaderLeaseRecord>) {
+    println!("\nRun startup summary:");
+    println!("- workspace: {}", loaded.paths.workspace_root());
+    println!("- db: {}", loaded.paths.db_path());
+    println!(
+        "- configured max_parallel: {}",
+        loaded.config.scheduler.max_parallel
+    );
+    println!(
+        "- leader lease released: {}",
+        if released_lease.is_some() {
+            "yes"
+        } else {
+            "no"
+        }
+    );
 }
 
 fn render_tool_line(binary: &str, version: Option<&str>) -> String {

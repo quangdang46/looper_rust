@@ -2,8 +2,7 @@
 
 use std::{
     error::Error,
-    fs,
-    io,
+    fs, io,
     os::unix::fs::PermissionsExt,
     sync::{Arc, Mutex},
     time::Duration,
@@ -109,11 +108,17 @@ struct RecordingHooks {
 
 impl SessionLifecycleHooks for RecordingHooks {
     fn on_session_started(&mut self, session: &ClaudeSessionRecord) -> anyhow::Result<()> {
-        self.started.lock().expect("lock started hooks").push(session.clone());
+        self.started
+            .lock()
+            .expect("lock started hooks")
+            .push(session.clone());
         Ok(())
     }
 
-    fn on_session_finished(&mut self, result: &grove_session::SingleTaskSessionResult) -> anyhow::Result<()> {
+    fn on_session_finished(
+        &mut self,
+        result: &grove_session::SingleTaskSessionResult,
+    ) -> anyhow::Result<()> {
         self.finished
             .lock()
             .expect("lock finished hooks")
@@ -133,7 +138,10 @@ impl SessionLifecycleHooks for FailingStartHooks {
 struct FailingFinishHooks;
 
 impl SessionLifecycleHooks for FailingFinishHooks {
-    fn on_session_finished(&mut self, _result: &grove_session::SingleTaskSessionResult) -> anyhow::Result<()> {
+    fn on_session_finished(
+        &mut self,
+        _result: &grove_session::SingleTaskSessionResult,
+    ) -> anyhow::Result<()> {
         anyhow::bail!("persist finish")
     }
 }
@@ -174,12 +182,18 @@ fn lifecycle_hooks_observe_session_start_and_finish() -> TestResult {
     assert_eq!(started.len(), 1);
     assert_eq!(started[0].status, SessionStatus::Running);
     assert_eq!(started[0].ended_at, None);
-    assert_eq!(started[0].prompt_id.as_ref().map(|id| id.as_str()), Some("prompt-1"));
+    assert_eq!(
+        started[0].prompt_id.as_ref().map(|id| id.as_str()),
+        Some("prompt-1")
+    );
 
     let finished = hooks.finished.lock().expect("lock finished assertions");
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].session.status, SessionStatus::Completed);
-    assert_eq!(finished[0].session.id.as_str(), result.outcome.session.id.as_str());
+    assert_eq!(
+        finished[0].session.id.as_str(),
+        result.outcome.session.id.as_str()
+    );
     Ok(())
 }
 
@@ -210,7 +224,10 @@ fn started_then_runner_failure_still_emits_terminal_finish_callback() -> TestRes
     let finished = hooks.finished.lock().expect("lock finished assertions");
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].session.status, SessionStatus::UnknownFailure);
-    assert_eq!(finished[0].terminal_class, SessionTerminalClass::UnknownFailure);
+    assert_eq!(
+        finished[0].terminal_class,
+        SessionTerminalClass::UnknownFailure
+    );
     assert!(finished[0].session.ended_at.is_some());
     Ok(())
 }
@@ -311,7 +328,10 @@ fn one_task_success_path_persists_prompt_and_transcript_artifacts() -> TestResul
 
     assert_eq!(result.outcome.session.status, SessionStatus::Completed);
     assert_eq!(result.outcome.terminal_class, SessionTerminalClass::Success);
-    assert_eq!(result.protocol_state.result_summary.as_deref(), Some("session runner wired"));
+    assert_eq!(
+        result.protocol_state.result_summary.as_deref(),
+        Some("session runner wired")
+    );
     assert_eq!(
         result.protocol_state.artifacts,
         vec!["crates/grove-session/src/runner.rs".to_owned()]
@@ -357,7 +377,10 @@ fn success_requires_explicit_exit_and_indicator_threshold() -> TestResult {
 
     let result = execute_single_task_session(&backend, request)?;
 
-    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::UnknownFailure);
+    assert_eq!(
+        result.outcome.terminal_class,
+        SessionTerminalClass::UnknownFailure
+    );
     assert_eq!(result.outcome.session.status, SessionStatus::UnknownFailure);
     assert!(result.outcome.analysis.has_explicit_exit_true);
     assert_eq!(result.outcome.analysis.completion_indicators, 1);
@@ -399,7 +422,10 @@ fn explicit_exit_false_overrides_later_success_markers() -> TestResult {
     assert!(result.outcome.analysis.has_explicit_exit_true);
     assert!(result.outcome.analysis.has_explicit_exit_false);
     assert_eq!(result.outcome.analysis.completion_indicators, 2);
-    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::UnknownFailure);
+    assert_eq!(
+        result.outcome.terminal_class,
+        SessionTerminalClass::UnknownFailure
+    );
     Ok(())
 }
 
@@ -434,9 +460,15 @@ fn checkpoint_takes_precedence_over_success_like_output() -> TestResult {
 
     let result = execute_single_task_session(&backend, request)?;
 
-    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::Checkpoint);
+    assert_eq!(
+        result.outcome.terminal_class,
+        SessionTerminalClass::Checkpoint
+    );
     assert_eq!(result.outcome.session.status, SessionStatus::Checkpointed);
-    assert_eq!(result.outcome.session.stop_reason, Some(StopReason::Checkpoint));
+    assert_eq!(
+        result.outcome.session.stop_reason,
+        Some(StopReason::Checkpoint)
+    );
     assert_eq!(
         result
             .protocol_state
@@ -476,9 +508,18 @@ fn permission_denied_preempts_generic_crash_classification() -> TestResult {
     let result = execute_single_task_session(&backend, request)?;
 
     assert_eq!(result.outcome.analysis.permission_denials, 2);
-    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::PermissionDenied);
-    assert_eq!(result.outcome.session.status, SessionStatus::PermissionDenied);
-    assert_eq!(result.outcome.session.stop_reason, Some(StopReason::PermissionDenied));
+    assert_eq!(
+        result.outcome.terminal_class,
+        SessionTerminalClass::PermissionDenied
+    );
+    assert_eq!(
+        result.outcome.session.status,
+        SessionStatus::PermissionDenied
+    );
+    assert_eq!(
+        result.outcome.session.stop_reason,
+        Some(StopReason::PermissionDenied)
+    );
     Ok(())
 }
 
@@ -509,9 +550,15 @@ fn rate_limit_preempts_generic_crash_classification() -> TestResult {
 
     let result = execute_single_task_session(&backend, request)?;
 
-    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::RateLimit);
+    assert_eq!(
+        result.outcome.terminal_class,
+        SessionTerminalClass::RateLimit
+    );
     assert_eq!(result.outcome.session.status, SessionStatus::RateLimited);
-    assert_eq!(result.outcome.session.stop_reason, Some(StopReason::RateLimit));
+    assert_eq!(
+        result.outcome.session.stop_reason,
+        Some(StopReason::RateLimit)
+    );
     assert_eq!(
         result.outcome.stdout_tail,
         vec!["rate limit exceeded by upstream".to_owned()]
@@ -524,7 +571,8 @@ fn rate_limit_preempts_generic_crash_classification() -> TestResult {
 }
 
 #[test]
-fn repeated_error_retry_context_uses_retry_rescue_contract_and_persists_manifest_details() -> TestResult {
+fn repeated_error_retry_context_uses_retry_rescue_contract_and_persists_manifest_details()
+-> TestResult {
     let dir = tempdir()?;
     let workspace_dir = dir.path().join("workspace");
     fs::create_dir_all(&workspace_dir)?;
@@ -549,11 +597,17 @@ fn repeated_error_retry_context_uses_retry_rescue_contract_and_persists_manifest
 
     let mut request = sample_request(workspace_dir.clone())
         .with_retry_context(FailureClass::RepeatedError, Some(previous_outcome));
-    assert_eq!(request.previous_failure_class, Some(FailureClass::RepeatedError));
+    assert_eq!(
+        request.previous_failure_class,
+        Some(FailureClass::RepeatedError)
+    );
     assert_eq!(request.contract, ExecutionContract::RetryRescue);
-    assert!(request.retry_delta_summary.as_deref().is_some_and(|summary| {
-        summary.contains("repeated error path")
-    }));
+    assert!(
+        request
+            .retry_delta_summary
+            .as_deref()
+            .is_some_and(|summary| { summary.contains("repeated error path") })
+    );
     assert!(request.rescue_card.as_deref().is_some_and(|card| {
         card.contains("Previous repeated error to avoid") && card.contains("`GROVE_EXIT: false`")
     }));
@@ -580,16 +634,23 @@ fn repeated_error_retry_context_uses_retry_rescue_contract_and_persists_manifest
     let manifest: PromptManifest =
         serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
     assert_eq!(manifest.contract, ExecutionContract::RetryRescue);
-    assert!(manifest.retry_delta_summary.as_deref().is_some_and(|summary| {
-        summary.contains("repeated error path")
-    }));
+    assert!(
+        manifest
+            .retry_delta_summary
+            .as_deref()
+            .is_some_and(|summary| { summary.contains("repeated error path") })
+    );
     let rescue_card = manifest
         .sections
         .iter()
         .find(|section| section.kind == PromptSegmentKind::RescueCard)
         .ok_or("missing rescue-card section")?;
     assert!(rescue_card.included);
-    assert!(rescue_card.preview.contains("Do not repeat the same failing path"));
+    assert!(
+        rescue_card
+            .preview
+            .contains("Do not repeat the same failing path")
+    );
     assert_eq!(
         result.protocol_state.result_summary.as_deref(),
         Some("retry mutation applied")
@@ -618,18 +679,25 @@ fn interrupted_retry_context_uses_resume_contract_and_persists_manifest_details(
         SessionTerminalClass::Crash,
     );
 
-    let mut request =
-        sample_request(workspace_dir.clone()).with_retry_context(FailureClass::Interrupted, Some(previous_outcome));
-    assert_eq!(request.previous_failure_class, Some(FailureClass::Interrupted));
+    let mut request = sample_request(workspace_dir.clone())
+        .with_retry_context(FailureClass::Interrupted, Some(previous_outcome));
+    assert_eq!(
+        request.previous_failure_class,
+        Some(FailureClass::Interrupted)
+    );
     assert_eq!(request.contract, ExecutionContract::Resume);
-    assert!(request
-        .retry_delta_summary
-        .as_deref()
-        .is_some_and(|summary| summary.contains("resumes from durable progress")));
-    assert!(request
-        .rescue_card
-        .as_deref()
-        .is_some_and(|card| card.contains("Resume from the first unfinished step only")));
+    assert!(
+        request
+            .retry_delta_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("resumes from durable progress"))
+    );
+    assert!(
+        request
+            .rescue_card
+            .as_deref()
+            .is_some_and(|card| card.contains("Resume from the first unfinished step only"))
+    );
 
     request.env = vec![
         (
@@ -653,16 +721,22 @@ fn interrupted_retry_context_uses_resume_contract_and_persists_manifest_details(
     let manifest: PromptManifest =
         serde_json::from_str(&fs::read_to_string(prompt_path.as_std_path())?)?;
     assert_eq!(manifest.contract, ExecutionContract::Resume);
-    assert!(manifest
-        .retry_delta_summary
-        .as_deref()
-        .is_some_and(|summary| summary.contains("resumes from durable progress")));
+    assert!(
+        manifest
+            .retry_delta_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("resumes from durable progress"))
+    );
     let rescue_card = manifest
         .sections
         .iter()
         .find(|section| section.kind == PromptSegmentKind::RescueCard)
         .ok_or("missing rescue-card section")?;
-    assert!(rescue_card.preview.contains("Resume from the first unfinished step only"));
+    assert!(
+        rescue_card
+            .preview
+            .contains("Resume from the first unfinished step only")
+    );
     assert_eq!(result.outcome.terminal_class, SessionTerminalClass::Success);
     assert_eq!(result.outcome.session.status, SessionStatus::Completed);
     Ok(())
@@ -752,7 +826,10 @@ fn lifecycle_hooks_observe_checkpoint_terminal_outcome_and_payload() -> TestResu
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].terminal_class, SessionTerminalClass::Checkpoint);
     assert_eq!(finished[0].session.status, SessionStatus::Checkpointed);
-    assert_eq!(finished[0].session.stop_reason, Some(StopReason::Checkpoint));
+    assert_eq!(
+        finished[0].session.stop_reason,
+        Some(StopReason::Checkpoint)
+    );
     assert!(finished[0].session.ended_at.is_some());
     assert_eq!(
         result

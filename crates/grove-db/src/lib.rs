@@ -1,20 +1,21 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{NaiveDateTime, TimeZone, Utc};
+use glob::{MatchOptions, Pattern};
 use grove_br::{
     BeadCacheStore, BrDependencySnapshot, BrIssueSummary, CachedBeadState, UpsertOutcome,
 };
-use glob::{MatchOptions, Pattern};
 use grove_types::{
     BeadId, BeadPriority, BeadRef, CheckpointId, CheckpointPayload, CheckpointRecord,
-    ClaudeSessionRecord, EventKind, EventLogRecord, FailureClass, GroveBeadRecord,
-    GroveBeadStatus, HandoffRecord, LeaderLeaseRecord, PromptId, ReservationConflict,
-    ReservationMode, ReservationRecord, RunId, RunStatus, SessionId, SessionStatus,
-    StopReason, TaskRunRecord, Timestamp,
+    ClaudeSessionRecord, EventKind, EventLogRecord, FailureClass, GroveBeadRecord, GroveBeadStatus,
+    HandoffRecord, LeaderLeaseRecord, MirrorOutboxRecord, MirrorStatus, PromptId, RecoveryCapsule,
+    RecoveryCapsuleOutcome, ReservationConflict, ReservationMode, ReservationRecord, RunId,
+    RunStatus, SessionId, SessionStatus, StopReason, TaskRunRecord, Timestamp,
 };
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+
+use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
 pub const CRATE_PURPOSE: &str = "SQLite bootstrap, migrations, and runtime persistence.";
@@ -98,6 +99,39 @@ pub struct LeaderLeaseAcquireInput {
 pub struct InterruptedRunRecovery {
     pub run: TaskRunRecord,
     pub bead_id: BeadId,
+    pub recovery_capsule: Option<RecoveryCapsule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MirrorOutboxWriteInput {
+    pub bead_id: BeadId,
+    pub run_id: RunId,
+    pub handoff: HandoffRecord,
+    pub close_bead: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct MirrorOutboxUpdateInput {
+    pub id: String,
+    pub mirror_status: MirrorStatus,
+    pub last_attempt_at: Option<chrono::DateTime<Utc>>,
+    pub next_retry_after: Option<chrono::DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecoveryCapsuleEvent {
+    pub capsule: RecoveryCapsule,
+    pub source_event_id: i64,
+    pub created_at: Timestamp,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecoveryCapsuleWriteInput {
+    pub bead_id: BeadId,
+    pub run_id: RunId,
+    pub capsule: RecoveryCapsule,
+    pub created_at: chrono::DateTime<Utc>,
 }
 
 const PRAGMAS: &[&str] = &[
@@ -123,6 +157,11 @@ const MIGRATION_MANIFEST: &[Migration<'_>] = &[
         version: 3,
         name: "0003_leader_lease.sql",
         sql: include_str!("../migrations/0003_leader_lease.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "0004_mirror_outbox.sql",
+        sql: include_str!("../migrations/0004_mirror_outbox.sql"),
     },
 ];
 
@@ -450,7 +489,10 @@ impl Database {
     }
 
     pub fn record_run_started(&mut self, input: RunStartInput) -> Result<TaskRunRecord> {
-        let tx = self.conn.transaction().context("begin run start transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin run start transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         tx.execute(
             "INSERT INTO task_runs(\
@@ -505,7 +547,10 @@ impl Database {
         bead_id: &BeadId,
         session: &ClaudeSessionRecord,
     ) -> Result<ClaudeSessionRecord> {
-        let tx = self.conn.transaction().context("begin session start transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin session start transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &session.run_id)?;
         ensure_run_belongs_to_bead(&tx, &session.run_id, bead_id)?;
@@ -569,7 +614,10 @@ impl Database {
         bead_id: &BeadId,
         session: &ClaudeSessionRecord,
     ) -> Result<ClaudeSessionRecord> {
-        let tx = self.conn.transaction().context("begin session finish transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin session finish transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &session.run_id)?;
         ensure_run_belongs_to_bead(&tx, &session.run_id, bead_id)?;
@@ -616,7 +664,9 @@ impl Database {
             SessionStatus::Starting | SessionStatus::Running => GroveBeadStatus::Running,
         };
         let failure_class = session_failure_class(session);
-        let failure_detail = session.stop_reason.map(|reason| format!("session ended with {:?}", reason));
+        let failure_detail = session
+            .stop_reason
+            .map(|reason| format!("session ended with {:?}", reason));
         upsert_bead_runtime_tx(
             &tx,
             bead_id,
@@ -645,8 +695,14 @@ impl Database {
         Ok(session.clone())
     }
 
-    pub fn record_checkpoint_saved(&mut self, input: SessionCheckpointInput) -> Result<CheckpointRecord> {
-        let tx = self.conn.transaction().context("begin checkpoint save transaction")?;
+    pub fn record_checkpoint_saved(
+        &mut self,
+        input: SessionCheckpointInput,
+    ) -> Result<CheckpointRecord> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin checkpoint save transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
         ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
@@ -709,8 +765,15 @@ impl Database {
         raw_checkpoint_into_record(raw)
     }
 
-    pub fn record_run_finished(&mut self, bead_id: &BeadId, input: RunFinishInput) -> Result<TaskRunRecord> {
-        let tx = self.conn.transaction().context("begin run finish transaction")?;
+    pub fn record_run_finished(
+        &mut self,
+        bead_id: &BeadId,
+        input: RunFinishInput,
+    ) -> Result<TaskRunRecord> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin run finish transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
         ensure_run_belongs_to_bead(&tx, &input.run_id, bead_id)?;
@@ -841,7 +904,10 @@ impl Database {
     }
 
     pub fn write_handoff(&mut self, input: HandoffWriteInput) -> Result<HandoffRecord> {
-        let tx = self.conn.transaction().context("begin handoff write transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin handoff write transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
         ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
@@ -918,7 +984,10 @@ impl Database {
             .collect()
     }
 
-    pub fn active_leader_lease(&self, now: &chrono::DateTime<Utc>) -> Result<Option<LeaderLeaseRecord>> {
+    pub fn active_leader_lease(
+        &self,
+        now: &chrono::DateTime<Utc>,
+    ) -> Result<Option<LeaderLeaseRecord>> {
         let mut stmt = self
             .conn
             .prepare(
@@ -940,22 +1009,23 @@ impl Database {
         &mut self,
         input: LeaderLeaseAcquireInput,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self.conn.transaction().context("begin leader lease acquire transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin leader lease acquire transaction")?;
         if let Some(run_id) = input.run_id.as_ref() {
             ensure_run_exists(&tx, run_id)?;
         }
 
         let current = active_leader_lease_tx(&tx, &input.acquired_at)?;
         if current.is_some() {
-            tx.commit().context("commit contested leader lease transaction")?;
+            tx.commit()
+                .context("commit contested leader lease transaction")?;
             return Ok(None);
         }
 
-        tx.execute(
-            "DELETE FROM leader_leases WHERE slot = 1",
-            [],
-        )
-        .context("clear prior leader lease row")?;
+        tx.execute("DELETE FROM leader_leases WHERE slot = 1", [])
+            .context("clear prior leader lease row")?;
 
         tx.execute(
             "INSERT INTO leader_leases(\
@@ -987,7 +1057,8 @@ impl Database {
 
         let lease = active_leader_lease_tx(&tx, &input.acquired_at)?
             .context("leader lease should exist after acquire")?;
-        tx.commit().context("commit leader lease acquire transaction")?;
+        tx.commit()
+            .context("commit leader lease acquire transaction")?;
         Ok(Some(lease))
     }
 
@@ -997,16 +1068,25 @@ impl Database {
         now: &chrono::DateTime<Utc>,
         expires_at: &chrono::DateTime<Utc>,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self.conn.transaction().context("begin leader lease heartbeat transaction")?;
-        let updated = tx.execute(
-            "UPDATE leader_leases \
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin leader lease heartbeat transaction")?;
+        let updated = tx
+            .execute(
+                "UPDATE leader_leases \
              SET heartbeat_at = ?1, expires_at = ?2 \
              WHERE slot = 1 AND released_at IS NULL AND owner_label = ?3 AND expires_at > ?1",
-            params![timestamp_string(now), timestamp_string(expires_at), owner_label],
-        )
-        .context("update leader lease heartbeat")?;
+                params![
+                    timestamp_string(now),
+                    timestamp_string(expires_at),
+                    owner_label
+                ],
+            )
+            .context("update leader lease heartbeat")?;
         if updated == 0 {
-            tx.commit().context("commit empty leader lease heartbeat transaction")?;
+            tx.commit()
+                .context("commit empty leader lease heartbeat transaction")?;
             return Ok(None);
         }
 
@@ -1026,7 +1106,8 @@ impl Database {
 
         let lease = active_leader_lease_tx(&tx, now)?
             .context("leader lease should exist after heartbeat")?;
-        tx.commit().context("commit leader lease heartbeat transaction")?;
+        tx.commit()
+            .context("commit leader lease heartbeat transaction")?;
         Ok(Some(lease))
     }
 
@@ -1035,14 +1116,19 @@ impl Database {
         owner_label: &str,
         released_at: &chrono::DateTime<Utc>,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self.conn.transaction().context("begin leader lease release transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin leader lease release transaction")?;
         let lease = active_leader_lease_tx(&tx, released_at)?;
         let Some(lease) = lease else {
-            tx.commit().context("commit empty leader lease release transaction")?;
+            tx.commit()
+                .context("commit empty leader lease release transaction")?;
             return Ok(None);
         };
         if lease.owner_label != owner_label {
-            tx.commit().context("commit mismatched leader lease release transaction")?;
+            tx.commit()
+                .context("commit mismatched leader lease release transaction")?;
             return Ok(None);
         }
 
@@ -1065,7 +1151,8 @@ impl Database {
             released_at,
         )?;
 
-        tx.commit().context("commit leader lease release transaction")?;
+        tx.commit()
+            .context("commit leader lease release transaction")?;
         Ok(Some(lease))
     }
 
@@ -1073,18 +1160,23 @@ impl Database {
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<InterruptedRunRecovery>> {
-        let tx = self.conn.transaction().context("begin interrupted run reconciliation transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin interrupted run reconciliation transaction")?;
         let active_runs = list_runs_by_status_tx(&tx, RunStatus::Active)?;
         let mut recovered = Vec::new();
 
         for run in active_runs {
+            let failure_detail =
+                "startup reconciliation marked previously active run as interrupted";
             tx.execute(
                 "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
                 params![
                     run.id.as_str(),
                     encode_run_status(RunStatus::Failed),
                     encode_failure_class(FailureClass::Interrupted),
-                    "startup reconciliation marked previously active run as interrupted",
+                    failure_detail,
                     timestamp_string(now),
                 ],
             )
@@ -1098,7 +1190,7 @@ impl Database {
                 Some(Some(run.id.clone())),
                 Some(None),
                 Some(Some(FailureClass::Interrupted)),
-                Some(Some("startup reconciliation marked previously active run as interrupted".to_owned())),
+                Some(Some(failure_detail.to_owned())),
                 now,
             )?;
 
@@ -1116,6 +1208,29 @@ impl Database {
                 now,
             )?;
 
+            let recovery_capsule = RecoveryCapsule::from_parts(
+                RecoveryCapsuleOutcome::Interrupted,
+                Some(FailureClass::Interrupted),
+                Some(failure_detail),
+                None,
+                None,
+                None,
+                None,
+                &[],
+            );
+            if let Some(capsule) = recovery_capsule.as_ref() {
+                insert_event_log_tx(
+                    &tx,
+                    EventKind::RecoveryCapsuleCreated,
+                    Some(&run.bead_id),
+                    Some(&run.id),
+                    None,
+                    &serde_json::to_value(capsule)
+                        .context("serialize interrupted recovery capsule")?,
+                    now,
+                )?;
+            }
+
             let raw = tx.query_row(
                 "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id \
                  FROM task_runs WHERE id = ?1",
@@ -1126,10 +1241,12 @@ impl Database {
             recovered.push(InterruptedRunRecovery {
                 run: raw_task_run_into_record(raw)?,
                 bead_id: run.bead_id.clone(),
+                recovery_capsule,
             });
         }
 
-        tx.commit().context("commit interrupted run reconciliation transaction")?;
+        tx.commit()
+            .context("commit interrupted run reconciliation transaction")?;
         Ok(recovered)
     }
 
@@ -1153,6 +1270,83 @@ impl Database {
             .into_iter()
             .map(raw_event_log_into_record)
             .collect()
+    }
+
+    pub fn write_recovery_capsule(
+        &mut self,
+        input: RecoveryCapsuleWriteInput,
+    ) -> Result<RecoveryCapsuleEvent> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin recovery capsule write transaction")?;
+        ensure_bead_exists(&tx, &input.bead_id)?;
+        ensure_run_exists(&tx, &input.run_id)?;
+        ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
+
+        insert_event_log_tx(
+            &tx,
+            EventKind::RecoveryCapsuleCreated,
+            Some(&input.bead_id),
+            Some(&input.run_id),
+            None,
+            &serde_json::to_value(&input.capsule).context("serialize recovery capsule")?,
+            &input.created_at,
+        )?;
+
+        let row = tx
+            .query_row(
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                 FROM event_log \
+                 WHERE bead_id = ?1 AND run_id = ?2 AND kind = ?3 \
+                 ORDER BY id DESC \
+                 LIMIT 1",
+                params![
+                    input.bead_id.as_str(),
+                    input.run_id.as_str(),
+                    encode_event_kind(EventKind::RecoveryCapsuleCreated)
+                ],
+                raw_event_log_row,
+            )
+            .with_context(|| {
+                format!(
+                    "query inserted recovery capsule for {} run {}",
+                    input.bead_id.as_str(),
+                    input.run_id.as_str()
+                )
+            })?;
+        tx.commit()
+            .context("commit recovery capsule write transaction")?;
+        raw_recovery_capsule_event_into_record(row)
+    }
+
+    pub fn latest_recovery_capsule_for_bead(
+        &self,
+        bead_id: &BeadId,
+    ) -> Result<Option<RecoveryCapsuleEvent>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                 FROM event_log \
+                 WHERE bead_id = ?1 AND kind = ?2 \
+                 ORDER BY id DESC \
+                 LIMIT 1",
+            )
+            .context("prepare latest recovery capsule query")?;
+
+        let row = stmt
+            .query_row(
+                params![
+                    bead_id.as_str(),
+                    encode_event_kind(EventKind::RecoveryCapsuleCreated)
+                ],
+                raw_event_log_row,
+            )
+            .optional()
+            .with_context(|| format!("query latest recovery capsule for {}", bead_id.as_str()))?;
+
+        row.map(raw_recovery_capsule_event_into_record).transpose()
     }
 
     pub fn list_active_reservations(&self) -> Result<Vec<ReservationRecord>> {
@@ -1215,7 +1409,10 @@ impl Database {
         requests: &[ReservationRequest<'_>],
         acquired_at: &chrono::DateTime<Utc>,
     ) -> Result<ReservationAcquireOutcome> {
-        let tx = self.conn.transaction().context("begin reservation acquire transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin reservation acquire transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         if let Some(run_id) = run_id {
             ensure_run_exists(&tx, run_id)?;
@@ -1244,7 +1441,8 @@ impl Database {
                     acquired_at,
                 )?;
             }
-            tx.commit().context("commit reservation conflict transaction")?;
+            tx.commit()
+                .context("commit reservation conflict transaction")?;
             return Ok(ReservationAcquireOutcome {
                 acquired: Vec::new(),
                 conflicts,
@@ -1303,10 +1501,16 @@ impl Database {
         }
 
         if !acquired.is_empty() {
-            set_declared_paths_tx(&tx, bead_id, run_id, &active_declared_paths_tx(&tx, bead_id, acquired_at)?)?;
+            set_declared_paths_tx(
+                &tx,
+                bead_id,
+                run_id,
+                &active_declared_paths_tx(&tx, bead_id, acquired_at)?,
+            )?;
         }
 
-        tx.commit().context("commit reservation acquire transaction")?;
+        tx.commit()
+            .context("commit reservation acquire transaction")?;
         Ok(ReservationAcquireOutcome {
             acquired,
             conflicts: Vec::new(),
@@ -1334,7 +1538,10 @@ impl Database {
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<ReservationRecord>> {
-        let tx = self.conn.transaction().context("begin reservation expiry transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin reservation expiry transaction")?;
         let expired = list_expired_unreleased_reservations_tx(&tx, now)?;
         for record in &expired {
             mark_reservation_released_tx(&tx, record.id, now)?;
@@ -1352,8 +1559,13 @@ impl Database {
                 now,
             )?;
         }
-        refresh_declared_paths_for_beads_tx(&tx, expired.iter().map(|r| r.bead_id.clone()).collect(), now)?;
-        tx.commit().context("commit reservation expiry transaction")?;
+        refresh_declared_paths_for_beads_tx(
+            &tx,
+            expired.iter().map(|r| r.bead_id.clone()).collect(),
+            now,
+        )?;
+        tx.commit()
+            .context("commit reservation expiry transaction")?;
         Ok(expired)
     }
 
@@ -1361,11 +1573,19 @@ impl Database {
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<RecoveredReservation>> {
-        let tx = self.conn.transaction().context("begin reservation recovery transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin reservation recovery transaction")?;
         let active = list_active_reservations_tx(&tx, now)?;
         let stale = active
             .into_iter()
-            .filter(|record| record.run_id.as_ref().is_some_and(|run_id| is_run_terminal_tx(&tx, run_id).unwrap_or(false)))
+            .filter(|record| {
+                record
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|run_id| is_run_terminal_tx(&tx, run_id).unwrap_or(false))
+            })
             .collect::<Vec<_>>();
 
         let mut recovered = Vec::with_capacity(stale.len());
@@ -1404,7 +1624,8 @@ impl Database {
                 .collect(),
             now,
         )?;
-        tx.commit().context("commit reservation recovery transaction")?;
+        tx.commit()
+            .context("commit reservation recovery transaction")?;
         Ok(recovered)
     }
 
@@ -1415,7 +1636,10 @@ impl Database {
         path_patterns: Option<&[String]>,
         released_at: &chrono::DateTime<Utc>,
     ) -> Result<Vec<ReservationRecord>> {
-        let tx = self.conn.transaction().context("begin reservation release transaction")?;
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin reservation release transaction")?;
         let matching = list_releasable_reservations_tx(&tx, bead_id, run_id, path_patterns)?;
         for record in &matching {
             mark_reservation_released_tx(&tx, record.id, released_at)?;
@@ -1435,8 +1659,304 @@ impl Database {
             )?;
         }
         refresh_declared_paths_for_beads_tx(&tx, vec![bead_id.clone()], released_at)?;
-        tx.commit().context("commit reservation release transaction")?;
+        tx.commit()
+            .context("commit reservation release transaction")?;
         Ok(matching)
+    }
+
+    // Mirror outbox methods for durable br sync retries (grove-1j9.7.6)
+
+    pub fn enqueue_mirror_outbox(
+        &mut self,
+        bead_id: &BeadId,
+        run_id: &RunId,
+        handoff: &HandoffRecord,
+        close_bead: bool,
+    ) -> Result<MirrorOutboxRecord> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin enqueue mirror outbox transaction")?;
+        let id = format!("mirror-{}-{}", bead_id.as_str(), run_id.as_str());
+        let now = now_timestamp_string();
+        let handoff_json =
+            serde_json::to_string(handoff).context("serialize handoff for mirror outbox")?;
+
+        tx.execute(
+            "INSERT INTO mirror_outbox(id, bead_id, run_id, handoff_json, close_bead, mirror_status, attempt_count, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                bead_id.as_str(),
+                run_id.as_str(),
+                handoff_json,
+                close_bead as i32,
+                "pending",
+                0i32,
+                now,
+                now,
+            ],
+        ).context("insert mirror outbox record")?;
+
+        insert_event_log_tx(
+            &tx,
+            EventKind::BrMirrorRequested,
+            Some(bead_id),
+            Some(run_id),
+            None,
+            &serde_json::json!({
+                "mirror_outbox_id": id,
+                "close_bead": close_bead,
+                "handoff_summary": handoff.summary,
+            }),
+            &Utc::now(),
+        )?;
+
+        tx.commit()
+            .context("commit enqueue mirror outbox transaction")?;
+
+        Ok(MirrorOutboxRecord {
+            id,
+            bead_id: bead_id.clone(),
+            run_id: run_id.clone(),
+            handoff: handoff.clone(),
+            close_bead,
+            mirror_status: MirrorStatus::Pending,
+            attempt_count: 0,
+            last_attempt_at: None,
+            next_retry_after: None,
+            last_error: None,
+            created_at: now.parse().context("parse created timestamp")?,
+            updated_at: now.parse().context("parse updated timestamp")?,
+        })
+    }
+
+    pub fn list_pending_mirror_operations(&self, limit: i32) -> Result<Vec<MirrorOutboxRecord>> {
+        let now = now_timestamp_string();
+
+        self.conn
+            .prepare(
+                "SELECT id, bead_id, run_id, handoff_json, close_bead, mirror_status, \
+                 attempt_count, last_attempt_at, next_retry_after, last_error, created_at, updated_at \
+                 FROM mirror_outbox \
+                 WHERE mirror_status IN ('pending', 'failed') \
+                 AND (next_retry_after IS NULL OR next_retry_after <= ?1) \
+                 ORDER BY created_at ASC \
+                 LIMIT ?2"
+            )
+            .context("prepare list pending mirror operations query")?
+            .query_map(params![now, limit], |row| {
+                let handoff_json: String = row.get(3)?;
+                let handoff: HandoffRecord = serde_json::from_str(&handoff_json)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?;
+
+                Ok(MirrorOutboxRecord {
+                    id: row.get(0)?,
+                    bead_id: BeadId::new(row.get::<_, String>(1)?),
+                    run_id: RunId::new(row.get::<_, String>(2)?),
+                    handoff,
+                    close_bead: row.get::<_, i32>(4)? != 0,
+                    mirror_status: mirror_status_from_str(row.get::<_, String>(5)?.as_str())
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    attempt_count: row.get(6)?,
+                    last_attempt_at: row.get::<_, Option<String>>(7)?
+                        .map(|s| s.parse().ok())
+                        .flatten(),
+                    next_retry_after: row.get::<_, Option<String>>(8)?
+                        .map(|s| s.parse().ok())
+                        .flatten(),
+                    last_error: row.get(9)?,
+                    created_at: row.get::<_, String>(10)?.parse().ok()
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    updated_at: row.get::<_, String>(11)?.parse().ok()
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                })
+            })
+            .context("execute list pending mirror operations query")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collect pending mirror operations")
+    }
+
+    pub fn mark_mirror_in_progress(&mut self, id: &str) -> Result<()> {
+        let now = now_timestamp_string();
+        self.conn
+            .execute(
+                "UPDATE mirror_outbox \
+                 SET mirror_status = 'in_progress', \
+                     attempt_count = attempt_count + 1, \
+                     last_attempt_at = ?1, \
+                     updated_at = ?1 \
+                 WHERE id = ?2",
+                params![now, id],
+            )
+            .context("mark mirror operation as in progress")?;
+        Ok(())
+    }
+
+    pub fn record_mirror_success(&mut self, id: &str, run_id: &RunId) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin record mirror success transaction")?;
+        let now = now_timestamp_string();
+        let bead_id: Option<String> = tx
+            .query_row(
+                "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("lookup bead id for mirror success")?;
+
+        tx.execute(
+            "UPDATE mirror_outbox \
+             SET mirror_status = 'succeeded', \
+                 last_attempt_at = COALESCE(last_attempt_at, ?1), \
+                 next_retry_after = NULL, \
+                 last_error = NULL, \
+                 updated_at = ?1 \
+             WHERE id = ?2",
+            params![now, id],
+        )
+        .context("update mirror outbox status to succeeded")?;
+
+        insert_event_log_tx(
+            &tx,
+            EventKind::BrMirrorSucceeded,
+            bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
+            Some(run_id),
+            None,
+            &serde_json::json!({
+                "mirror_outbox_id": id,
+            }),
+            &Utc::now(),
+        )?;
+
+        tx.commit()
+            .context("commit record mirror success transaction")?;
+        Ok(())
+    }
+
+    pub fn record_mirror_failure(
+        &mut self,
+        id: &str,
+        run_id: &RunId,
+        error: &str,
+        retry_after: Option<&chrono::DateTime<Utc>>,
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction()
+            .context("begin record mirror failure transaction")?;
+        let now = now_timestamp_string();
+        let retry_after_str = retry_after.map(|dt| timestamp_string(dt));
+        let bead_id: Option<String> = tx
+            .query_row(
+                "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()
+            .context("lookup bead id for mirror failure")?;
+
+        tx.execute(
+            "UPDATE mirror_outbox \
+             SET mirror_status = 'failed', \
+                 next_retry_after = ?1, \
+                 last_error = ?2, \
+                 last_attempt_at = COALESCE(last_attempt_at, ?3), \
+                 updated_at = ?3 \
+             WHERE id = ?4",
+            params![retry_after_str, error, now, id],
+        )
+        .context("update mirror outbox with failure details")?;
+
+        insert_event_log_tx(
+            &tx,
+            EventKind::BrMirrorFailed,
+            bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
+            Some(run_id),
+            None,
+            &serde_json::json!({
+                "mirror_outbox_id": id,
+                "error": error,
+            }),
+            &Utc::now(),
+        )?;
+
+        tx.commit()
+            .context("commit record mirror failure transaction")?;
+        Ok(())
+    }
+
+    pub fn mirror_status_for_bead(&self, bead_id: &BeadId) -> Result<Option<MirrorStatus>> {
+        self.conn
+            .query_row(
+                "SELECT mirror_status FROM mirror_outbox WHERE bead_id = ?1 ORDER BY created_at DESC LIMIT 1",
+                [bead_id.as_str()],
+                |row| {
+                    let status_str: String = row.get(0)?;
+                    mirror_status_from_str(&status_str)
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)
+                },
+            )
+            .optional()
+            .context("query mirror status for bead")
+    }
+
+    pub fn pending_mirror_count_for_bead(&self, bead_id: &BeadId) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM mirror_outbox WHERE bead_id = ?1 AND mirror_status IN ('pending', 'failed')",
+                [bead_id.as_str()],
+                |row| row.get(0),
+            )
+            .context("count pending mirror operations for bead")
+    }
+
+    pub fn list_unresolved_mirror_operations_for_bead(
+        &self,
+        bead_id: &BeadId,
+    ) -> Result<Vec<MirrorOutboxRecord>> {
+        self.conn
+            .prepare(
+                "SELECT id, bead_id, run_id, handoff_json, close_bead, mirror_status, \
+                 attempt_count, last_attempt_at, next_retry_after, last_error, created_at, updated_at \
+                 FROM mirror_outbox \
+                 WHERE bead_id = ?1 AND mirror_status != 'succeeded' \
+                 ORDER BY created_at DESC"
+            )
+            .context("prepare list unresolved mirror operations for bead query")?
+            .query_map([bead_id.as_str()], |row| {
+                let handoff_json: String = row.get(3)?;
+                let handoff: HandoffRecord = serde_json::from_str(&handoff_json)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e) as Box<dyn std::error::Error + Send + Sync>))?;
+
+                Ok(MirrorOutboxRecord {
+                    id: row.get(0)?,
+                    bead_id: BeadId::new(row.get::<_, String>(1)?),
+                    run_id: RunId::new(row.get::<_, String>(2)?),
+                    handoff,
+                    close_bead: row.get::<_, i32>(4)? != 0,
+                    mirror_status: mirror_status_from_str(row.get::<_, String>(5)?.as_str())
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    attempt_count: row.get(6)?,
+                    last_attempt_at: row.get::<_, Option<String>>(7)?
+                        .map(|s| s.parse().ok())
+                        .flatten(),
+                    next_retry_after: row.get::<_, Option<String>>(8)?
+                        .map(|s| s.parse().ok())
+                        .flatten(),
+                    last_error: row.get(9)?,
+                    created_at: row.get::<_, String>(10)?.parse().ok()
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                    updated_at: row.get::<_, String>(11)?.parse().ok()
+                        .ok_or_else(|| rusqlite::Error::InvalidQuery)?,
+                })
+            })
+            .context("execute list unresolved mirror operations for bead query")?
+            .collect::<Result<Vec<_>, _>>()
+            .context("collect unresolved mirror operations for bead")
     }
 
     fn applied_migration_name(&self, version: i64) -> Result<Option<String>> {
@@ -1870,6 +2390,10 @@ fn raw_task_run_into_record(row: RawTaskRunRow) -> Result<TaskRunRecord> {
         session_count: row.session_count,
         checkpoint_count: row.checkpoint_count,
         last_checkpoint_id: row.last_checkpoint_id.map(CheckpointId::new),
+        // New fields - will be None for existing records
+        activity: None,
+        last_activity_at: None,
+        escalation_tier: Default::default(),
     })
 }
 
@@ -1933,6 +2457,22 @@ fn raw_event_log_into_record(row: RawEventLogRow) -> Result<EventLogRecord> {
         session_id: row.session_id.map(SessionId::new),
         payload: parse_json(&row.payload_json, "event log payload")?,
         created_at: parse_timestamp(&row.created_at)?,
+        // New observability fields - will be None for existing records
+        correlation_id: None,
+        operation: None,
+        outcome: None,
+        duration_ms: None,
+        error: None,
+        context_snapshot: None,
+    })
+}
+
+fn raw_recovery_capsule_event_into_record(row: RawEventLogRow) -> Result<RecoveryCapsuleEvent> {
+    let created_at = parse_timestamp(&row.created_at)?;
+    Ok(RecoveryCapsuleEvent {
+        capsule: parse_json(&row.payload_json, "recovery capsule event payload")?,
+        source_event_id: row.id,
+        created_at,
     })
 }
 
@@ -1943,7 +2483,11 @@ fn raw_leader_lease_into_record(row: RawLeaderLeaseRow) -> Result<LeaderLeaseRec
         acquired_at: parse_timestamp(&row.acquired_at)?,
         heartbeat_at: parse_timestamp(&row.heartbeat_at)?,
         expires_at: parse_timestamp(&row.expires_at)?,
-        released_at: row.released_at.as_deref().map(parse_timestamp).transpose()?,
+        released_at: row
+            .released_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
     })
 }
 
@@ -1986,7 +2530,11 @@ fn ensure_bead_exists(tx: &Transaction<'_>, bead_id: &BeadId) -> Result<()> {
 
 fn ensure_run_exists(tx: &Transaction<'_>, run_id: &RunId) -> Result<()> {
     let exists = tx
-        .query_row("SELECT 1 FROM task_runs WHERE id = ?1", [run_id.as_str()], |_| Ok(()))
+        .query_row(
+            "SELECT 1 FROM task_runs WHERE id = ?1",
+            [run_id.as_str()],
+            |_| Ok(()),
+        )
         .optional()
         .with_context(|| format!("check run existence for {}", run_id.as_str()))?;
     if exists.is_some() {
@@ -1996,7 +2544,11 @@ fn ensure_run_exists(tx: &Transaction<'_>, run_id: &RunId) -> Result<()> {
     }
 }
 
-fn ensure_run_belongs_to_bead(tx: &Transaction<'_>, run_id: &RunId, bead_id: &BeadId) -> Result<()> {
+fn ensure_run_belongs_to_bead(
+    tx: &Transaction<'_>,
+    run_id: &RunId,
+    bead_id: &BeadId,
+) -> Result<()> {
     let run_bead_id = tx
         .query_row(
             "SELECT bead_id FROM task_runs WHERE id = ?1",
@@ -2017,7 +2569,11 @@ fn ensure_run_belongs_to_bead(tx: &Transaction<'_>, run_id: &RunId, bead_id: &Be
     }
 }
 
-fn ensure_session_belongs_to_run(tx: &Transaction<'_>, session_id: &SessionId, run_id: &RunId) -> Result<()> {
+fn ensure_session_belongs_to_run(
+    tx: &Transaction<'_>,
+    session_id: &SessionId,
+    run_id: &RunId,
+) -> Result<()> {
     let session_run_id = tx
         .query_row(
             "SELECT run_id FROM claude_sessions WHERE id = ?1",
@@ -2131,7 +2687,11 @@ fn list_releasable_reservations_tx(
     reservations.retain(|record| {
         record.released_at.is_none()
             && run_id.is_none_or(|expected| record.run_id.as_ref() == Some(expected))
-            && path_patterns.is_none_or(|patterns| patterns.iter().any(|pattern| pattern == &record.path_pattern))
+            && path_patterns.is_none_or(|patterns| {
+                patterns
+                    .iter()
+                    .any(|pattern| pattern == &record.path_pattern)
+            })
     });
     Ok(reservations)
 }
@@ -2178,7 +2738,10 @@ fn active_declared_paths_tx(
 ) -> Result<Vec<String>> {
     let mut records = list_all_reservations_for_bead_tx(tx, bead_id)?;
     records.retain(|record| record.released_at.is_none() && record.expires_at > *now);
-    Ok(records.into_iter().map(|record| record.path_pattern).collect())
+    Ok(records
+        .into_iter()
+        .map(|record| record.path_pattern)
+        .collect())
 }
 
 fn refresh_declared_paths_for_beads_tx(
@@ -2284,14 +2847,20 @@ fn encode_event_kind(kind: EventKind) -> &'static str {
         EventKind::BrMirrorRequested => "BrMirrorRequested",
         EventKind::BrMirrorSucceeded => "BrMirrorSucceeded",
         EventKind::BrMirrorFailed => "BrMirrorFailed",
+        EventKind::ReactionInvoked => "ReactionInvoked",
+        EventKind::EscalationTierChanged => "EscalationTierChanged",
+        EventKind::ActivityStateChanged => "ActivityStateChanged",
+        EventKind::RecoveryCapsuleCreated => "RecoveryCapsuleCreated",
     }
 }
 
 fn is_run_terminal_tx(tx: &Transaction<'_>, run_id: &RunId) -> Result<bool> {
     let status = tx
-        .query_row("SELECT status FROM task_runs WHERE id = ?1", [run_id.as_str()], |row| {
-            row.get::<_, String>(0)
-        })
+        .query_row(
+            "SELECT status FROM task_runs WHERE id = ?1",
+            [run_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
         .optional()
         .with_context(|| format!("query run status for {}", run_id.as_str()))?;
     Ok(status
@@ -2302,9 +2871,11 @@ fn is_run_terminal_tx(tx: &Transaction<'_>, run_id: &RunId) -> Result<bool> {
 }
 
 fn run_status_for_event_tx(tx: &Transaction<'_>, run_id: &RunId) -> Result<String> {
-    tx.query_row("SELECT status FROM task_runs WHERE id = ?1", [run_id.as_str()], |row| {
-        row.get::<_, String>(0)
-    })
+    tx.query_row(
+        "SELECT status FROM task_runs WHERE id = ?1",
+        [run_id.as_str()],
+        |row| row.get::<_, String>(0),
+    )
     .with_context(|| format!("query run status text for {}", run_id.as_str()))
 }
 
@@ -2510,6 +3081,16 @@ fn encode_failure_class(class: FailureClass) -> &'static str {
     }
 }
 
+fn mirror_status_from_str(status: &str) -> Option<MirrorStatus> {
+    match status {
+        "pending" => Some(MirrorStatus::Pending),
+        "in_progress" => Some(MirrorStatus::InProgress),
+        "succeeded" => Some(MirrorStatus::Succeeded),
+        "failed" => Some(MirrorStatus::Failed),
+        _ => None,
+    }
+}
+
 fn encode_run_status(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Active => "Active",
@@ -2645,6 +3226,10 @@ fn parse_event_kind(text: &str) -> Result<EventKind> {
         "brmirrorrequested" => Ok(EventKind::BrMirrorRequested),
         "brmirrorsucceeded" => Ok(EventKind::BrMirrorSucceeded),
         "brmirrorfailed" => Ok(EventKind::BrMirrorFailed),
+        "reactioninvoked" => Ok(EventKind::ReactionInvoked),
+        "escalationtierchanged" => Ok(EventKind::EscalationTierChanged),
+        "activitystatechanged" => Ok(EventKind::ActivityStateChanged),
+        "recoverycapsulecreated" => Ok(EventKind::RecoveryCapsuleCreated),
         _ => bail!("unsupported event kind {text}"),
     }
 }
@@ -2661,14 +3246,15 @@ mod tests {
     use super::reservation_patterns_overlap;
     use anyhow::Result;
     use camino::Utf8PathBuf;
+    use chrono::Utc;
     use grove_br::{
-        sync_bead_cache, BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError,
-        BrIssueDetail, BrIssueSummary, BrVersion,
+        BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError, BrIssueDetail,
+        BrIssueSummary, BrVersion, sync_bead_cache,
     };
     use grove_types::{
         BeadId, BeadPriority, CheckpointId, CheckpointPayload, ClaudeSessionRecord, EventKind,
-        FailureClass, PromptId, ReservationMode, RunId, RunStatus, SessionId, SessionStatus,
-        StopReason, Timestamp,
+        FailureClass, HandoffRecord, PromptId, RecoveryCapsuleOutcome, ReservationMode, RunId,
+        RunStatus, SessionId, SessionStatus, StopReason, Timestamp,
     };
     use rusqlite::OptionalExtension;
     use serde_json::json;
@@ -2704,7 +3290,7 @@ mod tests {
         db.migrate()?;
 
         let migrations = db.applied_migrations()?;
-        assert_eq!(migrations.len(), 3);
+        assert_eq!(migrations.len(), 4);
         assert_eq!(
             migrations[0],
             MigrationState {
@@ -2724,6 +3310,13 @@ mod tests {
             MigrationState {
                 version: 3,
                 name: "0003_leader_lease.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[3],
+            MigrationState {
+                version: 4,
+                name: "0004_mirror_outbox.sql".into(),
             }
         );
         Ok(())
@@ -3020,11 +3613,7 @@ mod tests {
 
         let heartbeat_at: Timestamp = "2026-03-16T12:00:10Z".parse()?;
         let heartbeat = db
-            .heartbeat_leader_lease(
-                "leader-a",
-                &heartbeat_at,
-                &"2026-03-16T12:00:40Z".parse()?,
-            )?
+            .heartbeat_leader_lease("leader-a", &heartbeat_at, &"2026-03-16T12:00:40Z".parse()?)?
             .expect("heartbeat should keep active lease");
         assert_eq!(heartbeat.heartbeat_at, heartbeat_at);
         assert_eq!(
@@ -3036,7 +3625,10 @@ mod tests {
             .release_leader_lease("leader-a", &"2026-03-16T12:00:20Z".parse()?)?
             .expect("owned lease should release");
         assert_eq!(released.owner_label, "leader-a");
-        assert!(db.active_leader_lease(&"2026-03-16T12:00:20Z".parse()?)?.is_none());
+        assert!(
+            db.active_leader_lease(&"2026-03-16T12:00:20Z".parse()?)?
+                .is_none()
+        );
         Ok(())
     }
 
@@ -3054,13 +3646,29 @@ mod tests {
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].bead_id.as_str(), "grove-interrupted");
         assert_eq!(recovered[0].run.status, RunStatus::Failed);
-        assert_eq!(recovered[0].run.failure_class, Some(FailureClass::Interrupted));
+        assert_eq!(
+            recovered[0].run.failure_class,
+            Some(FailureClass::Interrupted)
+        );
+        assert_eq!(
+            recovered[0]
+                .recovery_capsule
+                .as_ref()
+                .map(|capsule| capsule.outcome),
+            Some(RecoveryCapsuleOutcome::Interrupted)
+        );
 
         let bead = db
             .get_bead_record(&BeadId::new("grove-interrupted"))?
             .expect("bead runtime should exist");
         assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
         assert_eq!(bead.last_failure_class, Some(FailureClass::Interrupted));
+
+        let capsule = db
+            .latest_recovery_capsule_for_bead(&BeadId::new("grove-interrupted"))?
+            .expect("interrupted run should persist recovery capsule");
+        assert_eq!(capsule.capsule.outcome, RecoveryCapsuleOutcome::Interrupted);
+        assert!(capsule.capsule.summary.contains("persisted durable state"));
         Ok(())
     }
 
@@ -3089,11 +3697,18 @@ mod tests {
 
         let recovered = db.recover_stale_reservations(&"2026-03-16T12:05:00Z".parse()?)?;
         assert_eq!(recovered.len(), 1);
-        assert_eq!(recovered[0].reservation.path_pattern, "crates/grove-db/src/lib.rs");
-        assert_eq!(recovered[0].reason, crate::RecoveryReason::RunNoLongerActive);
-        assert!(db
-            .list_active_reservations_at(&"2026-03-16T12:05:00Z".parse()?)?
-            .is_empty());
+        assert_eq!(
+            recovered[0].reservation.path_pattern,
+            "crates/grove-db/src/lib.rs"
+        );
+        assert_eq!(
+            recovered[0].reason,
+            crate::RecoveryReason::RunNoLongerActive
+        );
+        assert!(
+            db.list_active_reservations_at(&"2026-03-16T12:05:00Z".parse()?)?
+                .is_empty()
+        );
         Ok(())
     }
 
@@ -3173,7 +3788,10 @@ mod tests {
             .get_bead_record(&BeadId::new("grove-life"))?
             .expect("bead runtime should exist after session finish");
         assert_eq!(bead.grove_status, GroveBeadStatus::Checkpointed);
-        assert_eq!(bead.declared_paths, vec!["crates/grove-db/src/lib.rs".to_owned()]);
+        assert_eq!(
+            bead.declared_paths,
+            vec!["crates/grove-db/src/lib.rs".to_owned()]
+        );
 
         let finished_run = db.record_run_finished(
             &BeadId::new("grove-life"),
@@ -3189,7 +3807,13 @@ mod tests {
         assert_eq!(finished_run.status, RunStatus::Checkpointed);
         assert_eq!(finished_run.session_count, 1);
         assert_eq!(finished_run.checkpoint_count, 1);
-        assert_eq!(finished_run.last_checkpoint_id.as_ref().map(|id| id.as_str()), Some("chk-life"));
+        assert_eq!(
+            finished_run
+                .last_checkpoint_id
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("chk-life")
+        );
 
         let latest_session = db
             .latest_session_for_run(&RunId::new("run-life"))?
@@ -3206,8 +3830,14 @@ mod tests {
             .get_bead_record(&BeadId::new("grove-life"))?
             .expect("bead runtime should exist");
         assert_eq!(bead.grove_status, GroveBeadStatus::Checkpointed);
-        assert_eq!(bead.last_run_id.as_ref().map(|id| id.as_str()), Some("run-life"));
-        assert_eq!(bead.declared_paths, vec!["crates/grove-db/src/lib.rs".to_owned()]);
+        assert_eq!(
+            bead.last_run_id.as_ref().map(|id| id.as_str()),
+            Some("run-life")
+        );
+        assert_eq!(
+            bead.declared_paths,
+            vec!["crates/grove-db/src/lib.rs".to_owned()]
+        );
 
         let events = db.list_event_logs_for_bead(&BeadId::new("grove-life"))?;
         let kinds = events.iter().map(|event| event.kind).collect::<Vec<_>>();
@@ -3281,25 +3911,28 @@ mod tests {
                 },
             )
             .expect_err("session finish should reject a mismatched bead");
-        assert!(wrong_bead_err.to_string().contains("belongs to bead grove-a, not grove-b"));
+        assert!(
+            wrong_bead_err
+                .to_string()
+                .contains("belongs to bead grove-a, not grove-b")
+        );
 
-        let wrong_run_err = db
-            .record_checkpoint_saved(SessionCheckpointInput {
-                checkpoint_id: CheckpointId::new("chk-bad"),
-                bead_id: BeadId::new("grove-a"),
-                run_id: RunId::new("run-a"),
-                session_id: SessionId::new("ses-a"),
-                payload: CheckpointPayload {
-                    progress: "halfway".to_owned(),
-                    next_step: "verify linkage".to_owned(),
-                    context: json!({}),
-                    open_questions: Vec::new(),
-                    claimed_paths: vec!["crates/grove-db/src/lib.rs".to_owned()],
-                    confidence: None,
-                },
-                saved_at: "2026-03-16T12:06:00Z".parse()?,
-                resume_generation: 1,
-            })?;
+        let wrong_run_err = db.record_checkpoint_saved(SessionCheckpointInput {
+            checkpoint_id: CheckpointId::new("chk-bad"),
+            bead_id: BeadId::new("grove-a"),
+            run_id: RunId::new("run-a"),
+            session_id: SessionId::new("ses-a"),
+            payload: CheckpointPayload {
+                progress: "halfway".to_owned(),
+                next_step: "verify linkage".to_owned(),
+                context: json!({}),
+                open_questions: Vec::new(),
+                claimed_paths: vec!["crates/grove-db/src/lib.rs".to_owned()],
+                confidence: None,
+            },
+            saved_at: "2026-03-16T12:06:00Z".parse()?,
+            resume_generation: 1,
+        })?;
         assert_eq!(wrong_run_err.run_id.as_str(), "run-a");
 
         let cross_run_session_err = db
@@ -3320,9 +3953,11 @@ mod tests {
                 resume_generation: 2,
             })
             .expect_err("checkpoint save should reject a mismatched session/run pair");
-        assert!(cross_run_session_err
-            .to_string()
-            .contains("session ses-a belongs to run run-a, not run-a-2"));
+        assert!(
+            cross_run_session_err
+                .to_string()
+                .contains("session ses-a belongs to run run-a, not run-a-2")
+        );
         Ok(())
     }
 
@@ -3468,7 +4103,10 @@ mod tests {
         assert_eq!(session.id.as_str(), "ses-query");
         assert_eq!(format!("{:?}", session.status), "Checkpointed");
         assert_eq!(format!("{:?}", session.stop_reason), "Some(Checkpoint)");
-        assert_eq!(session.prompt_id.as_ref().map(|id| id.as_str()), Some("prompt-query"));
+        assert_eq!(
+            session.prompt_id.as_ref().map(|id| id.as_str()),
+            Some("prompt-query")
+        );
         assert_eq!(
             session.prompt_manifest_path.as_deref(),
             Some(".grove/prompts/prompt-query.json")
@@ -3505,6 +4143,176 @@ mod tests {
         );
         assert_eq!(reservations[0].path_pattern, "crates/grove-db/src/lib.rs");
         assert_eq!(reservations[0].mode, ReservationMode::Exclusive);
+        Ok(())
+    }
+
+    #[test]
+    fn mark_mirror_in_progress_tracks_attempt_timestamp_and_count() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-mirror-progress", "Mirror progress bead")?;
+        insert_run_row(
+            &db,
+            "run-mirror-progress",
+            "grove-mirror-progress",
+            "Succeeded",
+        )?;
+
+        let handoff = HandoffRecord {
+            bead_id: BeadId::new("grove-mirror-progress"),
+            run_id: RunId::new("run-mirror-progress"),
+            summary: "done".into(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: "2026-03-20T06:00:00Z".parse()?,
+        };
+        let operation = db.enqueue_mirror_outbox(
+            &BeadId::new("grove-mirror-progress"),
+            &RunId::new("run-mirror-progress"),
+            &handoff,
+            true,
+        )?;
+
+        db.mark_mirror_in_progress(&operation.id)?;
+
+        let pending = db.connection().query_row(
+            "SELECT mirror_status, attempt_count, last_attempt_at FROM mirror_outbox WHERE id = ?1",
+            [&operation.id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i32>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            },
+        )?;
+        assert_eq!(pending.0, "in_progress");
+        assert_eq!(pending.1, 1);
+        assert!(pending.2.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn record_mirror_success_clears_retry_metadata_and_links_bead_event() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-mirror-success", "Mirror success bead")?;
+        insert_run_row(
+            &db,
+            "run-mirror-success",
+            "grove-mirror-success",
+            "Succeeded",
+        )?;
+
+        let handoff = HandoffRecord {
+            bead_id: BeadId::new("grove-mirror-success"),
+            run_id: RunId::new("run-mirror-success"),
+            summary: "done".into(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: "2026-03-20T06:05:00Z".parse()?,
+        };
+        let operation = db.enqueue_mirror_outbox(
+            &BeadId::new("grove-mirror-success"),
+            &RunId::new("run-mirror-success"),
+            &handoff,
+            true,
+        )?;
+        db.mark_mirror_in_progress(&operation.id)?;
+        let retry_after: chrono::DateTime<Utc> = "2026-03-20T06:10:00Z".parse()?;
+        db.record_mirror_failure(
+            &operation.id,
+            &RunId::new("run-mirror-success"),
+            "temporary error",
+            Some(&retry_after),
+        )?;
+        db.record_mirror_success(&operation.id, &RunId::new("run-mirror-success"))?;
+
+        let row = db
+            .connection()
+            .query_row(
+                "SELECT mirror_status, attempt_count, last_attempt_at, next_retry_after, last_error FROM mirror_outbox WHERE id = ?1",
+                [&operation.id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                    ))
+                },
+            )?;
+        assert_eq!(row.0, "succeeded");
+        assert_eq!(row.1, 1);
+        assert!(row.2.is_some());
+        assert!(row.3.is_none());
+        assert!(row.4.is_none());
+
+        let events = db.list_event_logs_for_bead(&BeadId::new("grove-mirror-success"))?;
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::BrMirrorSucceeded)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn record_mirror_failure_links_event_to_bead() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-mirror-failure", "Mirror failure bead")?;
+        insert_run_row(
+            &db,
+            "run-mirror-failure",
+            "grove-mirror-failure",
+            "Succeeded",
+        )?;
+
+        let handoff = HandoffRecord {
+            bead_id: BeadId::new("grove-mirror-failure"),
+            run_id: RunId::new("run-mirror-failure"),
+            summary: "done".into(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: "2026-03-20T06:15:00Z".parse()?,
+        };
+        let operation = db.enqueue_mirror_outbox(
+            &BeadId::new("grove-mirror-failure"),
+            &RunId::new("run-mirror-failure"),
+            &handoff,
+            true,
+        )?;
+        db.mark_mirror_in_progress(&operation.id)?;
+        db.record_mirror_failure(
+            &operation.id,
+            &RunId::new("run-mirror-failure"),
+            "network hiccup",
+            None,
+        )?;
+
+        let events = db.list_event_logs_for_bead(&BeadId::new("grove-mirror-failure"))?;
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == EventKind::BrMirrorFailed)
+        );
         Ok(())
     }
 
@@ -3546,6 +4354,26 @@ mod tests {
                 }),
                 beads_dir_exists: true,
             })
+        }
+
+        fn close_bead(&self, _id: &BeadId, _reason: Option<&str>) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
+        }
+
+        fn add_comment(&self, _id: &BeadId, _text: &str) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
+        }
+
+        fn mirror_handoff(
+            &self,
+            _id: &BeadId,
+            _handoff: &HandoffRecord,
+            _close_bead: bool,
+        ) -> Result<(), BrError> {
+            // Fake implementation - always succeeds
+            Ok(())
         }
     }
 

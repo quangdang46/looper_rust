@@ -1,5 +1,5 @@
 use grove_types::{BeadId, BeadPriority, Timestamp};
-use serde::{de::Error as DeError, Deserialize};
+use serde::{Deserialize, de::Error as DeError};
 use serde_json::Value;
 use std::{
     collections::HashMap,

@@ -1,4 +1,4 @@
-use crate::{infer_progress_signal, ProtocolWarning};
+use crate::{ProtocolWarning, infer_progress_signal};
 use grove_types::{IterationAnalysis, ProtocolEvent, ProtocolState};
 use std::collections::HashMap;
 
@@ -143,7 +143,10 @@ fn count_rate_limit_markers(
         .chain(stderr_lines.iter())
         .filter(|line| is_rate_limit_marker(line))
         .count() as u32
-        + warnings.iter().filter(|warning| is_rate_limit_marker(warning)).count() as u32
+        + warnings
+            .iter()
+            .filter(|warning| is_rate_limit_marker(warning))
+            .count() as u32
 }
 
 fn is_rate_limit_marker(line: &str) -> bool {
@@ -296,12 +299,16 @@ mod tests {
         assert_eq!(analysis.permission_denials, 1);
         assert_eq!(analysis.estimated_prompt_tokens, 144);
         assert_eq!(analysis.estimated_output_tokens, 89);
-        assert!(analysis
-            .warnings
-            .contains(&"mirror still pending".to_owned()));
-        assert!(analysis
-            .warnings
-            .contains(&"invalid GROVE_EXIT value `maybe`; expected true or false".to_owned()));
+        assert!(
+            analysis
+                .warnings
+                .contains(&"mirror still pending".to_owned())
+        );
+        assert!(
+            analysis
+                .warnings
+                .contains(&"invalid GROVE_EXIT value `maybe`; expected true or false".to_owned())
+        );
     }
 
     #[test]

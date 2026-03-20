@@ -4,11 +4,11 @@ use chrono::{Duration, Utc};
 use grove_br::{BrClient, BrDependencySnapshot};
 use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
-use grove_db::{reservation_patterns_overlap, Database};
+use grove_db::{Database, RecoveryCapsuleEvent, reservation_patterns_overlap};
 use grove_types::{
     BeadId, BeadPriority, FailureClass, GroveBeadRecord, GroveBeadStatus, LeaderLeaseRecord,
-    PromptManifest, RecoveryCapsule, RecoveryCapsuleOutcome, ReservationConflict,
-    ReservationMode, ReservationRecord, RunId, SessionId, Timestamp,
+    PromptManifest, RecoveryCapsule, RecoveryCapsuleOutcome, ReservationConflict, ReservationMode,
+    ReservationRecord, RunId, SessionId, Timestamp,
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -555,10 +555,7 @@ fn build_checkpointed_beads(
                 .last_run_id
                 .as_ref()
                 .and_then(|run_id| runs.iter().find(|run| &run.id == run_id));
-            let checkpoint = match (
-                current_run,
-                db.latest_checkpoint_for_bead(&bead.bead.id)?,
-            ) {
+            let checkpoint = match (current_run, db.latest_checkpoint_for_bead(&bead.bead.id)?) {
                 (Some(run), Some(checkpoint))
                     if run
                         .last_checkpoint_id
@@ -601,9 +598,11 @@ fn build_checkpointed_beads(
                         .as_deref()
                         .and_then(load_prompt_manifest)
                 });
+            let persisted_recovery_capsule = db.latest_recovery_capsule_for_bead(&bead.bead.id)?;
             let recovery_capsule = recovery_capsule_for_checkpointed(
                 checkpoint.as_ref(),
                 prompt_manifest.as_ref(),
+                persisted_recovery_capsule.as_ref(),
             );
 
             Ok(CheckpointedBeadView {
@@ -675,10 +674,12 @@ fn build_failed_beads(
             .map(|run_id| latest_checkpoint_for_run(&bead.bead.id, run_id, db))
             .transpose()?
             .flatten();
+        let persisted_recovery_capsule = db.latest_recovery_capsule_for_bead(&bead.bead.id)?;
         let recovery_capsule = recovery_capsule_for_failed(
             bead,
             checkpoint.as_ref(),
             prompt_manifest.as_ref(),
+            persisted_recovery_capsule.as_ref(),
         );
 
         failed.push(FailedBeadView {
@@ -739,34 +740,30 @@ fn mirror_pending_by_bead(
     Ok(map)
 }
 
+fn pending_actions_for_operation(operation: &grove_types::MirrorOutboxRecord) -> Vec<String> {
+    let mut actions = vec!["comment".to_owned()];
+    if operation.close_bead {
+        actions.push("close".to_owned());
+    }
+    actions
+}
+
 pub(crate) fn latest_mirror_pending_for_bead(
     bead_id: &BeadId,
     db: &Database,
 ) -> Result<Option<MirrorPendingView>> {
-    let events = db.list_event_logs_for_bead(bead_id)?;
-    let latest_terminal = events.iter().find(|event| {
-        matches!(
-            event.kind,
-            grove_types::EventKind::BrMirrorSucceeded | grove_types::EventKind::BrMirrorFailed
-        )
-    });
+    let operations = db.list_unresolved_mirror_operations_for_bead(bead_id)?;
+    let Some(operation) = operations.first() else {
+        return Ok(None);
+    };
 
-    match latest_terminal {
-        Some(event) if matches!(event.kind, grove_types::EventKind::BrMirrorFailed) => {
-            Ok(Some(MirrorPendingView {
-                bead_id: bead_id.clone(),
-                run_id: event.run_id.clone(),
-                pending_actions: vec!["close".to_owned()],
-                last_attempt_at: Some(event.created_at),
-                last_error: event
-                    .payload
-                    .get("error")
-                    .and_then(|value| value.as_str())
-                    .map(ToOwned::to_owned),
-            }))
-        }
-        _ => Ok(None),
-    }
+    Ok(Some(MirrorPendingView {
+        bead_id: bead_id.clone(),
+        run_id: Some(operation.run_id.clone()),
+        pending_actions: pending_actions_for_operation(operation),
+        last_attempt_at: operation.last_attempt_at,
+        last_error: operation.last_error.clone(),
+    }))
 }
 
 pub(crate) fn find_reservation_conflicts(
@@ -980,41 +977,51 @@ fn load_prompt_manifest(path: &str) -> Option<PromptManifest> {
 fn recovery_capsule_for_checkpointed(
     checkpoint: Option<&grove_types::CheckpointRecord>,
     prompt_manifest: Option<&PromptManifest>,
+    persisted_capsule: Option<&RecoveryCapsuleEvent>,
 ) -> Option<RecoveryCapsule> {
-    let checkpoint = checkpoint?;
-    RecoveryCapsule::from_parts(
-        RecoveryCapsuleOutcome::Checkpointed,
-        None,
-        None,
-        Some(checkpoint.progress.as_str()),
-        Some(checkpoint.next_step.as_str()),
-        prompt_manifest.map(|manifest| manifest.contract.as_str()),
-        prompt_manifest.and_then(|manifest| manifest.retry_delta_summary.as_deref()),
-        &[],
-    )
+    persisted_capsule
+        .map(|event| event.capsule.clone())
+        .or_else(|| {
+            let checkpoint = checkpoint?;
+            RecoveryCapsule::from_parts(
+                RecoveryCapsuleOutcome::Checkpointed,
+                None,
+                None,
+                Some(checkpoint.progress.as_str()),
+                Some(checkpoint.next_step.as_str()),
+                prompt_manifest.map(|manifest| manifest.contract.as_str()),
+                prompt_manifest.and_then(|manifest| manifest.retry_delta_summary.as_deref()),
+                &[],
+            )
+        })
 }
 
 fn recovery_capsule_for_failed(
     bead: &GroveBeadRecord,
     checkpoint: Option<&grove_types::CheckpointRecord>,
     prompt_manifest: Option<&PromptManifest>,
+    persisted_capsule: Option<&RecoveryCapsuleEvent>,
 ) -> Option<RecoveryCapsule> {
-    let outcome = if bead.last_failure_class == Some(FailureClass::Interrupted) {
-        RecoveryCapsuleOutcome::Interrupted
-    } else {
-        RecoveryCapsuleOutcome::Failed
-    };
+    persisted_capsule
+        .map(|event| event.capsule.clone())
+        .or_else(|| {
+            let outcome = if bead.last_failure_class == Some(FailureClass::Interrupted) {
+                RecoveryCapsuleOutcome::Interrupted
+            } else {
+                RecoveryCapsuleOutcome::Failed
+            };
 
-    RecoveryCapsule::from_parts(
-        outcome,
-        bead.last_failure_class,
-        bead.last_failure_detail.as_deref(),
-        checkpoint.map(|checkpoint| checkpoint.progress.as_str()),
-        checkpoint.map(|checkpoint| checkpoint.next_step.as_str()),
-        prompt_manifest.map(|manifest| manifest.contract.as_str()),
-        prompt_manifest.and_then(|manifest| manifest.retry_delta_summary.as_deref()),
-        &[],
-    )
+            RecoveryCapsule::from_parts(
+                outcome,
+                bead.last_failure_class,
+                bead.last_failure_detail.as_deref(),
+                checkpoint.map(|checkpoint| checkpoint.progress.as_str()),
+                checkpoint.map(|checkpoint| checkpoint.next_step.as_str()),
+                prompt_manifest.map(|manifest| manifest.contract.as_str()),
+                prompt_manifest.and_then(|manifest| manifest.retry_delta_summary.as_deref()),
+                &[],
+            )
+        })
 }
 
 #[cfg(test)]
@@ -1025,11 +1032,50 @@ mod tests {
         BvCommand, BvGraphHealth, BvProjectCounts, BvProjectHealth, BvQuickRef, BvRecommendation,
         BvTriageMeta, BvTriageOutput, BvVelocitySummary,
     };
-    use grove_types::{BeadRef, CircuitState, RunId, Timestamp};
+    use grove_types::{
+        BeadRef, CircuitState, HandoffRecord, MirrorStatus, RecoveryCapsule,
+        RecoveryCapsuleOutcome, RunId, Timestamp,
+    };
     use std::collections::{HashMap, HashSet};
     use std::error::Error;
 
     type TestResult<T = ()> = Result<T, Box<dyn Error>>;
+
+    #[test]
+    fn recovery_capsule_helpers_prefer_persisted_capsules() -> TestResult {
+        let persisted = RecoveryCapsuleEvent {
+            capsule: RecoveryCapsule::from_parts(
+                RecoveryCapsuleOutcome::Interrupted,
+                Some(FailureClass::Interrupted),
+                Some("persisted detail"),
+                None,
+                Some("resume from checkpoint"),
+                None,
+                None,
+                &[],
+            )
+            .ok_or("expected recovery capsule")?,
+            source_event_id: 42,
+            created_at: parse_ts("2026-03-20T06:45:00Z")?,
+        };
+
+        let checkpoint_capsule = recovery_capsule_for_checkpointed(None, None, Some(&persisted))
+            .ok_or("expected checkpointed capsule")?;
+        assert_eq!(
+            checkpoint_capsule.outcome,
+            RecoveryCapsuleOutcome::Interrupted
+        );
+        assert_eq!(
+            checkpoint_capsule.recommended_next_step(),
+            Some("resume from checkpoint")
+        );
+
+        let bead = sample_bead("grove-failed", "open", GroveBeadStatus::Failed)?;
+        let failed_capsule = recovery_capsule_for_failed(&bead, None, None, Some(&persisted))
+            .ok_or("expected failed capsule")?;
+        assert_eq!(failed_capsule.summary, persisted.capsule.summary);
+        Ok(())
+    }
 
     #[test]
     fn counts_br_and_grove_statuses_separately() -> TestResult {
@@ -1149,25 +1195,33 @@ mod tests {
         let p0_entry = &queue[0];
         assert!(p0_entry.score.is_some_and(|score| score >= 100.0));
         assert!(p0_entry.why.iter().any(|item| item == "P0 priority"));
-        assert!(p0_entry
-            .why
-            .iter()
-            .any(|item| item == "no reservation conflicts"));
-        assert!(p0_entry
-            .score_breakdown
-            .iter()
-            .any(|component| component.label == "ready_age"));
+        assert!(
+            p0_entry
+                .why
+                .iter()
+                .any(|item| item == "no reservation conflicts")
+        );
+        assert!(
+            p0_entry
+                .score_breakdown
+                .iter()
+                .any(|component| component.label == "ready_age")
+        );
 
         let bonus_entry = &queue[1];
         assert!(bonus_entry.score.is_some_and(|score| score >= 95.0));
-        assert!(bonus_entry
-            .score_breakdown
-            .iter()
-            .any(|component| component.label == "critical_path" && component.value == 20.0));
-        assert!(bonus_entry
-            .why
-            .iter()
-            .any(|item| item == "1 downstream bead"));
+        assert!(
+            bonus_entry
+                .score_breakdown
+                .iter()
+                .any(|component| component.label == "critical_path" && component.value == 20.0)
+        );
+        assert!(
+            bonus_entry
+                .why
+                .iter()
+                .any(|item| item == "1 downstream bead")
+        );
 
         let tied_queue = build_ready_queue(
             &[
@@ -1242,10 +1296,12 @@ mod tests {
             .expect("clean ready bead should stay in queue");
         assert!(clean_entry.dispatch.dispatchable_in_grove);
         assert!(clean_entry.score.is_some_and(|score| score >= 75.0));
-        assert!(clean_entry
-            .score_breakdown
-            .iter()
-            .all(|component| component.label != "reservation_conflict_penalty"));
+        assert!(
+            clean_entry
+                .score_breakdown
+                .iter()
+                .all(|component| component.label != "reservation_conflict_penalty")
+        );
 
         let conflicted_entry = queue
             .iter()
@@ -1256,24 +1312,30 @@ mod tests {
             conflicted_entry.dispatch.summary(),
             "reservation conflict between grove-conflicted (crates/grove-kernel/src/status_view.rs) and grove-held (crates/grove-kernel/src/*)"
         );
-        assert!(conflicted_entry
-            .dispatch
-            .local_suppression_reasons
-            .iter()
-            .any(|reason| reason.code == "reservation_conflict"));
+        assert!(
+            conflicted_entry
+                .dispatch
+                .local_suppression_reasons
+                .iter()
+                .any(|reason| reason.code == "reservation_conflict")
+        );
         assert!(conflicted_entry.score_breakdown.iter().any(|component| {
             component.label == "reservation_conflict_penalty"
                 && component.value == -1000.0
                 && component.note.as_deref() == Some("1 active conflict(s)")
         }));
-        assert!(conflicted_entry
-            .score_breakdown
-            .iter()
-            .any(|component| component.label == "ready_age"));
-        assert!(conflicted_entry
-            .why
-            .iter()
-            .any(|item| item == "1 reservation conflict(s)"));
+        assert!(
+            conflicted_entry
+                .score_breakdown
+                .iter()
+                .any(|component| component.label == "ready_age")
+        );
+        assert!(
+            conflicted_entry
+                .why
+                .iter()
+                .any(|item| item == "1 reservation conflict(s)")
+        );
 
         Ok(())
     }
@@ -1408,7 +1470,10 @@ mod tests {
 
         let checkpointed = build_checkpointed_beads(&[bead], &db, &HashMap::new())?;
         assert_eq!(checkpointed.len(), 1);
-        assert_eq!(checkpointed[0].run_id.as_ref().map(RunId::as_str), Some("run-new"));
+        assert_eq!(
+            checkpointed[0].run_id.as_ref().map(RunId::as_str),
+            Some("run-new")
+        );
         assert_eq!(checkpointed[0].checkpoint_id, None);
         assert_eq!(checkpointed[0].progress, None);
         assert_eq!(checkpointed[0].next_step, None);
@@ -1520,18 +1585,24 @@ mod tests {
         let entry = queue.first().ok_or("expected ready entry")?;
         assert_eq!(entry.bv_score, Some(0.75));
         assert!(entry.ready_minutes.is_some());
-        assert!(entry
-            .score_breakdown
-            .iter()
-            .any(|component| component.label == "bv_triage" && component.value == 0.75));
-        assert!(entry
-            .score_breakdown
-            .iter()
-            .any(|component| component.label == "ready_age"));
-        assert!(entry
-            .why
-            .iter()
-            .any(|item| item.contains("bv triage 0.75: critical path bead, top pagerank")));
+        assert!(
+            entry
+                .score_breakdown
+                .iter()
+                .any(|component| component.label == "bv_triage" && component.value == 0.75)
+        );
+        assert!(
+            entry
+                .score_breakdown
+                .iter()
+                .any(|component| component.label == "ready_age")
+        );
+        assert!(
+            entry
+                .why
+                .iter()
+                .any(|item| item.contains("bv triage 0.75: critical path bead, top pagerank"))
+        );
         Ok(())
     }
 
@@ -1665,5 +1736,231 @@ mod tests {
 
     fn parse_ts(value: &str) -> TestResult<Timestamp> {
         Ok(value.parse()?)
+    }
+
+    #[test]
+    fn latest_mirror_pending_uses_outbox_rows() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| std::io::Error::other("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+
+        let bead_id = BeadId::new("grove-1j9.7.6");
+        let run_id = RunId::new("run-1");
+        db.connection().execute(
+            "INSERT INTO bead_cache(\
+                bead_id, title, description, priority, issue_type, status, assignee,\
+                labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', '{}', ?6)",
+            rusqlite::params![
+                bead_id.as_str(),
+                "Mirror bead",
+                1,
+                "task",
+                "open",
+                "2026-03-20T05:55:00Z",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO task_runs(\
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id\
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, ?6, ?7, ?8)",
+            rusqlite::params![
+                run_id.as_str(),
+                bead_id.as_str(),
+                1,
+                "Succeeded",
+                "2026-03-20T06:00:00Z",
+                1,
+                0,
+                Option::<String>::None,
+            ],
+        )?;
+        let handoff = HandoffRecord {
+            bead_id: bead_id.clone(),
+            run_id: run_id.clone(),
+            summary: "done locally".to_owned(),
+            artifacts: vec!["crates/grove-kernel/src/status_view.rs".to_owned()],
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: parse_ts("2026-03-20T06:00:00Z")?,
+        };
+
+        db.enqueue_mirror_outbox(&bead_id, &run_id, &handoff, false)?;
+
+        let pending = latest_mirror_pending_for_bead(&bead_id, &db)?
+            .ok_or_else(|| std::io::Error::other("expected pending mirror view"))?;
+        assert_eq!(pending.run_id.as_ref(), Some(&run_id));
+        assert_eq!(pending.pending_actions, vec!["comment".to_owned()]);
+        assert_eq!(pending.last_attempt_at, None);
+        assert_eq!(pending.last_error, None);
+        Ok(())
+    }
+
+    #[test]
+    fn latest_mirror_pending_includes_close_and_failure_details() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| std::io::Error::other("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+
+        let bead_id = BeadId::new("grove-1j9.7.6");
+        let run_id = RunId::new("run-2");
+        db.connection().execute(
+            "INSERT INTO bead_cache(\
+                bead_id, title, description, priority, issue_type, status, assignee,\
+                labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', '{}', ?6)",
+            rusqlite::params![
+                bead_id.as_str(),
+                "Mirror bead",
+                1,
+                "task",
+                "open",
+                "2026-03-20T06:00:00Z",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO task_runs(\
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id\
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, ?6, ?7, ?8)",
+            rusqlite::params![
+                run_id.as_str(),
+                bead_id.as_str(),
+                1,
+                "Succeeded",
+                "2026-03-20T06:05:00Z",
+                1,
+                0,
+                Option::<String>::None,
+            ],
+        )?;
+        let handoff = HandoffRecord {
+            bead_id: bead_id.clone(),
+            run_id: run_id.clone(),
+            summary: "done locally".to_owned(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: parse_ts("2026-03-20T06:05:00Z")?,
+        };
+
+        let operation = db.enqueue_mirror_outbox(&bead_id, &run_id, &handoff, true)?;
+        let retry_after = chrono::Utc::now();
+        db.record_mirror_failure(&operation.id, &run_id, "network hiccup", Some(&retry_after))?;
+
+        let pending = latest_mirror_pending_for_bead(&bead_id, &db)?
+            .ok_or_else(|| std::io::Error::other("expected pending mirror view"))?;
+        assert_eq!(
+            pending.pending_actions,
+            vec!["comment".to_owned(), "close".to_owned()]
+        );
+        assert_eq!(pending.last_error.as_deref(), Some("network hiccup"));
+        assert!(pending.last_attempt_at.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn latest_mirror_pending_ignores_succeeded_operations() -> TestResult {
+        let dir = tempfile::tempdir()?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| std::io::Error::other("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+
+        let bead_id = BeadId::new("grove-1j9.7.6");
+        let run_id = RunId::new("run-3");
+        db.connection().execute(
+            "INSERT INTO bead_cache(\
+                bead_id, title, description, priority, issue_type, status, assignee,\
+                labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+            ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', '{}', ?6)",
+            rusqlite::params![
+                bead_id.as_str(),
+                "Mirror bead",
+                1,
+                "task",
+                "open",
+                "2026-03-20T06:05:00Z",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO task_runs(\
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id\
+            ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, ?6, ?7, ?8)",
+            rusqlite::params![
+                run_id.as_str(),
+                bead_id.as_str(),
+                1,
+                "Succeeded",
+                "2026-03-20T06:10:00Z",
+                1,
+                0,
+                Option::<String>::None,
+            ],
+        )?;
+        let handoff = HandoffRecord {
+            bead_id: bead_id.clone(),
+            run_id: run_id.clone(),
+            summary: "done locally".to_owned(),
+            artifacts: Vec::new(),
+            lessons: Vec::new(),
+            decisions: Vec::new(),
+            warnings: Vec::new(),
+            completed_at: parse_ts("2026-03-20T06:10:00Z")?,
+        };
+
+        let operation = db.enqueue_mirror_outbox(&bead_id, &run_id, &handoff, true)?;
+        db.record_mirror_success(&operation.id, &run_id)?;
+
+        assert!(latest_mirror_pending_for_bead(&bead_id, &db)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn pending_actions_follow_outbox_close_flag() -> TestResult {
+        let timestamp = parse_ts("2026-03-20T06:15:00Z")?;
+        let base = grove_types::MirrorOutboxRecord {
+            id: "mirror-1".to_owned(),
+            bead_id: BeadId::new("grove-1"),
+            run_id: RunId::new("run-1"),
+            handoff: HandoffRecord {
+                bead_id: BeadId::new("grove-1"),
+                run_id: RunId::new("run-1"),
+                summary: "summary".to_owned(),
+                artifacts: Vec::new(),
+                lessons: Vec::new(),
+                decisions: Vec::new(),
+                warnings: Vec::new(),
+                completed_at: timestamp,
+            },
+            close_bead: false,
+            mirror_status: MirrorStatus::Pending,
+            attempt_count: 0,
+            last_attempt_at: None,
+            next_retry_after: None,
+            last_error: None,
+            created_at: timestamp,
+            updated_at: timestamp,
+        };
+
+        assert_eq!(
+            pending_actions_for_operation(&base),
+            vec!["comment".to_owned()]
+        );
+
+        let close = grove_types::MirrorOutboxRecord {
+            close_bead: true,
+            ..base
+        };
+        assert_eq!(
+            pending_actions_for_operation(&close),
+            vec!["comment".to_owned(), "close".to_owned()]
+        );
+        Ok(())
     }
 }

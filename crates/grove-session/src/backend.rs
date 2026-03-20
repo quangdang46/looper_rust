@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use camino::Utf8PathBuf;
 use std::{
     io::{BufRead, BufReader, Lines},
@@ -197,9 +197,11 @@ printf 'stderr line\n' >&2
         let result = backend.start(request);
         assert!(result.is_err());
         if let Err(error) = result {
-            assert!(error
-                .to_string()
-                .contains("spawn /definitely/missing/claude in ."));
+            assert!(
+                error
+                    .to_string()
+                    .contains("spawn /definitely/missing/claude in .")
+            );
         }
     }
 }

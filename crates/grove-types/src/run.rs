@@ -1,6 +1,124 @@
-use crate::{BeadId, CheckpointId, RunId, Timestamp, errors::InvalidTransition};
+use crate::{BeadId, CheckpointId, HandoffRecord, RunId, Timestamp, errors::InvalidTransition};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+
+/// What an agent is DOING right now - used for proactive stuck detection.
+///
+/// This is distinct from RunStatus which tracks the run lifecycle.
+/// Activity state enables autonomous response to stuck agents BEFORE timeout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentActivity {
+    /// Agent is actively thinking/writing code.
+    Active,
+    /// Agent completed a unit of work, ready for next input.
+    Ready,
+    /// Agent has been idle for too long without progress.
+    Idle,
+    /// Agent encountered an error and cannot proceed.
+    Blocked,
+    /// Agent process has terminated.
+    Exited,
+    // NOTE: NO WaitingInput - Grove design avoids requiring user input mid-run.
+}
+
+impl AgentActivity {
+    /// Map activity to autonomous action (NO human notification).
+    #[must_use]
+    pub fn autonomous_action(&self) -> AutonomousAction {
+        match self {
+            Self::Active => AutonomousAction::Continue,
+            Self::Ready => AutonomousAction::CheckpointOrHandoff,
+            Self::Idle => AutonomousAction::InjectRescuePrompt,
+            Self::Blocked => AutonomousAction::RetryWithMutation,
+            Self::Exited => AutonomousAction::RecoverOrFail,
+        }
+    }
+}
+
+/// Autonomous actions Grove can take in response to activity state.
+///
+/// All actions are fully autonomous - NO human notification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AutonomousAction {
+    /// Continue current execution.
+    Continue,
+    /// Checkpoint progress and prepare handoff to next bead.
+    CheckpointOrHandoff,
+    /// Inject rescue prompt to unblock stuck agent.
+    InjectRescuePrompt,
+    /// Retry with mutation (narrow paths, different strategy).
+    RetryWithMutation,
+    /// Create recovery capsule and either restart or fail.
+    RecoverOrFail,
+}
+
+/// Escalation tiers for progressive autonomous strategy.
+///
+/// Each tier represents a more aggressive strategy - NOT escalation to human.
+/// The tier progresses when the previous strategy fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum EscalationTier {
+    /// First attempt - normal execution.
+    #[default]
+    FirstAttempt,
+    /// Second attempt - inject rescue prompt.
+    SecondAttempt,
+    /// Third attempt - mutate strategy (narrow paths, different snippet).
+    ThirdAttempt,
+    /// Final attempt - drastic measures (switch model, re-bead).
+    FinalAttempt,
+    /// Give up - create recovery capsule and fail.
+    GiveUp,
+}
+
+impl EscalationTier {
+    /// Advance to the next escalation tier.
+    #[must_use]
+    pub fn escalate(&self) -> Self {
+        match self {
+            Self::FirstAttempt => Self::SecondAttempt,
+            Self::SecondAttempt => Self::ThirdAttempt,
+            Self::ThirdAttempt => Self::FinalAttempt,
+            Self::FinalAttempt | Self::GiveUp => Self::GiveUp,
+        }
+    }
+
+    /// Check if this is the final tier.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::GiveUp)
+    }
+
+    /// Get the tier number (0-indexed).
+    #[must_use]
+    pub fn tier_number(&self) -> u32 {
+        match self {
+            Self::FirstAttempt => 0,
+            Self::SecondAttempt => 1,
+            Self::ThirdAttempt => 2,
+            Self::FinalAttempt => 3,
+            Self::GiveUp => 4,
+        }
+    }
+}
+
+/// Policy for escalating through tiers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscalationPolicy {
+    /// Maximum number of tiers before giving up.
+    pub max_tiers: u32,
+    /// Whether to reset tier on successful progress.
+    pub reset_on_progress: bool,
+}
+
+impl Default for EscalationPolicy {
+    fn default() -> Self {
+        Self {
+            max_tiers: 4,
+            reset_on_progress: true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RunStatus {
@@ -39,6 +157,12 @@ pub struct TaskRunRecord {
     pub session_count: i32,
     pub checkpoint_count: i32,
     pub last_checkpoint_id: Option<CheckpointId>,
+    /// Current activity state for proactive stuck detection.
+    pub activity: Option<AgentActivity>,
+    /// When the activity state was last updated.
+    pub last_activity_at: Option<Timestamp>,
+    /// Current escalation tier for progressive strategy.
+    pub escalation_tier: EscalationTier,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +197,17 @@ pub enum RecoveryCapsuleOutcome {
     Checkpointed,
 }
 
+impl RecoveryCapsuleOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Failed => "failed",
+            Self::Interrupted => "interrupted",
+            Self::Checkpointed => "checkpointed",
+        }
+    }
+}
+
 impl RecoveryCapsule {
     #[must_use]
     pub fn compact_summary(&self) -> String {
@@ -84,6 +219,13 @@ impl RecoveryCapsule {
             parts.push(delta.to_owned());
         }
         parts.join(" | ")
+    }
+
+    #[must_use]
+    pub fn recommended_next_step(&self) -> Option<&str> {
+        self.checkpoint_next_step
+            .as_deref()
+            .or(self.next_attempt_contract.as_deref())
     }
 
     #[must_use]
@@ -128,31 +270,28 @@ impl RecoveryCapsule {
         if let Some(progress) = checkpoint_progress.filter(|progress| !progress.trim().is_empty()) {
             strongest_evidence.push(format!("Checkpoint progress: {}", progress.trim()));
         }
-        if let Some(next_step) = checkpoint_next_step.filter(|next_step| !next_step.trim().is_empty()) {
+        if let Some(next_step) =
+            checkpoint_next_step.filter(|next_step| !next_step.trim().is_empty())
+        {
             strongest_evidence.push(format!("Checkpoint next step: {}", next_step.trim()));
         }
         if let Some(delta) = retry_delta_summary.filter(|delta| !delta.trim().is_empty()) {
             strongest_evidence.push(format!("Retry delta: {}", delta.trim()));
         }
-        if let Some(contract) = next_attempt_contract.filter(|contract| !contract.trim().is_empty()) {
+        if let Some(contract) = next_attempt_contract.filter(|contract| !contract.trim().is_empty())
+        {
             strongest_evidence.push(format!("Next attempt contract: {}", contract.trim()));
         }
 
         let likely_root_causes = failure_class
             .map(|class| likely_root_causes_for_failure(class, failure_detail))
-            .unwrap_or_default();
+            .unwrap_or_else(|| likely_root_causes_for_outcome(outcome));
         let risky_paths = failure_class
-            .map(|class| risky_paths_for_failure(class))
-            .unwrap_or_default();
+            .map(risky_paths_for_failure)
+            .unwrap_or_else(|| risky_paths_for_outcome(outcome));
         let do_not_repeat = failure_class
-            .map(|class| do_not_repeat_for_failure(class))
-            .unwrap_or_else(|| {
-                if matches!(outcome, RecoveryCapsuleOutcome::Checkpointed) {
-                    vec!["Do not replay setup that the checkpoint already preserved.".to_owned()]
-                } else {
-                    Vec::new()
-                }
-            });
+            .map(do_not_repeat_for_failure)
+            .unwrap_or_else(|| do_not_repeat_for_outcome(outcome));
 
         let artifacts = artifacts
             .iter()
@@ -175,6 +314,46 @@ impl RecoveryCapsule {
             checkpoint_next_step: checkpoint_next_step.map(ToOwned::to_owned),
             artifacts,
         })
+    }
+}
+
+fn likely_root_causes_for_outcome(outcome: RecoveryCapsuleOutcome) -> Vec<String> {
+    match outcome {
+        RecoveryCapsuleOutcome::Failed => Vec::new(),
+        RecoveryCapsuleOutcome::Interrupted => vec![
+            "The run stopped externally even though Grove had already written recoverable state."
+                .to_owned(),
+        ],
+        RecoveryCapsuleOutcome::Checkpointed => vec![
+            "Grove intentionally rotated the session after capturing resumable progress."
+                .to_owned(),
+        ],
+    }
+}
+
+fn risky_paths_for_outcome(outcome: RecoveryCapsuleOutcome) -> Vec<String> {
+    match outcome {
+        RecoveryCapsuleOutcome::Failed => Vec::new(),
+        RecoveryCapsuleOutcome::Interrupted => vec![
+            "Restarting from scratch instead of resuming from the durable checkpoint/handoff."
+                .to_owned(),
+        ],
+        RecoveryCapsuleOutcome::Checkpointed => vec![
+            "Repeating setup that the checkpoint already preserved before proving the next step."
+                .to_owned(),
+        ],
+    }
+}
+
+fn do_not_repeat_for_outcome(outcome: RecoveryCapsuleOutcome) -> Vec<String> {
+    match outcome {
+        RecoveryCapsuleOutcome::Failed => Vec::new(),
+        RecoveryCapsuleOutcome::Interrupted => {
+            vec!["Do not discard the interrupted run's durable state when resuming.".to_owned()]
+        }
+        RecoveryCapsuleOutcome::Checkpointed => {
+            vec!["Do not replay setup that the checkpoint already preserved.".to_owned()]
+        }
     }
 }
 
@@ -232,19 +411,31 @@ fn likely_root_causes_for_failure(
 fn risky_paths_for_failure(failure_class: FailureClass) -> Vec<String> {
     match failure_class {
         FailureClass::Timeout => {
-            vec!["Broad replays that repeat setup before testing the highest-value remaining step.".to_owned()]
+            vec![
+                "Broad replays that repeat setup before testing the highest-value remaining step."
+                    .to_owned(),
+            ]
         }
         FailureClass::RateLimit => {
-            vec!["Immediate high-churn tool usage that re-enters the same rate-limit window.".to_owned()]
+            vec![
+                "Immediate high-churn tool usage that re-enters the same rate-limit window."
+                    .to_owned(),
+            ]
         }
         FailureClass::PermissionDenied => {
             vec!["Retrying the blocked operation unchanged before exploring an already-allowed path.".to_owned()]
         }
         FailureClass::CircuitOpen | FailureClass::NoProgress => {
-            vec!["Following the same debugging sequence that already failed to create progress.".to_owned()]
+            vec![
+                "Following the same debugging sequence that already failed to create progress."
+                    .to_owned(),
+            ]
         }
         FailureClass::RepeatedError => {
-            vec!["Returning to the same failing code path without an explicit root-cause check.".to_owned()]
+            vec![
+                "Returning to the same failing code path without an explicit root-cause check."
+                    .to_owned(),
+            ]
         }
         FailureClass::ProtocolMalformed => {
             vec!["Ending the attempt without validating GROVE marker formatting.".to_owned()]
@@ -253,13 +444,22 @@ fn risky_paths_for_failure(failure_class: FailureClass) -> Vec<String> {
             vec!["Replaying already-completed setup instead of resuming from durable transcript and checkpoint state.".to_owned()]
         }
         FailureClass::BrMirrorFailed => {
-            vec!["Redoing implementation work when only structured result reconstruction is needed.".to_owned()]
+            vec![
+                "Redoing implementation work when only structured result reconstruction is needed."
+                    .to_owned(),
+            ]
         }
         FailureClass::Interrupted => {
-            vec!["Restarting from scratch even though a partial run was already persisted.".to_owned()]
+            vec![
+                "Restarting from scratch even though a partial run was already persisted."
+                    .to_owned(),
+            ]
         }
         FailureClass::Unknown => {
-            vec!["Blindly replaying the last attempt without a concrete verification pivot.".to_owned()]
+            vec![
+                "Blindly replaying the last attempt without a concrete verification pivot."
+                    .to_owned(),
+            ]
         }
     }
 }
@@ -291,7 +491,10 @@ fn do_not_repeat_for_failure(failure_class: FailureClass) -> Vec<String> {
             vec!["Do not re-implement completed code to recover a mirror failure.".to_owned()]
         }
         FailureClass::Interrupted => {
-            vec!["Do not replay work already captured by the interrupted run's durable state.".to_owned()]
+            vec![
+                "Do not replay work already captured by the interrupted run's durable state."
+                    .to_owned(),
+            ]
         }
         FailureClass::Unknown => {
             vec!["Do not retry without changing the verification path.".to_owned()]
@@ -307,6 +510,53 @@ pub struct LeaderLeaseRecord {
     pub heartbeat_at: Timestamp,
     pub expires_at: Timestamp,
     pub released_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MirrorStatus {
+    Pending,
+    InProgress,
+    Succeeded,
+    Failed,
+}
+
+impl MirrorStatus {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    #[must_use]
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "in_progress" => Some(Self::InProgress),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MirrorOutboxRecord {
+    pub id: String,
+    pub bead_id: BeadId,
+    pub run_id: RunId,
+    pub handoff: HandoffRecord,
+    pub close_bead: bool,
+    pub mirror_status: MirrorStatus,
+    pub attempt_count: i32,
+    pub last_attempt_at: Option<Timestamp>,
+    pub next_retry_after: Option<Timestamp>,
+    pub last_error: Option<String>,
+    pub created_at: Timestamp,
+    pub updated_at: Timestamp,
 }
 
 impl TaskRunRecord {

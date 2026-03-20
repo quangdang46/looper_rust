@@ -10,34 +10,38 @@
 // 4. Status/inspect correctness against authoritative br state
 // 5. BV augments information rather than replacing br as source of truth
 
-use std::{
-    collections::BTreeSet,
-    env,
-    fs,
-    io::Error as IoError,
-    process::{Command, Output},
+use grove_br::{BeadCacheStore, BrClient, BrDependencySnapshot, BrIssueSummary, sync_bead_cache};
+use grove_config::{GroveConfig, GrovePaths, validate_config};
+use grove_db::{Database, reservation_patterns_overlap};
+use grove_kernel::{
+    DispatchEligibilityContext, LocalSuppressionReason, dispatch_suppression_label,
+    evaluate_dispatch_eligibility, validate_dependency_snapshot,
+};
+use grove_types::{
+    BeadId, BeadPriority, BeadRef, CircuitState, GroveBeadRecord, GroveBeadStatus,
+    ReservationConflict, RunId, Timestamp,
 };
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::{
+    collections::BTreeSet,
+    env, fs,
+    io::Error as IoError,
+    process::{Command, Output},
+};
 use tempfile::TempDir;
-use grove_br::{BrClient, BrIssueSummary, BrDependencySnapshot, BeadCacheStore, sync_bead_cache};
-use grove_config::{GroveConfig, GrovePaths, validate_config};
-use grove_db::{reservation_patterns_overlap, Database};
-use grove_kernel::{
-    DispatchEligibilityContext, LocalSuppressionReason, evaluate_dispatch_eligibility,
-    dispatch_suppression_label, validate_dependency_snapshot,
-};
-use grove_types::{
-    BeadId, BeadPriority, GroveBeadStatus, CircuitState, Timestamp, BeadRef,
-    ReservationConflict, GroveBeadRecord, RunId,
-};
 
 type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
 fn sample_paths(config: &GroveConfig) -> Result<(TempDir, GrovePaths), Box<dyn std::error::Error>> {
     let temp_dir = TempDir::new()?;
     let workspace_root = camino::Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
-        .map_err(|path| IoError::other(format!("workspace path is not valid UTF-8: {}", path.display())))?;
+        .map_err(|path| {
+            IoError::other(format!(
+                "workspace path is not valid UTF-8: {}",
+                path.display()
+            ))
+        })?;
     let config_path = workspace_root.join("grove.toml");
     fs::write(&config_path, "")?;
     let paths = GrovePaths::from_config(config, &config_path)?;
@@ -59,27 +63,47 @@ fn sample_timestamp() -> Timestamp {
 fn init_creates_database_with_migrations() -> TestResult {
     let temp_dir = TempDir::new()?;
     let workspace_root = camino::Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
-        .map_err(|path| IoError::other(format!("workspace path is not valid UTF-8: {}", path.display())))?;
+        .map_err(|path| {
+            IoError::other(format!(
+                "workspace path is not valid UTF-8: {}",
+                path.display()
+            ))
+        })?;
 
     let db_path = workspace_root.join(".grove/grove.db");
-    assert!(!std::path::Path::new(db_path.as_str()).exists(), "database should not exist before init");
+    assert!(
+        !std::path::Path::new(db_path.as_str()).exists(),
+        "database should not exist before init"
+    );
 
     let mut db = Database::open(&db_path)?;
 
     // Database file should be created
-    assert!(std::path::Path::new(db_path.as_str()).exists(), "database should be created");
+    assert!(
+        std::path::Path::new(db_path.as_str()).exists(),
+        "database should be created"
+    );
 
     db.migrate()?;
 
     // Verify migrations were applied
     let applied_migrations = db.applied_migrations()?;
-    assert_eq!(applied_migrations.len(), 3, "should have 3 applied migrations");
+    assert_eq!(
+        applied_migrations.len(),
+        4,
+        "should have 4 applied migrations"
+    );
     assert_eq!(applied_migrations[0].version, 1);
     assert_eq!(applied_migrations[0].name, "0001_init.sql");
     assert_eq!(applied_migrations[1].version, 2);
-    assert_eq!(applied_migrations[1].name, "0002_prompt_manifest_columns.sql");
+    assert_eq!(
+        applied_migrations[1].name,
+        "0002_prompt_manifest_columns.sql"
+    );
     assert_eq!(applied_migrations[2].version, 3);
     assert_eq!(applied_migrations[2].name, "0003_leader_lease.sql");
+    assert_eq!(applied_migrations[3].version, 4);
+    assert_eq!(applied_migrations[3].name, "0004_mirror_outbox.sql");
 
     // Verify tables exist by attempting to query them
     let conn = db.connection();
@@ -100,6 +124,7 @@ fn init_creates_database_with_migrations() -> TestResult {
         "leader_leases",
         "reservations",
         "event_log",
+        "mirror_outbox",
     ]);
 
     for table in expected_tables {
@@ -118,7 +143,12 @@ fn init_creates_database_with_migrations() -> TestResult {
 fn init_creates_required_directories() -> TestResult {
     let temp_dir = TempDir::new()?;
     let workspace_root = camino::Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
-        .map_err(|path| IoError::other(format!("workspace path is not valid UTF-8: {}", path.display())))?;
+        .map_err(|path| {
+            IoError::other(format!(
+                "workspace path is not valid UTF-8: {}",
+                path.display()
+            ))
+        })?;
 
     let grove_dir = workspace_root.join(".grove");
     let transcript_dir = grove_dir.join("transcripts");
@@ -170,7 +200,10 @@ fn config_validation_rejects_invalid_ranges() -> TestResult {
     config.checkpoint.rotate_pct = 0.9;
     config.checkpoint.hard_stop_pct = 0.85;
     let result = validate_config(&config, &paths);
-    assert!(result.is_err(), "hard_stop_pct < rotate_pct should be invalid");
+    assert!(
+        result.is_err(),
+        "hard_stop_pct < rotate_pct should be invalid"
+    );
 
     // Test out-of-range values
     config.checkpoint.rotate_pct = 0.8;
@@ -201,7 +234,10 @@ fn config_validation_rejects_invalid_counts() -> TestResult {
     config.scheduler.retry_max = 3;
     config.exit_policy.completion_indicator_threshold = 0;
     let result = validate_config(&config, &paths);
-    assert!(result.is_err(), "completion_indicator_threshold < 1 should be invalid");
+    assert!(
+        result.is_err(),
+        "completion_indicator_threshold < 1 should be invalid"
+    );
 
     Ok(())
 }
@@ -254,7 +290,10 @@ fn sync_bead_cache_marks_ready_beads_as_ready() -> TestResult {
 
     // br.ready() returns this bead as ready
     let _result = sync_bead_cache(
-        &FakeBrClient { ready: vec![bead.clone()], list_open: vec![bead.clone()] },
+        &FakeBrClient {
+            ready: vec![bead.clone()],
+            list_open: vec![bead.clone()],
+        },
         &mut store,
     )?;
 
@@ -272,7 +311,9 @@ fn sync_bead_cache_preserves_running_and_checkpointed_beads() -> TestResult {
     let bead = sample_issue("grove-old", "removed task", vec![], vec![]);
 
     // Mark bead as running in cache
-    store.statuses.insert(bead.id.as_str().to_owned(), GroveBeadStatus::Running);
+    store
+        .statuses
+        .insert(bead.id.as_str().to_owned(), GroveBeadStatus::Running);
 
     // br.list_open() does not return that bead (it was closed in br)
     let result = sync_bead_cache(&FakeBrClient::new(vec![]), &mut store)?;
@@ -290,7 +331,9 @@ fn sync_bead_cache_counts_removed_non_running_beads() -> TestResult {
     let bead = sample_issue("grove-old-idle", "removed task", vec![], vec![]);
 
     // Mark bead as idle in cache (not running or checkpointed)
-    store.statuses.insert(bead.id.as_str().to_owned(), GroveBeadStatus::Idle);
+    store
+        .statuses
+        .insert(bead.id.as_str().to_owned(), GroveBeadStatus::Idle);
 
     // br.list_open() does not return that bead (it was closed in br)
     let result = sync_bead_cache(&FakeBrClient::new(vec![]), &mut store)?;
@@ -315,7 +358,10 @@ fn epic_issue_type_is_not_dispatchable() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
     );
 
     Ok(())
@@ -331,7 +377,10 @@ fn tracking_issue_type_is_not_dispatchable() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
     );
 
     Ok(())
@@ -361,7 +410,10 @@ fn dispatch_no_label_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::SuppressedByLabel { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::SuppressedByLabel { .. }))
     );
 
     Ok(())
@@ -372,7 +424,10 @@ fn case_insensitive_dispatch_no_detection() -> TestResult {
     let bead = sample_bead_record(GroveBeadStatus::Ready, "task", &["DISPATCH:NO"]);
 
     let label = dispatch_suppression_label(&bead.bead.labels);
-    assert!(label.is_some(), "should detect case-insensitive dispatch:no label");
+    assert!(
+        label.is_some(),
+        "should detect case-insensitive dispatch:no label"
+    );
 
     let context = sample_context(true, CircuitState::Closed, vec![]);
     let eligibility = evaluate_dispatch_eligibility(&bead, &context);
@@ -392,7 +447,10 @@ fn running_status_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::ActiveRun { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::ActiveRun { .. }))
     );
 
     Ok(())
@@ -408,7 +466,10 @@ fn checkpointed_status_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::CheckpointPendingResume { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::CheckpointPendingResume { .. }))
     );
 
     Ok(())
@@ -424,7 +485,10 @@ fn succeeded_status_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::AlreadySucceeded))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::AlreadySucceeded))
     );
 
     Ok(())
@@ -440,7 +504,10 @@ fn failed_status_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::FailedAwaitingManualRetry))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::FailedAwaitingManualRetry))
     );
 
     Ok(())
@@ -501,7 +568,10 @@ fn circuit_open_suppresses_all_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::CircuitOpen))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::CircuitOpen))
     );
 
     Ok(())
@@ -525,7 +595,10 @@ fn reservation_conflict_suppresses_dispatch() -> TestResult {
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
     assert!(
-        eligibility.local_suppression_reasons.iter().any(|r| matches!(r, LocalSuppressionReason::ReservationConflict { .. }))
+        eligibility
+            .local_suppression_reasons
+            .iter()
+            .any(|r| matches!(r, LocalSuppressionReason::ReservationConflict { .. }))
     );
 
     Ok(())
@@ -587,7 +660,10 @@ fn kernel_status_uses_br_as_authoritative_source() -> TestResult {
 
     // When br.ready() returns this bead, it remains Ready
     let _ = sync_bead_cache(
-        &FakeBrClient { ready: vec![bead.clone()], list_open: vec![bead.clone()] },
+        &FakeBrClient {
+            ready: vec![bead.clone()],
+            list_open: vec![bead.clone()],
+        },
         &mut store,
     )?;
 
@@ -660,10 +736,16 @@ fn init_tolerates_missing_beads_and_prints_guidance() -> TestResult {
     let harness = CliHarness::new()?;
     let output = harness.run(["init"])?;
 
-    assert!(output.status.success(), "init should succeed without .beads: {}", output_text(&output));
+    assert!(
+        output.status.success(),
+        "init should succeed without .beads: {}",
+        output_text(&output)
+    );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Initialized grove workspace."));
-    assert!(stdout.contains("No .beads directory detected yet; run `br init` before `grove status` or `grove run`."));
+    assert!(stdout.contains(
+        "No .beads directory detected yet; run `br init` before `grove status` or `grove run`."
+    ));
     assert!(stdout.contains("`bv` does not see a .beads directory yet"));
 
     Ok(())
@@ -674,7 +756,10 @@ fn status_requires_beads_directory() -> TestResult {
     let harness = CliHarness::new()?;
     let output = harness.run(["status"])?;
 
-    assert!(!output.status.success(), "status should fail without .beads");
+    assert!(
+        !output.status.success(),
+        "status should fail without .beads"
+    );
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("does not contain a .beads directory; run `br init` first"));
 
@@ -686,9 +771,16 @@ fn status_reports_bv_unavailable_but_still_succeeds() -> TestResult {
     let harness = CliHarness::new()?;
     harness.enable_beads()?;
 
-    let output = harness.run_with_env(["status"], [("GROVE_TEST_BV_TRIAGE_FAIL", "bv triage unavailable in test")])?;
+    let output = harness.run_with_env(
+        ["status"],
+        [("GROVE_TEST_BV_TRIAGE_FAIL", "bv triage unavailable in test")],
+    )?;
 
-    assert!(output.status.success(), "status should degrade gracefully when bv triage fails: {}", output_text(&output));
+    assert!(
+        output.status.success(),
+        "status should degrade gracefully when bv triage fails: {}",
+        output_text(&output)
+    );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Workspace: "));
     assert!(stdout.contains("Ready queue:"));
@@ -707,7 +799,11 @@ fn inspect_merges_br_detail_with_local_runtime_view() -> TestResult {
 
     let output = harness.run(["inspect", "grove-cli-test"])?;
 
-    assert!(output.status.success(), "inspect should succeed with br detail and local cache: {}", output_text(&output));
+    assert!(
+        output.status.success(),
+        "inspect should succeed with br detail and local cache: {}",
+        output_text(&output)
+    );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Bead: grove-cli-test — CLI inspect test"));
     assert!(stdout.contains("Description:\nDetailed CLI inspect description"));
@@ -728,11 +824,15 @@ fn inspect_from_nested_directory_loads_relative_prompt_manifest() -> TestResult 
 
     let output = harness.run_from_dir(["inspect", "grove-cli-test"], nested_dir.as_std_path())?;
 
-    assert!(output.status.success(), "inspect should resolve workspace root from nested directory: {}", output_text(&output));
+    assert!(
+        output.status.success(),
+        "inspect should resolve workspace root from nested directory: {}",
+        output_text(&output)
+    );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("- prompt manifest: .grove/prompts/prompt-cli-test.json"));
     assert!(stdout.contains("- prompt contract: implement"));
-    assert!(stdout.contains("- section 1 [task] included=yes heading=Task"));
+    assert!(stdout.contains("- #1 Task [task] included=true tokens=20 trim="));
     assert!(stdout.contains("preview: [TASK] inspect from nested cwd"));
 
     Ok(())
@@ -745,7 +845,10 @@ fn inspect_errors_when_br_and_local_cache_both_absent() -> TestResult {
 
     let output = harness.run(["inspect", "grove-missing"])?;
 
-    assert!(!output.status.success(), "inspect should fail when bead is absent everywhere");
+    assert!(
+        !output.status.success(),
+        "inspect should fail when bead is absent everywhere"
+    );
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("bead grove-missing was not found in br or the local Grove cache"));
 
@@ -782,7 +885,10 @@ fn bv_augments_br_does_not_replace_authority() -> TestResult {
     assert!(!bv_reason.is_empty(), "BV provides reasoning");
 
     // 3. The authoritative bead data comes from br (title, status, etc.)
-    assert_eq!(bead.title, "triaged task", "bead title from br is authoritative");
+    assert_eq!(
+        bead.title, "triaged task",
+        "bead title from br is authoritative"
+    );
     assert_eq!(bead.status, "open", "bead status from br is authoritative");
 
     // In Grove's dispatch logic, we use br.ready() to determine
@@ -918,8 +1024,11 @@ fn sample_bead_record(
     labels: &[&str],
 ) -> GroveBeadRecord {
     let now: Timestamp = sample_timestamp();
-    let last_run_id = matches!(grove_status, GroveBeadStatus::Running | GroveBeadStatus::Checkpointed)
-        .then(|| RunId::new("run-test"));
+    let last_run_id = matches!(
+        grove_status,
+        GroveBeadStatus::Running | GroveBeadStatus::Checkpointed
+    )
+    .then(|| RunId::new("run-test"));
 
     GroveBeadRecord {
         bead: BeadRef {
@@ -1000,7 +1109,10 @@ struct FakeStore {
 }
 
 impl BeadCacheStore for FakeStore {
-    fn upsert_bead_cache(&mut self, bead: &BrIssueSummary) -> anyhow::Result<grove_br::UpsertOutcome> {
+    fn upsert_bead_cache(
+        &mut self,
+        bead: &BrIssueSummary,
+    ) -> anyhow::Result<grove_br::UpsertOutcome> {
         let outcome = if self.beads.contains_key(bead.id.as_str()) {
             grove_br::UpsertOutcome::Updated
         } else {
@@ -1035,7 +1147,11 @@ impl BeadCacheStore for FakeStore {
             .collect())
     }
 
-    fn set_grove_status(&mut self, bead_id: &BeadId, status: GroveBeadStatus) -> anyhow::Result<()> {
+    fn set_grove_status(
+        &mut self,
+        bead_id: &BeadId,
+        status: GroveBeadStatus,
+    ) -> anyhow::Result<()> {
         self.statuses.insert(bead_id.as_str().to_owned(), status);
         Ok(())
     }
@@ -1090,6 +1206,27 @@ impl BrClient for FakeBrClient {
             beads_dir_exists: true,
         })
     }
+
+    fn close_bead(
+        &self,
+        _id: &BeadId,
+        _reason: Option<&str>,
+    ) -> anyhow::Result<(), grove_br::BrError> {
+        Ok(())
+    }
+
+    fn add_comment(&self, _id: &BeadId, _comment: &str) -> anyhow::Result<(), grove_br::BrError> {
+        Ok(())
+    }
+
+    fn mirror_handoff(
+        &self,
+        _id: &BeadId,
+        _handoff: &grove_types::HandoffRecord,
+        _close_bead: bool,
+    ) -> anyhow::Result<(), grove_br::BrError> {
+        Ok(())
+    }
 }
 
 struct CliHarness {
@@ -1102,11 +1239,19 @@ impl CliHarness {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let temp_dir = TempDir::new()?;
         let workspace_root = camino::Utf8PathBuf::from_path_buf(temp_dir.path().to_path_buf())
-            .map_err(|path| IoError::other(format!("workspace path is not valid UTF-8: {}", path.display())))?;
+            .map_err(|path| {
+                IoError::other(format!(
+                    "workspace path is not valid UTF-8: {}",
+                    path.display()
+                ))
+            })?;
         let bin_dir = workspace_root.join("test-bin");
         fs::create_dir_all(&bin_dir)?;
 
-        fs::write(workspace_root.join("grove.toml"), toml::to_string_pretty(&GroveConfig::default())?)?;
+        fs::write(
+            workspace_root.join("grove.toml"),
+            toml::to_string_pretty(&GroveConfig::default())?,
+        )?;
 
         write_executable(&bin_dir.join("claude"), CLAUDE_STUB)?;
         write_executable(&bin_dir.join("br"), BR_STUB)?;
@@ -1124,7 +1269,10 @@ impl CliHarness {
         Ok(())
     }
 
-    fn seed_runtime_bead(&self, grove_status: GroveBeadStatus) -> Result<(), Box<dyn std::error::Error>> {
+    fn seed_runtime_bead(
+        &self,
+        grove_status: GroveBeadStatus,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut db = Database::open(&self.workspace_root.join(".grove/grove.db"))?;
         db.migrate()?;
         let bead = sample_issue("grove-cli-test", "CLI inspect test", vec![], vec![]);
@@ -1141,7 +1289,8 @@ impl CliHarness {
         self.seed_runtime_bead(grove_status)?;
         fs::create_dir_all(self.workspace_root.join(".grove/prompts"))?;
         fs::write(
-            self.workspace_root.join(".grove/prompts/prompt-cli-test.json"),
+            self.workspace_root
+                .join(".grove/prompts/prompt-cli-test.json"),
             serde_json::to_string(&grove_types::PromptManifest {
                 prompt_id: grove_types::PromptId::new("prompt-cli-test"),
                 bead_id: grove_types::BeadId::new("grove-cli-test"),

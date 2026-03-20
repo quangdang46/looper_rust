@@ -43,7 +43,10 @@ pub struct CheckpointPromptInput {
 
 pub fn materialize_prompt(input: PromptMaterializationInput) -> PromptMaterialization {
     let mut sections = vec![build_contract_section(input.contract)];
-    sections.push(build_task_section(&input.task_title, &input.task_description));
+    sections.push(build_task_section(
+        &input.task_title,
+        &input.task_description,
+    ));
 
     for reservation in &input.reservation_hints {
         sections.push(build_text_section(
@@ -138,7 +141,10 @@ fn apply_budget(sections: Vec<PromptSegment>, token_budget: Option<u32>) -> Budg
     let mut trimmed_ordinals = std::collections::BTreeMap::new();
 
     if let Some(limit) = token_budget {
-        let mut current_tokens: u32 = sections.iter().map(|section| section.estimated_tokens).sum();
+        let mut current_tokens: u32 = sections
+            .iter()
+            .map(|section| section.estimated_tokens)
+            .sum();
 
         let trim_order = [
             (
@@ -170,7 +176,8 @@ fn apply_budget(sections: Vec<PromptSegment>, token_budget: Option<u32>) -> Budg
                 }
                 if included[index] && sections[index].kind == kind {
                     included[index] = false;
-                    current_tokens = current_tokens.saturating_sub(sections[index].estimated_tokens);
+                    current_tokens =
+                        current_tokens.saturating_sub(sections[index].estimated_tokens);
                     trimmed_ordinals.insert(index, reason);
                 }
             }
@@ -249,7 +256,12 @@ fn build_checkpoint_section(checkpoint: &CheckpointPromptInput) -> PromptSegment
 }
 
 fn build_protocol_section(protocol_block: &str) -> PromptSegment {
-    build_text_section(PromptSegmentKind::Protocol, 70, "Grove protocol", protocol_block)
+    build_text_section(
+        PromptSegmentKind::Protocol,
+        70,
+        "Grove protocol",
+        protocol_block,
+    )
 }
 
 fn build_text_section(
@@ -291,10 +303,11 @@ fn estimate_tokens(text: &str) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        materialize_prompt, CheckpointPromptInput, PromptMaterializationInput,
+    use super::{CheckpointPromptInput, PromptMaterializationInput, materialize_prompt};
+    use grove_types::{
+        BeadId, CheckpointId, ExecutionContract, PromptId, PromptSegmentKind, PromptTrimReason,
+        RunId, Timestamp,
     };
-    use grove_types::{BeadId, CheckpointId, ExecutionContract, PromptSegmentKind, PromptTrimReason, PromptId, RunId, Timestamp};
     use std::error::Error;
 
     type TestResult = Result<(), Box<dyn Error>>;
@@ -354,10 +367,16 @@ mod tests {
         let implement = materialize_prompt(sample_input(ExecutionContract::Implement));
         let retry = materialize_prompt(sample_input(ExecutionContract::RetryRescue));
 
-        assert!(implement.rendered_prompt.contains("Implement the requested change directly"));
-        assert!(retry
-            .rendered_prompt
-            .contains("Retry the task with a changed approach"));
+        assert!(
+            implement
+                .rendered_prompt
+                .contains("Implement the requested change directly")
+        );
+        assert!(
+            retry
+                .rendered_prompt
+                .contains("Retry the task with a changed approach")
+        );
     }
 
     #[test]
@@ -406,9 +425,11 @@ mod tests {
             .find(|section| section.kind == PromptSegmentKind::RescueCard)
             .ok_or("missing rescue-card section")?;
         assert!(rescue_card.included);
-        assert!(materialized
-            .rendered_prompt
-            .contains("Avoid replaying the repeated parse failure."));
+        assert!(
+            materialized
+                .rendered_prompt
+                .contains("Avoid replaying the repeated parse failure.")
+        );
         Ok(())
     }
 

@@ -118,7 +118,10 @@ pub(crate) fn parse_list_output(text: &str) -> Result<Vec<BrIssueSummary>, serde
         .collect()
 }
 
-pub(crate) fn parse_show_output(text: &str, bead_id: &BeadId) -> Result<BrIssueDetail, ShowParseError> {
+pub(crate) fn parse_show_output(
+    text: &str,
+    bead_id: &BeadId,
+) -> Result<BrIssueDetail, ShowParseError> {
     match serde_json::from_str::<IssueWire>(text) {
         Ok(issue) => BrIssueDetail::try_from(issue).map_err(ShowParseError::Serde),
         Err(object_error) => match serde_json::from_str::<Vec<IssueWire>>(text) {
@@ -188,7 +191,10 @@ pub enum ShowParseError {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum ReadyWire {
-    Envelope { issues: Vec<IssueWire>, count: usize },
+    Envelope {
+        issues: Vec<IssueWire>,
+        count: usize,
+    },
     List(Vec<IssueWire>),
 }
 
@@ -346,7 +352,11 @@ impl TryFrom<CommentWire> for BrComment {
             id: match value.id {
                 Value::String(text) => text,
                 Value::Number(number) => number.to_string(),
-                other => return Err(serde_json::Error::custom(format!("unsupported comment id: {other}"))),
+                other => {
+                    return Err(serde_json::Error::custom(format!(
+                        "unsupported comment id: {other}"
+                    )));
+                }
             },
             text: value.text,
             author: value.author,
@@ -450,7 +460,9 @@ mod tests {
     #[test]
     fn parse_show_empty_array_is_not_found() -> TestResult {
         let bead_id = BeadId::new("missing");
-        let err = parse_show_output("[]", &bead_id).err().ok_or_else(|| IoError::other("expected error"))?;
+        let err = parse_show_output("[]", &bead_id)
+            .err()
+            .ok_or_else(|| IoError::other("expected error"))?;
         assert!(matches!(err, ShowParseError::NotFound(id) if id == bead_id));
         Ok(())
     }
