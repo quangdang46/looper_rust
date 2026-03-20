@@ -1,6 +1,7 @@
 pub mod dispatch;
 pub mod inspect_view;
 pub mod status_view;
+pub mod archive;
 
 use anyhow::{Context, Result};
 use grove_br::{BrClient, BrDependencySnapshot};
@@ -241,6 +242,26 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
                 .into());
             }
             self.checkpoint = Some(checkpoint);
+        }
+
+        if let Ok(replay) = grove_session::transcript::replay_transcript(&result.outcome.session.transcript_path) {
+            if let Ok(mut archived) = crate::archive::ingest_transcript_to_archive(
+                self.bead_id.clone(),
+                self.run_id.clone(),
+                self.session_id.clone(),
+                &replay,
+            ) {
+                archived.source_path = camino::Utf8PathBuf::from(result.outcome.session.transcript_path.clone());
+                
+                let source_record = grove_types::archive::SourceRecord {
+                    id: grove_types::SourceId::new("transcript"),
+                    source_path: archived.source_path.clone(),
+                    origin_host: None,
+                    metadata_json: serde_json::json!({}),
+                };
+                let _ = self.db.insert_source_record(&source_record);
+                let _ = self.db.insert_conversation_record(&archived);
+            }
         }
 
         self.latest_outcome = Some(result.outcome.clone());
