@@ -31,8 +31,22 @@ pub fn ingest_lessons(
 
         let hash = content_hash(trimmed);
 
-        // Check for exact duplicate (content hash)
-        if let Some(existing_id) = db.find_bullet_by_hash(&hash)? {
+        // Fetch existing bullets to check for approximate duplicates
+        let existing_bullets = db.list_non_retired_bullets().unwrap_or_default();
+
+        let mut matched_id = db.find_bullet_by_hash(&hash)?;
+
+        if matched_id.is_none() {
+            // Check approximate duplicate (Jaccard similarity >= 0.75)
+            for (id, existing_text) in &existing_bullets {
+                if jaccard_similarity(trimmed, existing_text) >= 0.75 {
+                    matched_id = Some(id.clone());
+                    break;
+                }
+            }
+        }
+
+        if let Some(existing_id) = matched_id {
             // Reinforce existing bullet with Helpful feedback
             db.record_playbook_feedback(
                 &existing_id,
@@ -48,7 +62,7 @@ pub fn ingest_lessons(
             db.log_curation_action(
                 &existing_id,
                 "reinforce",
-                Some("duplicate lesson reinforced via ingest"),
+                Some("duplicate/similar lesson reinforced via ingest"),
                 None,
                 None,
                 None,
@@ -137,4 +151,20 @@ fn content_hash(text: &str) -> String {
     let mut hasher = DefaultHasher::new();
     normalized.hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+/// Computes the Jaccard similarity coefficient between two strings based on their word tokens.
+fn jaccard_similarity(a: &str, b: &str) -> f64 {
+    use std::collections::HashSet;
+    let tokens_a: HashSet<&str> = a.split_whitespace().collect();
+    let tokens_b: HashSet<&str> = b.split_whitespace().collect();
+
+    if tokens_a.is_empty() && tokens_b.is_empty() {
+        return 1.0;
+    }
+
+    let intersection = tokens_a.intersection(&tokens_b).count() as f64;
+    let union = tokens_a.union(&tokens_b).count() as f64;
+
+    intersection / union
 }

@@ -4,6 +4,7 @@ pub mod status_view;
 pub mod archive;
 pub mod lesson_ingest;
 pub mod scoring;
+pub mod diary;
 
 use anyhow::{Context, Result};
 use grove_br::{BrClient, BrDependencySnapshot};
@@ -276,6 +277,15 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
                 &result.protocol_state.lessons,
             );
         }
+
+        // Apply implicit outcome feedback to any playbook bullets injected during this session
+        let _ = crate::diary::apply_outcome_feedback(
+            self.db,
+            &self.bead_id,
+            &self.run_id,
+            &result.outcome,
+            result.outcome.session.ordinal_in_run > 1,
+        );
 
         self.latest_outcome = Some(result.outcome.clone());
         Ok(())

@@ -255,7 +255,23 @@ impl Database {
             params![hash],
             |row| row.get(0),
         ).optional()?;
-        Ok(result.map(BulletId::new))
+    /// List all non-retired bullets (ID, text) for approximate deduplication in memory.
+    pub fn list_non_retired_bullets(&self) -> Result<Vec<(BulletId, String)>> {
+        let mut stmt = self.connection().prepare(
+            "SELECT id, text FROM playbook_bullets WHERE state != 'retired'"
+        )?;
+        
+        let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(BulletId, String)> {
+            let id: String = row.get(0)?;
+            let text: String = row.get(1)?;
+            Ok((BulletId::new(id), text))
+        };
+
+        let mut results = Vec::new();
+        for row in stmt.query_map([], map_row)? {
+            results.push(row?);
+        }
+        Ok(results)
     }
 }
 
