@@ -14,7 +14,7 @@ use grove_types::{
     BeadId, CheckpointRecord, ClaudeSessionRecord, EventLogRecord, GroveBeadRecord,
     GroveBeadStatus, HandoffRecord, PlaybookBulletRecord, PromptManifest, RecoveryCapsule,
     RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord,
-    Timestamp,
+    Timestamp, DispatchDecisionRecord, PromptMaterializationRecord,
 };
 use std::fs;
 
@@ -129,6 +129,9 @@ pub fn load_inspect_snapshot<C: BrClient>(
         .collect();
     let mirror_pending = latest_mirror_pending_for_bead(bead_id, db)?;
 
+    let historical_dispatch_decisions = db.list_dispatch_decisions_for_bead(bead_id, 10).unwrap_or_default();
+    let prompt_materializations = db.list_prompt_materializations_for_bead(bead_id).unwrap_or_default();
+
     Ok(Some(InspectSnapshot {
         bead,
         dependencies: dependency_snapshot
@@ -142,6 +145,8 @@ pub fn load_inspect_snapshot<C: BrClient>(
             .map(|dependent_id| dependency_edge_view(br, dependent_id, &bead_index))
             .collect(),
         latest_dispatch,
+        historical_dispatch_decisions,
+        prompt_materializations,
         runs,
         latest_session,
         latest_checkpoint,
@@ -306,6 +311,8 @@ pub struct InspectSnapshot {
     pub dependencies: Vec<DependencyEdgeView>,
     pub dependents: Vec<DependencyEdgeView>,
     pub latest_dispatch: Option<DispatchDecisionView>,
+    pub historical_dispatch_decisions: Vec<DispatchDecisionRecord>,
+    pub prompt_materializations: Vec<PromptMaterializationRecord>,
     pub runs: Vec<TaskRunRecord>,
     pub latest_session: Option<SessionSummaryView>,
     pub latest_checkpoint: Option<CheckpointSummaryView>,
@@ -335,6 +342,8 @@ impl InspectSnapshot {
             dependencies: self.dependencies,
             dependents: self.dependents,
             latest_dispatch: self.latest_dispatch,
+            historical_dispatch_decisions: self.historical_dispatch_decisions,
+            prompt_materializations: self.prompt_materializations,
             latest_run,
             run_history,
             latest_session: self.latest_session,
@@ -355,6 +364,8 @@ pub struct BeadInspectView {
     pub dependencies: Vec<DependencyEdgeView>,
     pub dependents: Vec<DependencyEdgeView>,
     pub latest_dispatch: Option<DispatchDecisionView>,
+    pub historical_dispatch_decisions: Vec<DispatchDecisionRecord>,
+    pub prompt_materializations: Vec<PromptMaterializationRecord>,
     pub latest_run: Option<TaskRunRecord>,
     pub run_history: Vec<RunSummaryView>,
     pub latest_session: Option<SessionSummaryView>,

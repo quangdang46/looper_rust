@@ -15,6 +15,8 @@ use grove_types::{
     RunStatus, SessionId, SessionStatus, StopReason, TaskRunRecord, Timestamp,
 };
 
+mod ops;
+
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
 use serde_json::Value;
 
@@ -162,6 +164,11 @@ const MIGRATION_MANIFEST: &[Migration<'_>] = &[
         version: 4,
         name: "0004_mirror_outbox.sql",
         sql: include_str!("../migrations/0004_mirror_outbox.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "0005_operational_schema.sql",
+        sql: include_str!("../migrations/0005_operational_schema.sql"),
     },
 ];
 

@@ -4,6 +4,7 @@ mod errors;
 mod event;
 mod handoff;
 mod ids;
+mod ops;
 mod playbook;
 mod priority;
 mod prompt;
@@ -27,6 +28,9 @@ pub use event::{
 };
 pub use handoff::HandoffRecord;
 pub use ids::{BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, TickId};
+pub use ops::{
+    ConfigSnapshotRecord, DispatchDecisionRecord, IntegrityCheckRecord, PromptMaterializationRecord,
+};
 pub use playbook::{
     BulletMaturity, BulletScope, BulletState, BulletType, FeedbackEventRecord, FeedbackKind,
     MemoryDiaryRecord, PlaybookBulletRecord,
