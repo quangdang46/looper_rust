@@ -1,4 +1,7 @@
-use crate::{BeadId, CheckpointId, HandoffRecord, RunId, Timestamp, errors::InvalidTransition};
+use crate::{
+    BeadId, CheckpointId, HandoffRecord, RunId, Timestamp, errors::InvalidTransition,
+    reaction::MutationStrategy,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -184,35 +187,6 @@ impl std::fmt::Display for CoordinatorStopReason {
             Self::LeaderContested => write!(f, "leader lease contested"),
             Self::MaxPollCycles => write!(f, "exceeded max poll cycles"),
             Self::InternalError => write!(f, "internal error"),
-        }
-    }
-}
-
-/// Mutation strategies for progressive escalation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MutationStrategy {
-    /// Narrow the claimed paths to reduce scope.
-    NarrowClaimedPaths,
-    /// Use a different archive snippet for context.
-    DifferentArchiveSnippet,
-    /// Provide an alternative framing for the bead contract.
-    AlternativeBeadContract,
-    /// Reduce the context window budget.
-    ReduceContextWindow,
-    /// Switch to a different model.
-    SwitchModel,
-}
-
-impl MutationStrategy {
-    /// Human-readable label.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::NarrowClaimedPaths => "narrow_claimed_paths",
-            Self::DifferentArchiveSnippet => "different_archive_snippet",
-            Self::AlternativeBeadContract => "alternative_bead_contract",
-            Self::ReduceContextWindow => "reduce_context_window",
-            Self::SwitchModel => "switch_model",
         }
     }
 }

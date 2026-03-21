@@ -1447,7 +1447,7 @@ impl Database {
              WHERE bead_id = ?1",
             params![
                 bead_id.as_str(),
-                encode_grove_status(GroveBeadStatus::Ready),
+                encode_grove_bead_status(GroveBeadStatus::Ready),
                 timestamp_string(now)
             ],
         )
@@ -1489,62 +1489,6 @@ impl Database {
             .collect()
     }
 
-    pub fn latest_session_for_run(&self, run_id: &RunId) -> Result<Option<ClaudeSessionRecord>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, run_id, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path \
-                 FROM claude_sessions \
-                 WHERE run_id = ?1 \
-                 ORDER BY started_at DESC LIMIT 1",
-            )
-            .context("prepare latest session query")?;
-
-        let row = stmt
-            .query_row([run_id.as_str()], raw_session_row)
-            .optional()
-            .context("query latest session")?;
-
-        row.map(raw_session_into_record).transpose()
-    }
-
-    pub fn latest_checkpoint_for_bead(&self, bead_id: &BeadId) -> Result<Option<CheckpointRecord>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, bead_id, run_id, session_id, progress, next_step, payload_json, saved_at, resume_generation \
-                 FROM checkpoints \
-                 WHERE bead_id = ?1 \
-                 ORDER BY saved_at DESC LIMIT 1",
-            )
-            .context("prepare latest checkpoint query")?;
-
-        let row = stmt
-            .query_row([bead_id.as_str()], raw_checkpoint_row)
-            .optional()
-            .context("query latest checkpoint")?;
-
-        row.map(raw_checkpoint_into_record).transpose()
-    }
-
-    pub fn handoff_for_bead(&self, bead_id: &BeadId) -> Result<Option<HandoffRecord>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT bead_id, run_id, summary, artifacts_json, lessons_json, decisions_json, warnings_json, completed_at \
-                 FROM handoffs \
-                 WHERE bead_id = ?1 \
-                 ORDER BY completed_at DESC LIMIT 1",
-            )
-            .context("prepare latest handoff query")?;
-
-        let row = stmt
-            .query_row([bead_id.as_str()], raw_handoff_row)
-            .optional()
-            .context("query latest handoff")?;
-
-        row.map(raw_handoff_into_record).transpose()
-    }
 
     pub fn acquire_reservations(
         &mut self,
@@ -3434,7 +3378,7 @@ mod tests {
         db.migrate()?;
 
         let migrations = db.applied_migrations()?;
-        assert_eq!(migrations.len(), 4);
+        assert_eq!(migrations.len(), 9);
         assert_eq!(
             migrations[0],
             MigrationState {
@@ -3461,6 +3405,41 @@ mod tests {
             MigrationState {
                 version: 4,
                 name: "0004_mirror_outbox.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[4],
+            MigrationState {
+                version: 5,
+                name: "0005_operational_schema.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[5],
+            MigrationState {
+                version: 6,
+                name: "0006_observability.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[6],
+            MigrationState {
+                version: 7,
+                name: "0007_archive_fts.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[7],
+            MigrationState {
+                version: 8,
+                name: "0008_archive_watermarks.sql".into(),
+            }
+        );
+        assert_eq!(
+            migrations[8],
+            MigrationState {
+                version: 9,
+                name: "0009_playbook.sql".into(),
             }
         );
         Ok(())

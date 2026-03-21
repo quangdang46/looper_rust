@@ -1050,6 +1050,8 @@ mod tests {
                 ready_minutes: Some(5),
                 bv_score: Some(0.75),
             }),
+            historical_dispatch_decisions: Vec::new(),
+            prompt_materializations: Vec::new(),
             runs: vec![TaskRunRecord {
                 id: RunId::new("run-1"),
                 bead_id: BeadId::new("grove-1"),

@@ -64,6 +64,8 @@ fn sample_request(workspace_dir: Utf8PathBuf) -> SingleTaskSessionRequest {
         retry_delta_summary: None,
         token_budget: Some(2_000),
         ordinal_in_run: 1,
+        archive_bundle: None,
+        playbook_rules: Vec::new(),
         env: Vec::new(),
     }
 }

@@ -1,7 +1,7 @@
 use anyhow::Result;
-use grove_session::transcript::TranscriptReplay;
+use grove_session::TranscriptReplay;
 use grove_types::{
-    BeadId, RunId, SessionId, Timestamp,
+    BeadId, RunId, SessionId,
     archive::{ConversationRecord, MessageRecord, MessageRole, SnippetRecord},
     TranscriptEvent,
 };
@@ -26,11 +26,11 @@ pub fn ingest_transcript_to_archive(
         match event {
             TranscriptEvent::SessionStarted { ts, .. } => {
                 if started_at.is_none() {
-                    started_at = Some(*ts);
+                    started_at = Some(ts.clone());
                 }
             }
             TranscriptEvent::SessionEnded { ts, .. } => {
-                ended_at = Some(*ts);
+                ended_at = Some(ts.clone());
             }
             TranscriptEvent::StdoutLine { line, .. } => {
                 agent_lines.push(line.clone());
@@ -82,8 +82,8 @@ fn extract_markdown_snippets(content: &str) -> Vec<SnippetRecord> {
     let re = Regex::new(r"(?s)```(\w+)?\n(.*?)```").expect("valid regex");
 
     for cap in re.captures_iter(content) {
-        let language = cap.get(1).map(|m| m.as_str().to_string());
-        let snippet_text = cap.get(2).map(|m| m.as_str().to_string());
+        let language = cap.get(1).map(|m: regex::Match<'_>| m.as_str().to_string());
+        let snippet_text = cap.get(2).map(|m: regex::Match<'_>| m.as_str().to_string());
         snippets.push(SnippetRecord {
             id: None,
             file_path: None,

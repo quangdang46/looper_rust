@@ -7,7 +7,8 @@ use grove_types::{
     prompt::{PromptManifest, PromptManifestSection, PromptSegmentKind, PromptSectionProvenance},
 };
 use tempfile::TempDir;
-use grove_kernel::{ScoringConfig, diary, scoring, lesson_ingest};
+use grove_kernel::{diary, lesson_ingest, scoring};
+use grove_kernel::scoring::ScoringConfig;
 use std::fs;
 
 // 1. Outcome-derived feedback creates events
@@ -15,7 +16,9 @@ use std::fs;
 fn test_diary_implicit_feedback() {
     let temp = TempDir::new().unwrap();
     let db_path = temp.path().join("grove.db");
+    let db_path = camino::Utf8PathBuf::from_path_buf(db_path).unwrap();
     let mut db = Database::open(&db_path).unwrap();
+    db.migrate().unwrap();
 
     let bead_id = BeadId::new("test-1");
     let run_id = RunId::new("run-1");
@@ -119,7 +122,7 @@ fn test_diary_implicit_feedback() {
     assert_eq!(updated_bullet.helpful_count, 1, "Should have received helpful feedback from Completed outcome");
     
     // Now simulate a crash and apply again
-    outcome.session.status = SessionStatus::Crash;
+    outcome.session.status = SessionStatus::Crashed;
     outcome.session.ended_at = Some(Utc::now() + chrono::Duration::seconds(4000)); // over an hour
     outcome.analysis.warnings = vec!["warning".to_string(), "warning".to_string()]; // 2 errors
     diary::apply_outcome_feedback(&mut db, &bead_id, &run_id, &outcome, true).unwrap();
@@ -133,7 +136,9 @@ fn test_diary_implicit_feedback() {
 fn test_lesson_deduplication() {
     let temp = TempDir::new().unwrap();
     let db_path = temp.path().join("grove.db");
+    let db_path = camino::Utf8PathBuf::from_path_buf(db_path).unwrap();
     let mut db = Database::open(&db_path).unwrap();
+    db.migrate().unwrap();
 
     let bead_id = BeadId::new("test-1");
     let run_id = RunId::new("run-1");
@@ -158,7 +163,7 @@ fn test_lesson_deduplication() {
     assert_eq!(approx_created, 0);
 
     // Verify it received helpful points for the duplicate ingestions
-    let bullets = db.list_active_bullets(None).unwrap();
+    let bullets = db.list_non_retired_playbook_bullets(None).unwrap();
     assert_eq!(bullets.len(), 1);
     assert_eq!(bullets[0].helpful_count, 3); // 1 initial + 2 reinforces
 }
@@ -168,7 +173,9 @@ fn test_lesson_deduplication() {
 fn test_scoring_anti_pattern_inversion() {
     let temp = TempDir::new().unwrap();
     let db_path = temp.path().join("grove.db");
+    let db_path = camino::Utf8PathBuf::from_path_buf(db_path).unwrap();
     let mut db = Database::open(&db_path).unwrap();
+    db.migrate().unwrap();
 
     let run_id = RunId::new("run-1");
 
@@ -216,9 +223,10 @@ fn test_scoring_anti_pattern_inversion() {
     };
     scoring::run_scoring_pass(&mut db, &config).unwrap();
 
-    // Bullet should now be deprecated
-    let old_bullet = db.get_playbook_bullet(&bullet_id).unwrap();
-    assert!(old_bullet.is_none(), "Active listing ignores retired bullets");
+    // Bullet should now be deprecated/retired
+    let old_bullet = db.get_playbook_bullet(&bullet_id).unwrap().unwrap();
+    assert_eq!(old_bullet.state, BulletState::Retired);
+    assert_eq!(old_bullet.maturity, BulletMaturity::Deprecated);
 
     // But wait, there should be a new inverted rule in draft!
     let all_bullets = db.list_non_retired_bullets().unwrap();

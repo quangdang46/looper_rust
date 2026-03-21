@@ -437,7 +437,7 @@ fn status_from_terminal_class(terminal_class: SessionTerminalClass) -> SessionSt
         SessionTerminalClass::RateLimit => SessionStatus::RateLimited,
         SessionTerminalClass::PermissionDenied => SessionStatus::PermissionDenied,
         SessionTerminalClass::Crash => SessionStatus::Crashed,
-        SessionTerminalClass::VerifyFailed => SessionStatus::Failed,
+        SessionTerminalClass::VerifyFailed => SessionStatus::UnknownFailure,
         SessionTerminalClass::UnknownFailure => SessionStatus::UnknownFailure,
     }
 }

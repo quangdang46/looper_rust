@@ -18,7 +18,9 @@ grove-db = { path = "../grove-db" }
 grove-session = { path = "../grove-session" }
 grove-types = { path = "../grove-types" }
 serde_json.workspace = true
+camino.workspace = true
 ctrlc = "3"
+regex = "1"
 
 [dev-dependencies]
 camino.workspace = true

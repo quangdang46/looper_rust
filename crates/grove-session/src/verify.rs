@@ -4,7 +4,6 @@
 //! as defined in PLAN.md §1.4.8.
 
 use std::process::Command;
-use camino::Utf8PathBuf;
 use grove_types::{ExecutionContract, PromptManifest};
 
 /// Pragmatic modes of verification.
@@ -24,7 +23,10 @@ impl VerificationMode {
     /// Select a verification mode based on the execution contract and project environment.
     pub fn infer(contract: ExecutionContract, workspace_dir: &camino::Utf8Path) -> Self {
         match contract {
-            ExecutionContract::SingleTask | ExecutionContract::RetryRescue | ExecutionContract::Resume => {
+            ExecutionContract::Implement
+            | ExecutionContract::SingleTask
+            | ExecutionContract::RetryRescue
+            | ExecutionContract::Resume => {
                 if workspace_dir.join("Cargo.toml").exists() {
                     Self::RustCompileCheck
                 } else if workspace_dir.join("package.json").exists() {

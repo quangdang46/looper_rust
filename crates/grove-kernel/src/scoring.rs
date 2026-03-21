@@ -165,7 +165,7 @@ pub fn target_maturity(
 ///
 /// Returns the number of bullets that changed maturity.
 pub fn run_scoring_pass(db: &mut Database, config: &ScoringConfig) -> Result<usize> {
-    let bullets = db.list_active_bullets(None)?;
+    let bullets = db.list_non_retired_playbook_bullets(None)?;
     let mut changed = 0;
 
     for bullet in &bullets {
@@ -335,17 +335,35 @@ mod tests {
     }
 
     #[test]
-    fn candidate_with_good_score_should_promote_to_established() {
-        let bullet = sample_bullet();
+    fn candidate_with_strong_evidence_should_promote_to_established() {
+        let mut bullet = sample_bullet();
+        bullet.helpful_count = 5;
+        bullet.feedback_events.extend([
+            FeedbackEventRecord {
+                kind: FeedbackKind::Helpful,
+                timestamp: chrono::Utc::now(),
+                bead_id: Some(BeadId::new("grove-4")),
+                run_id: Some(RunId::new("run-4")),
+                context: None,
+                weight: 1.0,
+            },
+            FeedbackEventRecord {
+                kind: FeedbackKind::Helpful,
+                timestamp: chrono::Utc::now(),
+                bead_id: Some(BeadId::new("grove-5")),
+                run_id: Some(RunId::new("run-5")),
+                context: None,
+                weight: 1.0,
+            },
+        ]);
+
         let config = ScoringConfig::default();
         let score = effective_score(&bullet, &config);
         let new_maturity = target_maturity(&bullet, score, &config);
-        // With 3 helpful events at weight 1.0, score > promote_threshold (2.0)
-        // and helpful_count (3) >= min_events_for_promotion (3)
         assert_eq!(
             new_maturity,
             BulletMaturity::Established,
-            "candidate with 3 recent helpful events should promote"
+            "candidate with strong recent helpful evidence should promote"
         );
     }
 

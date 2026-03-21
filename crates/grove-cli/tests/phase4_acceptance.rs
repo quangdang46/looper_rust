@@ -175,6 +175,7 @@ fn archive_retrieval_integrates_into_prompt_assembly_as_bounded_snippets() -> Te
         token_budget: None,
         retry_delta_summary: None,
         archive_bundle: Some(bundle),
+        playbook_rules: vec![],
     };
 
     let materialized = materialize_prompt(input);
@@ -246,6 +247,7 @@ fn archive_snippets_are_trimmed_when_budget_is_tight() -> TestResult {
         token_budget: Some(30), // Very tight budget
         retry_delta_summary: None,
         archive_bundle: Some(bundle),
+        playbook_rules: vec![],
     };
 
     let materialized = materialize_prompt(input);

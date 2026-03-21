@@ -37,10 +37,10 @@ impl Database {
                     started_at, ended_at, approx_tokens, metadata_json, source_id, origin_host
                  ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
-                    record.bead_id.as_ref().map(|id| id.as_str()),
-                    record.run_id.as_ref().map(|id| id.as_str()),
+                    record.bead_id.as_ref().map(|id: &BeadId| id.as_str()),
+                    record.run_id.as_ref().map(|id: &RunId| id.as_str()),
                     record.session_id.as_str(),
-                    record.workspace.as_ref().map(|w| w.as_str()),
+                    record.workspace.as_ref().map(|w: &camino::Utf8PathBuf| w.as_str()),
                     record.title.as_deref(),
                     record.source_path.as_str(),
                     record.started_at.as_ref().map(timestamp_string),
@@ -83,7 +83,10 @@ impl Database {
                          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             message_id,
-                            snippet.file_path.as_ref().map(|p| p.as_str()),
+                            snippet
+                                .file_path
+                                .as_ref()
+                                .map(|p: &camino::Utf8PathBuf| p.as_str()),
                             snippet.start_line,
                             snippet.end_line,
                             snippet.language.as_deref(),

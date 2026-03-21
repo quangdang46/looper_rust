@@ -315,7 +315,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
         println!("  transcript: {}", session.transcript_path);
         println!(
             "  stop reason: {}",
-            display_option(session.stop_reason.as_ref())
+            display_option(session.stop_reason.as_ref().map(|reason| format!("{reason:?}")))
         );
 
         // Try to read transcript file content if it exists.

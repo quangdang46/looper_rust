@@ -248,7 +248,7 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
             self.checkpoint = Some(checkpoint);
         }
 
-        if let Ok(replay) = grove_session::transcript::replay_transcript(&result.outcome.session.transcript_path) {
+        if let Ok(replay) = grove_session::replay_transcript(&result.outcome.session.transcript_path) {
             if let Ok(mut archived) = crate::archive::ingest_transcript_to_archive(
                 self.bead_id.clone(),
                 self.run_id.clone(),
@@ -1467,6 +1467,7 @@ exit "${EXIT_CODE:-0}"
             token_budget: Some(2_000),
             ordinal_in_run: 1,
             archive_bundle: None,
+            playbook_rules: Vec::new(),
             env: Vec::new(),
         }
     }

@@ -82,7 +82,7 @@ pub fn ingest_lessons(
             bullet_type: classify_bullet_type(trimmed),
             state: BulletState::Draft,
             maturity: BulletMaturity::Candidate,
-            helpful_count: 1,
+            helpful_count: 0,
             harmful_count: 0,
             feedback_events: vec![],
             confidence_decay_half_life_days: 30,

@@ -7,9 +7,8 @@ use grove_br::BrClient;
 use grove_bv::BvClient;
 use grove_config::GroveConfig;
 use grove_db::Database;
-use grove_session::{
-    ClaudeBackend, ContextMonitor, ExitPolicy, SingleTaskSessionRequest,
-};
+use camino::{Utf8Path, Utf8PathBuf};
+use grove_session::{ClaudeBackend, ContextMonitor, ExitPolicy, SingleTaskSessionRequest};
 use grove_types::{
     BeadId, CircuitState, CoordinatorStopReason, ExecutionContract, GroveBeadRecord,
     GroveBeadStatus, PromptId, ReservationMode, RunId, SessionId, Timestamp,
@@ -131,7 +130,7 @@ pub struct DispatchLoopConfig {
     /// Maximum poll cycles before the loop exits. `None` means unlimited.
     pub max_poll_cycles: Option<u32>,
     /// Working directory for session execution.
-    pub working_dir: camino::Utf8PathBuf,
+    pub working_dir: Utf8PathBuf,
     /// Shutdown signal for graceful termination.
     pub shutdown_signal: ShutdownSignal,
 }
@@ -202,18 +201,18 @@ fn select_best_candidate<'a>(
 fn build_session_request(
     bead: &GroveBeadRecord,
     config: &GroveConfig,
-    working_dir: &camino::Utf8Path,
+    working_dir: &Utf8Path,
     run_id: &RunId,
     session_id: &SessionId,
     parent_handoffs: Vec<String>,
 ) -> SingleTaskSessionRequest {
     let prompt_id = PromptId::new(format!("prompt-{}", run_id.as_str()));
-    let transcript_path = camino::Utf8PathBuf::from(format!(
+    let transcript_path = Utf8PathBuf::from(format!(
         ".grove/transcripts/{}/{}.jsonl",
         bead.bead.id.as_str(),
         session_id.as_str()
     ));
-    let prompt_manifest_path = camino::Utf8PathBuf::from(format!(
+    let prompt_manifest_path = Utf8PathBuf::from(format!(
         ".grove/prompts/{}.json",
         prompt_id.as_str()
     ));
@@ -235,11 +234,10 @@ fn build_session_request(
         transcript_path,
         prompt_manifest_path,
         timeout: Duration::from_secs(config.runtime.timeout_minutes * 60),
-        exit_policy: ExitPolicy::new(
-            config.exit_policy.completion_indicator_threshold,
-            config.exit_policy.heuristic_window,
-            config.exit_policy.require_explicit_exit,
-        ),
+        exit_policy: ExitPolicy {
+            completion_indicator_threshold: config.exit_policy.completion_indicator_threshold,
+            require_explicit_exit: config.exit_policy.require_explicit_exit,
+        },
         context_monitor: ContextMonitor::new(
             config.checkpoint.warn_pct,
             config.checkpoint.rotate_pct,
@@ -256,6 +254,7 @@ fn build_session_request(
         token_budget: None,
         ordinal_in_run: 1,
         archive_bundle: None,
+        playbook_rules: Vec::new(),
         env: Vec::new(),
     }
 }

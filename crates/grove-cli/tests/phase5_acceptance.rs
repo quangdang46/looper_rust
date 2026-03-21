@@ -91,7 +91,7 @@ fn one_off_noisy_lessons_remain_weak_candidates() -> TestResult {
 #[test]
 fn pure_db_no_external_memory_tool_in_prompt_assembly() -> TestResult {
     use grove_session::{PromptMaterializationInput, materialize_prompt};
-    use grove_types::{ExecutionContract, PromptId};
+    use grove_types::{ExecutionContract, PromptId, PromptSegmentKind};
     
     // We demonstrate that passing a fully-formed PlaybookBulletRecord list
     // constructs the prompt segments entirely locally.
@@ -143,7 +143,10 @@ fn pure_db_no_external_memory_tool_in_prompt_assembly() -> TestResult {
     let materialized = materialize_prompt(input);
     let rendered = &materialized.rendered_prompt;
     
-    assert!(rendered.contains("Playbook session_lesson (Maturity: Established)"), "Prompt includes playbook segment");
+    assert!(materialized.manifest.sections.iter().any(|section| {
+        section.kind == PromptSegmentKind::Playbook
+            && section.heading == "Playbook session_lesson (Maturity: Established)"
+    }), "Manifest includes playbook segment");
     assert!(rendered.contains("[SESSION_LESSON] Use idiomatic Rust"), "Prompt includes actual rule text");
     
     Ok(())
@@ -151,7 +154,7 @@ fn pure_db_no_external_memory_tool_in_prompt_assembly() -> TestResult {
 
 #[test]
 fn verification_mode_inferred_from_contract_and_workspace() -> TestResult {
-    use grove_session::verify::VerificationMode;
+    use grove_session::VerificationMode;
     use grove_types::ExecutionContract;
 
     let dir = tempfile::tempdir()?;

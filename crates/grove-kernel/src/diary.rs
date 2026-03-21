@@ -28,12 +28,12 @@ pub struct DiaryEntry {
 impl DiaryEntry {
     /// Score the diary entry into implicit `(helpful, harmful)` weights.
     pub fn score_implicit_feedback(&self) -> (f64, f64) {
-        let mut helpful = 0.0;
-        let mut harmful = 0.0;
+        let mut helpful: f64 = 0.0;
+        let mut harmful: f64 = 0.0;
 
         match self.outcome {
             SessionStatus::Completed => helpful += 1.0,
-            SessionStatus::Failed | SessionStatus::Crashed => harmful += 1.0,
+            SessionStatus::Crashed | SessionStatus::UnknownFailure => harmful += 1.0,
             SessionStatus::Checkpointed | SessionStatus::TimedOut => {
                 helpful += 0.3;
                 harmful += 0.3;
@@ -54,7 +54,7 @@ impl DiaryEntry {
             harmful += 0.3;
         }
 
-        (helpful.clamp(0.1, 2.0), harmful.clamp(0.1, 2.0))
+        (helpful.clamp(0.0, 2.0), harmful.clamp(0.0, 2.0))
     }
 }
 

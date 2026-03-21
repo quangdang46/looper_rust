@@ -90,8 +90,8 @@ fn init_creates_database_with_migrations() -> TestResult {
     let applied_migrations = db.applied_migrations()?;
     assert_eq!(
         applied_migrations.len(),
-        4,
-        "should have 4 applied migrations"
+        9,
+        "should apply all current migrations"
     );
     assert_eq!(applied_migrations[0].version, 1);
     assert_eq!(applied_migrations[0].name, "0001_init.sql");
@@ -104,6 +104,16 @@ fn init_creates_database_with_migrations() -> TestResult {
     assert_eq!(applied_migrations[2].name, "0003_leader_lease.sql");
     assert_eq!(applied_migrations[3].version, 4);
     assert_eq!(applied_migrations[3].name, "0004_mirror_outbox.sql");
+    assert_eq!(applied_migrations[4].version, 5);
+    assert_eq!(applied_migrations[4].name, "0005_operational_schema.sql");
+    assert_eq!(applied_migrations[5].version, 6);
+    assert_eq!(applied_migrations[5].name, "0006_observability.sql");
+    assert_eq!(applied_migrations[6].version, 7);
+    assert_eq!(applied_migrations[6].name, "0007_archive_fts.sql");
+    assert_eq!(applied_migrations[7].version, 8);
+    assert_eq!(applied_migrations[7].name, "0008_archive_watermarks.sql");
+    assert_eq!(applied_migrations[8].version, 9);
+    assert_eq!(applied_migrations[8].name, "0009_playbook.sql");
 
     // Verify tables exist by attempting to query them
     let conn = db.connection();
