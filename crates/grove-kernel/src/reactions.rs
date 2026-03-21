@@ -3,14 +3,13 @@
 //! Wires grove_types::reaction types into the dispatch loop. Reactions are
 //! evaluated after each dispatch outcome and produce logged, auditable records.
 
-use anyhow::Result;
 use chrono::Utc;
 use grove_db::Database;
 use grove_types::{
-    BeadId, EscalationTier, FailureClass, RecoveryCapsuleOutcome, RunId, RunStatus,
+    AgentActivity, BeadId, EscalationTier, FailureClass, RunId, RunStatus, SessionOutcome,
     reaction::{
-        MutationStrategy, ReactionAction, ReactionContextSnapshot, ReactionOutcome,
-        ReactionRecord, ReactionRule, ReactionTrigger, default_reactions,
+        ReactionAction, ReactionContextSnapshot, ReactionOutcome, ReactionRecord, ReactionRule,
+        ReactionTrigger, default_reactions,
     },
 };
 
@@ -20,12 +19,33 @@ pub struct TriggerContext {
     pub bead_id: BeadId,
     pub run_id: RunId,
     pub run_status: RunStatus,
+    pub activity: AgentActivity,
     pub failure_class: Option<FailureClass>,
     pub failure_detail: Option<String>,
     pub escalation_tier: EscalationTier,
     pub consecutive_failures: u32,
     pub circuit_state: grove_types::CircuitState,
     pub context_pressure_pct: Option<f32>,
+}
+
+#[must_use]
+pub fn infer_agent_activity(outcome: &SessionOutcome, run_status: RunStatus) -> AgentActivity {
+    if matches!(run_status, RunStatus::Succeeded | RunStatus::Checkpointed) {
+        return AgentActivity::Ready;
+    }
+    if matches!(run_status, RunStatus::WaitingToRetry) {
+        return AgentActivity::Idle;
+    }
+    if matches!(run_status, RunStatus::Failed) {
+        return match outcome.session.stop_reason {
+            Some(grove_types::StopReason::Kill) | Some(grove_types::StopReason::Crash) => AgentActivity::Exited,
+            Some(grove_types::StopReason::PermissionDenied) => AgentActivity::Blocked,
+            _ if outcome.analysis.permission_denials > 0 => AgentActivity::Blocked,
+            _ if outcome.analysis.repeated_error_fingerprint.is_some() => AgentActivity::Idle,
+            _ => AgentActivity::Exited,
+        };
+    }
+    AgentActivity::Active
 }
 
 /// Result of evaluating and applying reactions for a single dispatch outcome.
@@ -82,7 +102,7 @@ pub fn evaluate_reactions(
             recovery_capsule: None,
             context: Some(ReactionContextSnapshot {
                 run_status: Some(ctx.run_status),
-                activity: None,
+                activity: Some(ctx.activity),
                 escalation_tier: Some(tier),
                 failure_class: ctx.failure_class,
                 failure_detail: ctx.failure_detail.clone(),
@@ -120,11 +140,7 @@ fn trigger_matches(trigger: &ReactionTrigger, ctx: &TriggerContext) -> bool {
             ctx.consecutive_failures >= *iterations
                 && ctx.failure_class == Some(FailureClass::NoProgress)
         }
-        ReactionTrigger::AgentIdle { .. } => {
-            // Agent idle detection would be checked by the activity monitor;
-            // here we always return false since idle is detected externally.
-            false
-        }
+        ReactionTrigger::AgentIdle { .. } => ctx.activity == AgentActivity::Idle,
         ReactionTrigger::ContextPressureHigh => {
             ctx.context_pressure_pct.unwrap_or(0.0) > 0.85
         }
@@ -185,6 +201,7 @@ mod tests {
             bead_id: BeadId::new("test-1"),
             run_id: RunId::new("run-1"),
             run_status: status,
+            activity: AgentActivity::Active,
             failure_class: Some(FailureClass::NoProgress),
             failure_detail: None,
             escalation_tier: tier,
@@ -233,11 +250,56 @@ mod tests {
     }
 
     #[test]
+    fn idle_trigger_matches_idle_activity() {
+        let mut ctx = make_ctx(RunStatus::WaitingToRetry, 1, EscalationTier::SecondAttempt);
+        ctx.activity = AgentActivity::Idle;
+        assert!(trigger_matches(
+            &ReactionTrigger::AgentIdle { duration_secs: 300 },
+            &ctx
+        ));
+    }
+
+    #[test]
     fn action_escalates_at_terminal_tier() {
         let action = ReactionAction::InjectRescue {
             prompt: "test".into(),
         };
         let (outcome, _, _) = apply_action(&action, None, &EscalationTier::GiveUp);
         assert_eq!(outcome, ReactionOutcome::Escalated);
+    }
+
+    #[test]
+    fn infer_blocked_activity_from_permission_denial() {
+        let outcome = SessionOutcome {
+            session: grove_types::ClaudeSessionRecord {
+                id: grove_types::SessionId::new("ses-1"),
+                run_id: RunId::new("run-1"),
+                external_session_id: None,
+                ordinal_in_run: 1,
+                status: grove_types::SessionStatus::PermissionDenied,
+                started_at: "2026-03-21T00:00:00Z".parse().unwrap(),
+                ended_at: Some("2026-03-21T00:01:00Z".parse().unwrap()),
+                prompt_id: None,
+                prompt_manifest_path: None,
+                prompt_bytes: 0,
+                estimated_input_tokens: 0,
+                estimated_output_tokens: 0,
+                exit_code: Some(1),
+                stop_reason: Some(grove_types::StopReason::PermissionDenied),
+                transcript_path: "trace.jsonl".into(),
+            },
+            protocol_events: Vec::new(),
+            analysis: grove_types::IterationAnalysis {
+                permission_denials: 1,
+                ..Default::default()
+            },
+            terminal_class: grove_types::SessionTerminalClass::PermissionDenied,
+            context_pressure_pct: None,
+            context_pressure_level: grove_types::ContextPressureLevel::Ok,
+            stdout_tail: Vec::new(),
+            stderr_tail: vec!["permission denied".into()],
+        };
+
+        assert_eq!(infer_agent_activity(&outcome, RunStatus::Failed), AgentActivity::Blocked);
     }
 }

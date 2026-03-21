@@ -20,6 +20,7 @@ mod archive;
 mod playbook;
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use serde::Serialize;
 use serde_json::Value;
 
 pub const CRATE_PURPOSE: &str = "SQLite bootstrap, migrations, and runtime persistence.";
@@ -123,7 +124,7 @@ pub struct MirrorOutboxUpdateInput {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RecoveryCapsuleEvent {
     pub capsule: RecoveryCapsule,
     pub source_event_id: i64,
@@ -192,6 +193,11 @@ const MIGRATION_MANIFEST: &[Migration<'_>] = &[
         name: "0009_playbook.sql",
         sql: include_str!("../migrations/0009_playbook.sql"),
     },
+    Migration {
+        version: 10,
+        name: "0010_activity_state.sql",
+        sql: include_str!("../migrations/0010_activity_state.sql"),
+    },
 ];
 
 #[derive(Debug)]
@@ -247,6 +253,9 @@ struct RawTaskRunRow {
     session_count: i32,
     checkpoint_count: i32,
     last_checkpoint_id: Option<String>,
+    activity: Option<String>,
+    last_activity_at: Option<String>,
+    escalation_tier: String,
 }
 
 #[derive(Debug)]
@@ -499,7 +508,7 @@ impl Database {
             .conn
             .prepare(
                 "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, \
-                    session_count, checkpoint_count, last_checkpoint_id \
+                    session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
                  FROM task_runs \
                  WHERE bead_id = ?1 \
                  ORDER BY attempt_no DESC, started_at DESC",
@@ -525,14 +534,17 @@ impl Database {
         ensure_bead_exists(&tx, &input.bead_id)?;
         tx.execute(
             "INSERT INTO task_runs(\
-                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id\
-             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL)",
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL, ?6, ?7, ?8)",
             params![
                 input.run_id.as_str(),
                 input.bead_id.as_str(),
                 input.attempt_no,
                 encode_run_status(RunStatus::Active),
                 timestamp_string(&input.started_at),
+                encode_agent_activity(grove_types::AgentActivity::Active),
+                timestamp_string(&input.started_at),
+                encode_escalation_tier(grove_types::EscalationTier::FirstAttempt),
             ],
         )
         .with_context(|| format!("insert task run {}", input.run_id.as_str()))?;
@@ -561,7 +573,7 @@ impl Database {
         )?;
         let raw = tx
             .query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id \
+                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
                  FROM task_runs WHERE id = ?1",
                 [input.run_id.as_str()],
                 raw_task_run_row,
@@ -807,12 +819,13 @@ impl Database {
         ensure_run_exists(&tx, &input.run_id)?;
         ensure_run_belongs_to_bead(&tx, &input.run_id, bead_id)?;
         tx.execute(
-            "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
+            "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5, last_activity_at = ?6 WHERE id = ?1",
             params![
                 input.run_id.as_str(),
                 encode_run_status(input.status),
                 input.failure_class.map(encode_failure_class),
                 input.failure_detail.as_deref(),
+                timestamp_string(&input.ended_at),
                 timestamp_string(&input.ended_at),
             ],
         )
@@ -861,7 +874,7 @@ impl Database {
         )?;
         let raw = tx
             .query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id \
+                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
                  FROM task_runs WHERE id = ?1",
                 [input.run_id.as_str()],
                 raw_task_run_row,
@@ -1207,6 +1220,7 @@ impl Database {
                     encode_failure_class(FailureClass::Interrupted),
                     failure_detail,
                     timestamp_string(now),
+                    timestamp_string(now),
                 ],
             )
             .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
@@ -1261,7 +1275,7 @@ impl Database {
             }
 
             let raw = tx.query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id \
+                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
                  FROM task_runs WHERE id = ?1",
                 [run.id.as_str()],
                 raw_task_run_row,
@@ -1289,6 +1303,70 @@ impl Database {
         created_at: &chrono::DateTime<Utc>,
     ) -> Result<()> {
         self.with_tx(|tx| insert_event_log_tx(tx, kind, bead_id, run_id, session_id, payload, created_at))
+    }
+
+    pub fn update_run_activity(
+        &mut self,
+        bead_id: &BeadId,
+        run_id: &RunId,
+        activity: grove_types::AgentActivity,
+        updated_at: &chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        self.with_tx(|tx| {
+            ensure_bead_exists(tx, bead_id)?;
+            ensure_run_exists(tx, run_id)?;
+            ensure_run_belongs_to_bead(tx, run_id, bead_id)?;
+            tx.execute(
+                "UPDATE task_runs SET activity = ?2, last_activity_at = ?3 WHERE id = ?1",
+                params![
+                    run_id.as_str(),
+                    encode_agent_activity(activity),
+                    timestamp_string(updated_at),
+                ],
+            )
+            .with_context(|| format!("update run activity {}", run_id.as_str()))?;
+            insert_event_log_tx(
+                tx,
+                EventKind::ActivityStateChanged,
+                Some(bead_id),
+                Some(run_id),
+                None,
+                &serde_json::json!({
+                    "activity": encode_agent_activity(activity),
+                }),
+                updated_at,
+            )
+        })
+    }
+
+    pub fn update_run_escalation_tier(
+        &mut self,
+        bead_id: &BeadId,
+        run_id: &RunId,
+        tier: grove_types::EscalationTier,
+        updated_at: &chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        self.with_tx(|tx| {
+            ensure_bead_exists(tx, bead_id)?;
+            ensure_run_exists(tx, run_id)?;
+            ensure_run_belongs_to_bead(tx, run_id, bead_id)?;
+            tx.execute(
+                "UPDATE task_runs SET escalation_tier = ?2 WHERE id = ?1",
+                params![run_id.as_str(), encode_escalation_tier(tier)],
+            )
+            .with_context(|| format!("update escalation tier {}", run_id.as_str()))?;
+            insert_event_log_tx(
+                tx,
+                EventKind::EscalationTierChanged,
+                Some(bead_id),
+                Some(run_id),
+                None,
+                &serde_json::json!({
+                    "escalation_tier": encode_escalation_tier(tier),
+                }),
+                updated_at,
+            )
+        })
     }
 
     pub fn list_event_logs_for_bead(&self, bead_id: &BeadId) -> Result<Vec<EventLogRecord>> {
@@ -2349,6 +2427,9 @@ fn raw_task_run_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawTaskRunRow> 
         session_count: row.get(8)?,
         checkpoint_count: row.get(9)?,
         last_checkpoint_id: row.get(10)?,
+        activity: row.get(11)?,
+        last_activity_at: row.get(12)?,
+        escalation_tier: row.get(13)?,
     })
 }
 
@@ -2508,10 +2589,17 @@ fn raw_task_run_into_record(row: RawTaskRunRow) -> Result<TaskRunRecord> {
         session_count: row.session_count,
         checkpoint_count: row.checkpoint_count,
         last_checkpoint_id: row.last_checkpoint_id.map(CheckpointId::new),
-        // New fields - will be None for existing records
-        activity: None,
-        last_activity_at: None,
-        escalation_tier: Default::default(),
+        activity: row
+            .activity
+            .as_deref()
+            .map(parse_agent_activity)
+            .transpose()?,
+        last_activity_at: row
+            .last_activity_at
+            .as_deref()
+            .map(parse_timestamp)
+            .transpose()?,
+        escalation_tier: parse_escalation_tier(&row.escalation_tier)?,
     })
 }
 
@@ -2757,7 +2845,7 @@ fn active_leader_lease_tx(
 fn list_runs_by_status_tx(tx: &Transaction<'_>, status: RunStatus) -> Result<Vec<TaskRunRecord>> {
     let mut stmt = tx
         .prepare(
-            "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id \
+            "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
              FROM task_runs WHERE status = ?1 ORDER BY started_at ASC, id ASC",
         )
         .context("prepare runs by status query")?;
@@ -3190,6 +3278,26 @@ fn encode_grove_bead_status(status: GroveBeadStatus) -> &'static str {
     }
 }
 
+fn encode_agent_activity(activity: grove_types::AgentActivity) -> &'static str {
+    match activity {
+        grove_types::AgentActivity::Active => "Active",
+        grove_types::AgentActivity::Ready => "Ready",
+        grove_types::AgentActivity::Idle => "Idle",
+        grove_types::AgentActivity::Blocked => "Blocked",
+        grove_types::AgentActivity::Exited => "Exited",
+    }
+}
+
+fn encode_escalation_tier(tier: grove_types::EscalationTier) -> &'static str {
+    match tier {
+        grove_types::EscalationTier::FirstAttempt => "FirstAttempt",
+        grove_types::EscalationTier::SecondAttempt => "SecondAttempt",
+        grove_types::EscalationTier::ThirdAttempt => "ThirdAttempt",
+        grove_types::EscalationTier::FinalAttempt => "FinalAttempt",
+        grove_types::EscalationTier::GiveUp => "GiveUp",
+    }
+}
+
 fn encode_failure_class(class: FailureClass) -> &'static str {
     match class {
         FailureClass::Timeout => "Timeout",
@@ -3263,6 +3371,28 @@ fn parse_grove_bead_status(text: &str) -> Result<GroveBeadStatus> {
         "succeeded" => Ok(GroveBeadStatus::Succeeded),
         "failed" => Ok(GroveBeadStatus::Failed),
         _ => bail!("unsupported grove bead status {text}"),
+    }
+}
+
+fn parse_agent_activity(text: &str) -> Result<grove_types::AgentActivity> {
+    match normalize_enum_token(text).as_str() {
+        "active" => Ok(grove_types::AgentActivity::Active),
+        "ready" => Ok(grove_types::AgentActivity::Ready),
+        "idle" => Ok(grove_types::AgentActivity::Idle),
+        "blocked" => Ok(grove_types::AgentActivity::Blocked),
+        "exited" => Ok(grove_types::AgentActivity::Exited),
+        _ => bail!("unsupported agent activity {text}"),
+    }
+}
+
+fn parse_escalation_tier(text: &str) -> Result<grove_types::EscalationTier> {
+    match normalize_enum_token(text).as_str() {
+        "firstattempt" => Ok(grove_types::EscalationTier::FirstAttempt),
+        "secondattempt" => Ok(grove_types::EscalationTier::SecondAttempt),
+        "thirdattempt" => Ok(grove_types::EscalationTier::ThirdAttempt),
+        "finalattempt" => Ok(grove_types::EscalationTier::FinalAttempt),
+        "giveup" => Ok(grove_types::EscalationTier::GiveUp),
+        _ => bail!("unsupported escalation tier {text}"),
     }
 }
 
@@ -4563,10 +4693,59 @@ mod tests {
     fn insert_run_row(db: &Database, run_id: &str, bead_id: &str, status: &str) -> Result<()> {
         db.connection().execute(
             "INSERT INTO task_runs(\
-                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id\
-             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL)",
-            rusqlite::params![run_id, bead_id, 1, status, "2026-03-16T11:00:00Z"],
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL, ?6, ?7, ?8)",
+            rusqlite::params![
+                run_id,
+                bead_id,
+                1,
+                status,
+                "2026-03-16T11:00:00Z",
+                "Active",
+                "2026-03-16T11:00:00Z",
+                "FirstAttempt"
+            ],
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn run_activity_and_escalation_round_trip() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-activity", "Activity bead")?;
+
+        let started = db.record_run_started(RunStartInput {
+            run_id: RunId::new("run-activity"),
+            bead_id: BeadId::new("grove-activity"),
+            attempt_no: 1,
+            started_at: "2026-03-16T11:00:00Z".parse()?,
+        })?;
+        assert_eq!(started.activity, Some(grove_types::AgentActivity::Active));
+        assert_eq!(started.escalation_tier, grove_types::EscalationTier::FirstAttempt);
+
+        let updated_at: Timestamp = "2026-03-16T11:05:00Z".parse()?;
+        db.update_run_activity(
+            &BeadId::new("grove-activity"),
+            &RunId::new("run-activity"),
+            grove_types::AgentActivity::Idle,
+            &updated_at,
+        )?;
+        db.update_run_escalation_tier(
+            &BeadId::new("grove-activity"),
+            &RunId::new("run-activity"),
+            grove_types::EscalationTier::ThirdAttempt,
+            &updated_at,
+        )?;
+
+        let runs = db.list_task_runs_for_bead(&BeadId::new("grove-activity"))?;
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].activity, Some(grove_types::AgentActivity::Idle));
+        assert_eq!(runs[0].last_activity_at, Some(updated_at));
+        assert_eq!(runs[0].escalation_tier, grove_types::EscalationTier::ThirdAttempt);
         Ok(())
     }
 

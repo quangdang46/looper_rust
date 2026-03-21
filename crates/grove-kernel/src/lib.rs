@@ -21,9 +21,9 @@ use grove_session::{
     execute_single_task_session_with_hooks,
 };
 use grove_types::{
-    BeadId, CheckpointId, CircuitState, FailureClass, GroveBeadRecord, GroveBeadStatus,
-    ReservationConflict, ReservationMode, ReservationRecord, RunId, RunStatus, SessionStatus,
-    Timestamp,
+    AgentActivity, BeadId, CheckpointId, CircuitState, FailureClass, GroveBeadRecord,
+    GroveBeadStatus, ReservationConflict, ReservationMode, ReservationRecord, RunId, RunStatus,
+    SessionStatus, Timestamp,
 };
 use std::{
     collections::BTreeMap,
@@ -210,6 +210,29 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
         session: &grove_types::ClaudeSessionRecord,
     ) -> anyhow::Result<()> {
         self.db.record_session_started(&self.bead_id, session)?;
+        Ok(())
+    }
+
+    fn on_activity_changed(
+        &mut self,
+        activity: AgentActivity,
+        detail: Option<&str>,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        self.db.update_run_activity(&self.bead_id, &self.run_id, activity, &at)?;
+        if let Some(detail) = detail {
+            self.db.write_event_log(
+                grove_types::EventKind::ActivityStateChanged,
+                Some(&self.bead_id),
+                Some(&self.run_id),
+                Some(&self.session_id),
+                &serde_json::json!({
+                    "activity": activity,
+                    "detail": detail,
+                }),
+                &at,
+            )?;
+        }
         Ok(())
     }
 

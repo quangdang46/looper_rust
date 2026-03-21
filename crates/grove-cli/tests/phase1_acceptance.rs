@@ -762,6 +762,49 @@ fn init_tolerates_missing_beads_and_prints_guidance() -> TestResult {
 }
 
 #[test]
+fn init_json_emits_machine_readable_output() -> TestResult {
+    let harness = CliHarness::new()?;
+    let output = harness.run(["--json", "init"])?;
+
+    assert!(
+        output.status.success(),
+        "init --json should succeed: {}",
+        output_text(&output)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let payload: serde_json::Value = serde_json::from_str(&stdout)?;
+    assert_eq!(payload["ok"], true);
+    assert!(payload["workspace_root"].as_str().is_some());
+    assert!(payload["db_path"].as_str().is_some());
+    assert!(payload["config_path"].as_str().is_some());
+    assert!(payload["tooling"].is_object());
+    assert!(payload["notes"].is_array());
+    assert!(payload["next_steps"].is_array());
+
+    Ok(())
+}
+
+#[test]
+fn no_subcommand_json_emits_machine_readable_output() -> TestResult {
+    let harness = CliHarness::new()?;
+    let output = harness.run(["--json"])?;
+
+    assert!(
+        output.status.success(),
+        "global --json without subcommand should succeed: {}",
+        output_text(&output)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let payload: serde_json::Value = serde_json::from_str(&stdout)?;
+    assert_eq!(payload["ok"], true);
+    assert!(payload["command"].is_null());
+    assert!(payload["message"].as_str().is_some());
+    assert!(payload["available_commands"].is_array());
+
+    Ok(())
+}
+
+#[test]
 fn status_requires_beads_directory() -> TestResult {
     let harness = CliHarness::new()?;
     let output = harness.run(["status"])?;
@@ -797,6 +840,59 @@ fn status_reports_bv_unavailable_but_still_succeeds() -> TestResult {
     assert!(stdout.contains("grove-cli-test"));
     assert!(stdout.contains("BV triage:"));
     assert!(stdout.contains("unavailable: bv command failed (bv --robot-triage)"));
+
+    Ok(())
+}
+
+#[test]
+fn status_json_emits_machine_readable_operator_surface() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+    harness.seed_runtime_bead(GroveBeadStatus::Running)?;
+
+    let output = harness.run(["--json", "status"])?;
+
+    assert!(
+        output.status.success(),
+        "status --json should succeed: {}",
+        output_text(&output)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let payload: serde_json::Value = serde_json::from_str(&stdout)?;
+    let workspace_root = payload["workspace_root"].as_str().expect("workspace_root string");
+    assert!(workspace_root.starts_with(harness.workspace_root.as_str()));
+    assert!(payload["db_path"].as_str().is_some());
+    assert!(payload["triage_error"].is_null());
+    assert!(payload["view"].is_object());
+    let view_root = payload["view"]["workspace_root"]
+        .as_str()
+        .expect("view.workspace_root string");
+    assert!(view_root.starts_with(harness.workspace_root.as_str()));
+    assert!(payload["view"]["running_beads"].is_array());
+    assert!(payload["view"]["ready_queue"].is_array());
+    assert!(payload["view"]["mirror_pending"].is_array());
+
+    Ok(())
+}
+
+#[test]
+fn run_json_failure_emits_machine_readable_payload() -> TestResult {
+    let harness = CliHarness::new()?;
+
+    let output = harness.run(["--json", "run"])?;
+
+    assert!(
+        output.status.success(),
+        "run --json failure payload should still exit successfully for machine parsing: {}",
+        output_text(&output)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    let payload: serde_json::Value = serde_json::from_str(&stdout)?;
+    assert_eq!(payload["ok"], false);
+    assert_eq!(payload["command"], "run");
+    let errors = payload["error"].as_array().expect("error array");
+    assert!(!errors.is_empty(), "error chain should not be empty");
+    assert!(errors[0].as_str().is_some());
 
     Ok(())
 }

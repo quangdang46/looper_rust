@@ -6,6 +6,7 @@ use crate::status_view::{
 use crate::{DispatchEligibilityContext, evaluate_dispatch_eligibility};
 use anyhow::Result;
 use chrono::Utc;
+use serde::Serialize;
 use grove_br::BrClient;
 use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
@@ -147,6 +148,11 @@ pub fn load_inspect_snapshot<C: BrClient>(
     let historical_dispatch_decisions = db.list_dispatch_decisions_for_bead(bead_id, 10).unwrap_or_default();
     let prompt_materializations = db.list_prompt_materializations_for_bead(bead_id).unwrap_or_default();
 
+    let retrieval_bundle = latest_session
+        .as_ref()
+        .and_then(|session| session.prompt_provenance.as_ref())
+        .and_then(retrieval_bundle_from_prompt_provenance);
+
     Ok(Some(InspectSnapshot {
         bead,
         dependencies: dependency_snapshot
@@ -168,7 +174,7 @@ pub fn load_inspect_snapshot<C: BrClient>(
         latest_recovery_capsule,
         latest_handoff,
         mirror_actions,
-        retrieval_bundle: None,
+        retrieval_bundle,
         selected_playbook_bullets,
         mirror_pending,
     }))
@@ -182,6 +188,37 @@ fn load_prompt_manifest(workspace_root: &str, path: &str) -> Option<PromptManife
     };
     let contents = fs::read_to_string(manifest_path).ok()?;
     serde_json::from_str(&contents).ok()
+}
+
+fn retrieval_bundle_from_prompt_provenance(
+    provenance: &PromptProvenanceView,
+) -> Option<RetrievalBundle> {
+    let snippets: Vec<RelevantSnippet> = provenance
+        .sections
+        .iter()
+        .filter(|section| section.kind == "archive_snippet")
+        .enumerate()
+        .filter_map(|(idx, section)| {
+            let message_id = section.preview_message_id?;
+            Some(RelevantSnippet {
+                conversation_id: idx as i64 + 1,
+                message_id,
+                file_path: None,
+                snippet: section.preview.clone(),
+                score: 0.0,
+            })
+        })
+        .collect();
+
+    if snippets.is_empty() {
+        None
+    } else {
+        let conversations: Vec<i64> = snippets.iter().map(|snippet| snippet.conversation_id).collect();
+        Some(RetrievalBundle {
+            snippets,
+            conversations,
+        })
+    }
 }
 
 fn inspect_score_breakdown(
@@ -320,7 +357,7 @@ fn inspect_dispatch_why(
     why
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct InspectSnapshot {
     pub bead: GroveBeadRecord,
     pub dependencies: Vec<DependencyEdgeView>,
@@ -373,7 +410,7 @@ impl InspectSnapshot {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BeadInspectView {
     pub bead: GroveBeadRecord,
     pub dependencies: Vec<DependencyEdgeView>,
@@ -393,7 +430,7 @@ pub struct BeadInspectView {
     pub mirror_pending: Option<MirrorPendingView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DependencyEdgeView {
     pub bead_id: BeadId,
     pub title: Option<String>,
@@ -401,7 +438,7 @@ pub struct DependencyEdgeView {
     pub grove_status: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DispatchDecisionView {
     pub attempted_at: Option<Timestamp>,
     pub dispatch: DispatchExplanationView,
@@ -413,7 +450,7 @@ pub struct DispatchDecisionView {
     pub bv_score: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunSummaryView {
     pub run_id: RunId,
     pub attempt_no: i32,
@@ -444,7 +481,7 @@ impl From<TaskRunRecord> for RunSummaryView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SessionSummaryView {
     pub session_id: grove_types::SessionId,
     pub run_id: RunId,
@@ -515,7 +552,7 @@ impl SessionSummaryView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PromptProvenanceView {
     pub contract: String,
     pub estimated_tokens: u32,
@@ -525,7 +562,7 @@ pub struct PromptProvenanceView {
     pub sections: Vec<PromptSectionView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RecoveryCapsuleView {
     pub outcome: String,
     pub summary: String,
@@ -580,7 +617,7 @@ impl From<PromptManifest> for PromptProvenanceView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PromptSectionView {
     pub ordinal: u32,
     pub kind: String,
@@ -592,11 +629,17 @@ pub struct PromptSectionView {
     pub bullet_ids: Vec<String>,
     pub checkpoint_id: Option<String>,
     pub handoff_run_id: Option<String>,
+    pub preview_message_id: Option<i64>,
     pub preview: String,
 }
 
 impl From<grove_types::PromptManifestSection> for PromptSectionView {
     fn from(section: grove_types::PromptManifestSection) -> Self {
+        let preview_message_id = section
+            .provenance
+            .archive_message_id
+            .as_deref()
+            .and_then(|id| id.parse::<i64>().ok());
         Self {
             ordinal: section.ordinal,
             kind: section.kind.as_str().to_owned(),
@@ -618,12 +661,13 @@ impl From<grove_types::PromptManifestSection> for PromptSectionView {
                 .collect(),
             checkpoint_id: section.provenance.checkpoint_id.map(|id| id.to_string()),
             handoff_run_id: section.provenance.handoff_run_id.map(|id| id.to_string()),
+            preview_message_id,
             preview: section.preview,
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckpointSummaryView {
     pub checkpoint_id: String,
     pub run_id: RunId,
@@ -702,7 +746,7 @@ fn recovery_capsule_for_inspect(
     .map(RecoveryCapsuleView::from)
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct HandoffSummaryView {
     pub run_id: RunId,
     pub summary: String,
@@ -727,7 +771,7 @@ impl From<HandoffRecord> for HandoffSummaryView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MirrorActionView {
     pub event_id: i64,
     pub action: String,
@@ -761,7 +805,7 @@ impl MirrorActionView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RetrievalSummaryView {
     pub conversation_ids: Vec<i64>,
     pub snippet_count: usize,
@@ -786,7 +830,7 @@ impl From<RetrievalBundle> for RetrievalSummaryView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RelevantSnippetView {
     pub conversation_id: i64,
     pub message_id: i64,
@@ -807,7 +851,7 @@ impl From<RelevantSnippet> for RelevantSnippetView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PlaybookBulletView {
     pub bullet_id: String,
     pub category: String,

@@ -7,9 +7,9 @@ use crate::{
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::Utc;
 use grove_types::{
-    BeadId, ClaudeSessionRecord, ContextPressureLevel, ExecutionContract, FailureClass, PromptId,
-    ProtocolState, RunId, SessionId, SessionOutcome, SessionStatus, SessionTerminalClass,
-    StopReason,
+    AgentActivity, BeadId, ClaudeSessionRecord, ContextPressureLevel, ExecutionContract, FailureClass,
+    PromptId, ProtocolEvent, ProtocolState, RunId, SessionId, SessionOutcome, SessionStatus,
+    SessionTerminalClass, StopReason,
 };
 use std::{
     fs,
@@ -80,6 +80,15 @@ pub struct SingleTaskSessionResult {
 
 pub trait SessionLifecycleHooks {
     fn on_session_started(&mut self, _session: &ClaudeSessionRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_activity_changed(
+        &mut self,
+        _activity: AgentActivity,
+        _detail: Option<&str>,
+        _at: chrono::DateTime<Utc>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -212,6 +221,7 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
     let mut parser = ProtocolParser::default();
     let mut stdout_lines = Vec::new();
     let mut stderr_lines = Vec::new();
+    let mut last_activity = AgentActivity::Active;
 
     let result = (|| {
         let mut running = backend.start(StartSessionRequest {
@@ -241,9 +251,28 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
                     transcript.append_stdout_line(line.clone(), ts)?;
                     match parser.parse_stdout_line(&line) {
                         ParserLineKind::Protocol(event) => {
-                            transcript.append_protocol_event(event, ts)?;
+                            transcript.append_protocol_event(event.clone(), ts)?;
+                            let next_activity = match event {
+                                ProtocolEvent::Checkpoint { .. } => AgentActivity::Ready,
+                                ProtocolEvent::Exit { value: true } => AgentActivity::Ready,
+                                _ => AgentActivity::Active,
+                            };
+                            if next_activity != last_activity {
+                                hooks
+                                    .on_activity_changed(next_activity, Some("protocol_event"), ts)
+                                    .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                                last_activity = next_activity;
+                            }
                         }
-                        ParserLineKind::PlainStdout(text) => stdout_lines.push(text),
+                        ParserLineKind::PlainStdout(text) => {
+                            stdout_lines.push(text);
+                            if last_activity != AgentActivity::Active {
+                                hooks
+                                    .on_activity_changed(AgentActivity::Active, Some("stdout"), ts)
+                                    .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                                last_activity = AgentActivity::Active;
+                            }
+                        }
                         ParserLineKind::PlainStderr(_) => {}
                     }
                 }
@@ -252,12 +281,31 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
                     let ts = Utc::now();
                     transcript.append_stderr_line(line.clone(), ts)?;
                     if let ParserLineKind::PlainStderr(text) = parser.parse_stderr_line(&line) {
+                        let next_activity = if text.to_ascii_lowercase().contains("permission denied") {
+                            AgentActivity::Blocked
+                        } else {
+                            AgentActivity::Active
+                        };
                         stderr_lines.push(text);
+                        if next_activity != last_activity {
+                            hooks
+                                .on_activity_changed(next_activity, Some("stderr"), ts)
+                                .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                            last_activity = next_activity;
+                        }
                     }
                 }
                 Ok(StreamMessage::Closed(StreamSource::Stdout)) => stdout_closed = true,
                 Ok(StreamMessage::Closed(StreamSource::Stderr)) => stderr_closed = true,
-                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Timeout) => {
+                    let ts = Utc::now();
+                    if last_activity != AgentActivity::Idle {
+                        hooks
+                            .on_activity_changed(AgentActivity::Idle, Some("stream_timeout"), ts)
+                            .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                        last_activity = AgentActivity::Idle;
+                    }
+                }
                 Err(RecvTimeoutError::Disconnected) => {
                     stdout_closed = true;
                     stderr_closed = true;

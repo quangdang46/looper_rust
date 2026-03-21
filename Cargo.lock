@@ -423,6 +423,7 @@ dependencies = [
  "grove-types",
  "regex",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
 ]

@@ -6,15 +6,103 @@
 // 3. Crash Recovery (Reconciling interrupted runs)
 // 4. Mirror-pending Behavior
 
+use camino::Utf8PathBuf;
+use chrono::{DateTime, Utc};
 use grove_db::Database;
 use grove_kernel::{
     DispatchExitReason, LeaderLeaseConfig, LeaderLeaseManager, ReservationManager, ShutdownSignal,
+    execute_persisted_single_task_session,
 };
-use grove_types::{CoordinatorStopReason, EventKind};
+use grove_session::{
+    CliClaudeBackend, ContextMonitor, ExitPolicy, SessionLifecycleHooks, SessionShutdownConfig,
+    SingleTaskSessionRequest, execute_single_task_session_with_hooks,
+};
+use grove_types::{
+    AgentActivity, BeadId, ClaudeSessionRecord, CoordinatorStopReason, EventKind,
+    ExecutionContract, PromptId, RunId, SessionId,
+};
+use std::{fs, io, os::unix::fs::PermissionsExt, sync::Mutex, time::Duration};
 use tempfile::tempdir;
 
 // NOTE: We rely on `grove_kernel` unit tests for extensive DB interactions,
 // but these acceptance suites map the behavioral promises of Phase 3.
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn write_fake_claude_script(path: &std::path::Path) -> TestResult {
+    let script = r#"#!/bin/sh
+if [ -n "$PRE_OUTPUT_SLEEP_SECS" ]; then
+    sleep "$PRE_OUTPUT_SLEEP_SECS"
+fi
+printf '%b' "$STDOUT_SCRIPT"
+printf '%b' "$STDERR_SCRIPT" >&2
+exit "${EXIT_CODE:-0}"
+"#;
+    fs::write(path, script)?;
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+fn sample_request(workspace_dir: Utf8PathBuf) -> SingleTaskSessionRequest {
+    SingleTaskSessionRequest {
+        bead_id: BeadId::new("grove-244"),
+        run_id: RunId::new("run-activity-proof"),
+        session_id: SessionId::new("ses-activity-proof"),
+        prompt_id: PromptId::new("prompt-activity-proof"),
+        task_title: "Prove live activity transitions".to_owned(),
+        task_description: "Acceptance proof for observable activity transitions.".to_owned(),
+        contract: ExecutionContract::SingleTask,
+        model: "sonnet".to_owned(),
+        working_dir: workspace_dir,
+        transcript_path: Utf8PathBuf::from(".grove/transcripts/grove-244/ses-activity-proof.jsonl"),
+        prompt_manifest_path: Utf8PathBuf::from(".grove/prompts/prompt-activity-proof.json"),
+        timeout: Duration::from_secs(60),
+        exit_policy: ExitPolicy::default(),
+        context_monitor: ContextMonitor::new(0.7, 0.82, 0.9, 16_000),
+        reservation_hints: vec!["crates/grove-cli/tests/phase3_acceptance.rs".to_owned()],
+        parent_handoffs: vec!["Phase 3 needs live activity proof.".to_owned()],
+        checkpoint: None,
+        previous_failure_class: None,
+        previous_outcome: None,
+        rescue_card: None,
+        retry_delta_summary: None,
+        retrieval_query: None,
+        token_budget: Some(2_000),
+        ordinal_in_run: 1,
+        archive_bundle: None,
+        playbook_rules: Vec::new(),
+        env: Vec::new(),
+        shutdown: SessionShutdownConfig::default(),
+    }
+}
+
+#[derive(Default)]
+struct ActivityRecordingHooks {
+    changes: Mutex<Vec<(AgentActivity, Option<String>, DateTime<Utc>)>>,
+    started: Mutex<Vec<ClaudeSessionRecord>>,
+}
+
+impl SessionLifecycleHooks for ActivityRecordingHooks {
+    fn on_session_started(&mut self, session: &ClaudeSessionRecord) -> anyhow::Result<()> {
+        self.started.lock().expect("lock started").push(session.clone());
+        Ok(())
+    }
+
+    fn on_activity_changed(
+        &mut self,
+        activity: AgentActivity,
+        detail: Option<&str>,
+        at: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        self.changes
+            .lock()
+            .expect("lock activity changes")
+            .push((activity, detail.map(str::to_owned), at));
+        Ok(())
+    }
+}
 
 #[test]
 fn shutdown_signal_translates_to_durable_stop_reason() {
@@ -92,4 +180,142 @@ fn coordinator_shutdown_events_round_trip_in_db() {
     assert_eq!(payload["stop_reason"], "interrupted");
     assert_eq!(payload["forced_termination"], true);
     assert_eq!(payload["leader_released"], true);
+}
+
+#[test]
+fn live_session_hooks_expose_idle_blocked_and_ready_activity_transitions() -> TestResult {
+    let dir = tempdir()?;
+    let workspace_dir = dir.path().join("workspace");
+    fs::create_dir_all(&workspace_dir)?;
+    let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+        .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+
+    let script_path = dir.path().join("fake-claude");
+    write_fake_claude_script(&script_path)?;
+    let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+    let mut request = sample_request(workspace_dir);
+    request.env = vec![
+        ("PRE_OUTPUT_SLEEP_SECS".to_owned(), "0.05".to_owned()),
+        (
+            "STDOUT_SCRIPT".to_owned(),
+            "working through the task\nGROVE_CHECKPOINT: {\"progress\":\"halfway\",\"next_step\":\"finish proof\",\"context\":{},\"open_questions\":[],\"claimed_paths\":[]}\n".to_owned(),
+        ),
+        (
+            "STDERR_SCRIPT".to_owned(),
+            "permission denied opening sandboxed path\n".to_owned(),
+        ),
+        ("EXIT_CODE".to_owned(), "0".to_owned()),
+    ];
+
+    let mut hooks = ActivityRecordingHooks::default();
+    let _result = execute_single_task_session_with_hooks(&backend, request, &mut hooks)?;
+
+    let started = hooks.started.lock().expect("lock started");
+    assert_eq!(started.len(), 1, "session start should still be observable");
+    drop(started);
+
+    let changes = hooks.changes.lock().expect("lock activity changes");
+    let activities: Vec<_> = changes.iter().map(|(activity, _, _)| *activity).collect();
+    let details: Vec<_> = changes.iter().map(|(_, detail, _)| detail.as_deref()).collect();
+
+    assert!(activities.contains(&AgentActivity::Ready), "checkpoint output should mark the session ready");
+    assert!(activities.contains(&AgentActivity::Blocked), "permission denied stderr should mark the session blocked");
+    assert!(activities.contains(&AgentActivity::Idle), "stream timeout should eventually mark the session idle");
+    assert!(
+        details.contains(&Some("protocol_event")),
+        "checkpoint-driven activity change should be tagged as a protocol event"
+    );
+    assert!(
+        details.contains(&Some("stderr")),
+        "stderr-driven activity change should be tagged as stderr"
+    );
+    assert!(
+        details.contains(&Some("stream_timeout")),
+        "idle detection should be tagged as stream_timeout"
+    );
+    Ok(())
+}
+
+#[test]
+fn persisted_session_records_live_idle_transition_in_run_state_and_event_log() -> TestResult {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+    db.connection().execute(
+        "INSERT INTO bead_cache(\
+            bead_id, title, description, priority, issue_type, status, assignee,\
+            labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', ?6, ?7)",
+        rusqlite::params![
+            "grove-244",
+            "Prove live activity transitions",
+            1,
+            "task",
+            "open",
+            serde_json::json!({"id": "grove-244", "title": "Prove live activity transitions"}).to_string(),
+            "2026-03-21T00:00:00Z"
+        ],
+    )?;
+
+    let workspace_dir = dir.path().join("workspace");
+    fs::create_dir_all(&workspace_dir)?;
+    let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+        .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+
+    let script_path = dir.path().join("fake-claude");
+    write_fake_claude_script(&script_path)?;
+    let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+    let mut request = sample_request(workspace_dir);
+    request.env = vec![
+        ("PRE_OUTPUT_SLEEP_SECS".to_owned(), "0.05".to_owned()),
+        (
+            "STDOUT_SCRIPT".to_owned(),
+            "working through the task\nGROVE_CHECKPOINT: {\"progress\":\"halfway\",\"next_step\":\"finish proof\",\"context\":{},\"open_questions\":[],\"claimed_paths\":[]}\n".to_owned(),
+        ),
+        (
+            "STDERR_SCRIPT".to_owned(),
+            "permission denied opening sandboxed path\n".to_owned(),
+        ),
+        ("EXIT_CODE".to_owned(), "0".to_owned()),
+    ];
+
+    let persisted = execute_persisted_single_task_session(&mut db, &backend, request, 1)?;
+
+    assert_eq!(persisted.run.activity, Some(AgentActivity::Blocked));
+
+    let run_rows = db.list_task_runs_for_bead(&BeadId::new("grove-244"))?;
+    assert_eq!(run_rows.len(), 1, "expected one persisted run");
+    assert_eq!(run_rows[0].activity, Some(AgentActivity::Blocked));
+    assert!(
+        run_rows[0].last_activity_at.is_some(),
+        "activity persistence should stamp last_activity_at"
+    );
+
+    let events = db.list_event_logs_for_bead(&BeadId::new("grove-244"))?;
+    let idle_event = events.iter().find(|event| {
+        event.kind == EventKind::ActivityStateChanged
+            && event.payload["activity"] == "Idle"
+            && event.payload.get("detail")
+                == Some(&serde_json::Value::String("stream_timeout".to_owned()))
+    });
+    assert!(
+        idle_event.is_some(),
+        "expected a durable Idle activity event tagged stream_timeout"
+    );
+
+    let blocked_event = events.iter().find(|event| {
+        event.kind == EventKind::ActivityStateChanged
+            && event.payload["activity"] == "Blocked"
+            && event.payload.get("detail")
+                == Some(&serde_json::Value::String("stderr".to_owned()))
+    });
+    assert!(
+        blocked_event.is_some(),
+        "expected a durable Blocked activity event tagged stderr"
+    );
+    Ok(())
 }

@@ -1,6 +1,7 @@
 use crate::{DispatchEligibility, DispatchEligibilityContext, LocalSuppressionReason};
 use anyhow::Result;
 use chrono::{Duration, Utc};
+use serde::Serialize;
 use grove_br::{BrClient, BrDependencySnapshot};
 use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
@@ -15,7 +16,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub const QUERY_PURPOSE: &str =
     "Operator-facing status query models for grove status and dispatch explainability.";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StatusSnapshot {
     pub workspace_root: String,
     pub leader: Option<LeaderLeaseView>,
@@ -48,7 +49,7 @@ impl StatusSnapshot {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WorkspaceStatusView {
     pub workspace_root: String,
     pub leader: Option<LeaderLeaseView>,
@@ -63,13 +64,13 @@ pub struct WorkspaceStatusView {
     pub mirror_pending: Vec<MirrorPendingView>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct StatusCount {
     pub status: String,
     pub count: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LeaderLeaseView {
     pub owner_label: String,
     pub acquired_at: Option<Timestamp>,
@@ -77,7 +78,7 @@ pub struct LeaderLeaseView {
     pub expires_at: Option<Timestamp>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CoordinatorStopView {
     pub reason: String,
     pub created_at: Timestamp,
@@ -98,7 +99,7 @@ impl LeaderLeaseView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunningBeadView {
     pub bead_id: BeadId,
     pub title: String,
@@ -112,7 +113,7 @@ pub struct RunningBeadView {
     pub last_progress: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReadyQueueEntry {
     pub bead_id: BeadId,
     pub title: String,
@@ -126,14 +127,14 @@ pub struct ReadyQueueEntry {
     pub ready_minutes: Option<i64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScoreComponentView {
     pub label: String,
     pub value: f64,
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckpointedBeadView {
     pub bead_id: BeadId,
     pub title: String,
@@ -146,7 +147,7 @@ pub struct CheckpointedBeadView {
     pub recovery_capsule: Option<RecoveryCapsule>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FailedBeadView {
     pub bead_id: BeadId,
     pub title: String,
@@ -161,7 +162,7 @@ pub struct FailedBeadView {
     pub mirror_pending: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MirrorPendingView {
     pub bead_id: BeadId,
     pub run_id: Option<RunId>,
@@ -170,7 +171,7 @@ pub struct MirrorPendingView {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DispatchExplanationView {
     pub ready_in_br: bool,
     pub dispatchable_in_grove: bool,
@@ -213,7 +214,7 @@ impl DispatchExplanationView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SuppressionReasonView {
     pub code: &'static str,
     pub summary: String,
@@ -319,7 +320,7 @@ impl SuppressionReasonView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReservationConflictView {
     pub requested_by_bead: BeadId,
     pub conflicting_bead: BeadId,

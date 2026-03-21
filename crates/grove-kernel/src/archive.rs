@@ -16,13 +16,9 @@ pub fn ingest_transcript_to_archive(
 ) -> Result<ConversationRecord> {
     let mut started_at = None;
     let mut ended_at = None;
+    let mut messages = Vec::new();
 
-    let mut agent_lines = Vec::new();
-
-    // In a typical Grove session, the prompt is implicitly the context,
-    // and the actual Claude process emits stdout lines. We group all stdout
-    // into a single agent message for archiving context.
-    for event in &transcript.events {
+    for (idx, event) in transcript.events.iter().enumerate() {
         match event {
             TranscriptEvent::SessionStarted { ts, .. } => {
                 if started_at.is_none() {
@@ -32,27 +28,64 @@ pub fn ingest_transcript_to_archive(
             TranscriptEvent::SessionEnded { ts, .. } => {
                 ended_at = Some(ts.clone());
             }
-            TranscriptEvent::StdoutLine { line, .. } => {
-                agent_lines.push(line.clone());
+            TranscriptEvent::StdoutLine { line, ts } => {
+                messages.push(MessageRecord {
+                    id: None,
+                    idx: idx as i64,
+                    role: MessageRole::Agent,
+                    author: Some("sonnet".to_string()),
+                    created_at: Some(ts.clone()),
+                    content: line.clone(),
+                    extra_json: serde_json::json!({ "kind": "stdout" }),
+                    snippets: extract_markdown_snippets(line),
+                });
             }
-            // ParsedProtocol events are emitted dynamically in the stream
-            _ => {}
+            TranscriptEvent::StderrLine { line, ts } => {
+                messages.push(MessageRecord {
+                    id: None,
+                    idx: idx as i64,
+                    role: MessageRole::System,
+                    author: None,
+                    created_at: Some(ts.clone()),
+                    content: line.clone(),
+                    extra_json: serde_json::json!({ "kind": "stderr" }),
+                    snippets: extract_markdown_snippets(line),
+                });
+            }
+            TranscriptEvent::ParsedProtocol { event, ts } => {
+                let content = match event {
+                    grove_types::ProtocolEvent::Result { summary } => format!("GROVE_RESULT: {summary}"),
+                    grove_types::ProtocolEvent::Artifacts { items } => {
+                        format!("GROVE_ARTIFACTS: {}", items.join(", "))
+                    }
+                    grove_types::ProtocolEvent::Lessons { items } => {
+                        format!("GROVE_LESSONS: {}", items.join(" | "))
+                    }
+                    grove_types::ProtocolEvent::Decisions { items } => {
+                        format!("GROVE_DECISIONS: {}", items.join(" | "))
+                    }
+                    grove_types::ProtocolEvent::Warnings { items } => {
+                        format!("GROVE_WARNINGS: {}", items.join(" | "))
+                    }
+                    grove_types::ProtocolEvent::Exit { value } => format!("GROVE_EXIT: {value}"),
+                    grove_types::ProtocolEvent::Checkpoint { payload } => format!(
+                        "GROVE_CHECKPOINT: progress={} next_step={}",
+                        payload.progress, payload.next_step
+                    ),
+                };
+                messages.push(MessageRecord {
+                    id: None,
+                    idx: idx as i64,
+                    role: MessageRole::System,
+                    author: Some("grove-protocol".to_string()),
+                    created_at: Some(ts.clone()),
+                    content,
+                    extra_json: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                    snippets: Vec::new(),
+                });
+            }
         }
     }
-
-    let joined_content = agent_lines.join("\n");
-    let snippets = extract_markdown_snippets(&joined_content);
-
-    let messages = vec![MessageRecord {
-        id: None,
-        idx: 0,
-        role: MessageRole::Agent,
-        author: Some("sonnet".to_string()),
-        created_at: started_at.clone(),
-        content: joined_content,
-        extra_json: serde_json::json!({}),
-        snippets,
-    }];
 
     Ok(ConversationRecord {
         id: None,
@@ -61,20 +94,15 @@ pub fn ingest_transcript_to_archive(
         session_id,
         workspace: None,
         title: None,
-        source_path: path_for_transcript(), // Dummy, replace correctly
+        source_path: camino::Utf8PathBuf::from("."),
         started_at,
         ended_at,
         approx_tokens: None,
-        metadata_json: serde_json::json!({}),
+        metadata_json: serde_json::json!({ "message_count": messages.len() }),
         messages,
         source_id: grove_types::SourceId::new("transcript"),
         origin_host: None,
     })
-}
-
-// Dummy helper
-fn path_for_transcript() -> camino::Utf8PathBuf {
-    camino::Utf8PathBuf::from("/dev/null")
 }
 
 fn extract_markdown_snippets(content: &str) -> Vec<SnippetRecord> {

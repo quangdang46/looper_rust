@@ -34,7 +34,7 @@ You become the orchestrator. A human one. Manually chaining sessions, one at a t
 
 **Grove closes this loop.**
 
-Define your tasks with `br`. Type `grove run`. Walk away. Come back to completed work — sessions handled, context rotations managed, memory passed between beads automatically. Anything that failed or couldn't mirror back to `br` is flagged, not silently lost.
+Define your tasks with `br`. Type `grove run`. Walk away. Come back to completed work — sessions handled, context rotations managed, and native handoffs, transcript archive, and playbook memory carried forward automatically. Anything that failed or couldn't mirror back to `br` is flagged, not silently lost.
 
 ---
 
@@ -106,7 +106,7 @@ You                         br / bv                        grove                
 
 ## How It Works
 
-Grove runs a continuous autonomous loop over your beads task graph. Each bead is dispatched to a Claude session. When context exhausts, grove checkpoints and spawns a fresh session automatically. Child beads inherit structured handoffs from parents. Parallel beads run concurrently with file reservation safety.
+Grove runs a continuous autonomous loop over your beads task graph. Each bead is dispatched to a Claude session. The coordinator can keep multiple sessions in flight concurrently up to `max_parallel`, while still enforcing file reservation safety and a single active leader lease. When context exhausts, grove checkpoints and spawns a fresh session automatically. Child beads inherit structured handoffs from parents.
 
 ### The Loop
 
@@ -194,13 +194,13 @@ session running...
 
 ### Native Memory Engine
 
-Grove owns its memory entirely — no external memory tools required.
+Grove owns its memory entirely. No external memory or search tool is required.
 
 ```
 Bead A session ends
-  → grove indexes transcript into native FTS5 archive
-  → grove persists structured handoff (summary, artifacts, lessons, decisions, warnings)
-  → grove extracts GROVE_LESSONS into playbook as candidate bullets
+  → grove indexes the transcript into its native FTS5 archive with transcript-backed provenance
+  → grove persists a structured handoff (summary, artifacts, lessons, decisions, warnings)
+  → grove extracts `GROVE_LESSONS` into playbook draft bullets
 
 Bead B (child of A) dispatched
   → archive search: "auth middleware" → returns relevant snippets from past sessions
@@ -210,6 +210,8 @@ Bead B (child of A) dispatched
 ```
 
 Over time, repeated lessons get promoted (Candidate → Established → Proven). Harmful rules get demoted or inverted into anti-patterns. The playbook stays compact and self-curating via exponential decay scoring.
+
+Grove also records reaction evaluations on failure paths and can persist recovery capsules plus retry-oriented guidance, so the recovery loop is no longer purely static policy metadata.
 
 ---
 
@@ -264,16 +266,16 @@ grove init
 # Start orchestrator (the main command)
 grove run
 
-# Check status — ready queue, running beads, scores, health
+# Check status — leader lease, ready queue, running beads, checkpoints, failures, mirror-pending state
 grove status
 
-# Deep inspect a bead — runs, checkpoints, handoffs, prompt breakdown
+# Deep inspect a bead — dispatch reasoning, reservation conflicts, prompt manifest, retrieval snippets, playbook bullets, checkpoints, recovery capsules, handoffs, mirror actions
 grove inspect bd-e9b1d4
 
-# Stream transcript logs for a bead
+# Show the latest run log, event log, transcript tail, and latest checkpoint or recovery capsule
 grove log bd-e9b1d4
 
-# Retry a failed bead
+# Reset a failed or checkpointed bead so the next `grove run` can retry it
 grove retry bd-e9b1d4
 ```
 
@@ -393,17 +395,15 @@ my-project/
 
 ## Dependencies
 
-All required. Grove exits with clear install instructions if any are missing.
-
+All required. `grove init` validates them up front and exits clearly if any are missing.
 
 | Tool                | Purpose                                                           |
 | ------------------- | ----------------------------------------------------------------- |
-| `claude` CLI        | Execute AI coding sessions                                        |
-| `br` (beads_rust)   | Task graph — issue definitions, dependencies, lifecycle           |
-| `bv` (beads_viewer) | Graph analytics — PageRank, critical path, triage recommendations |
+| `claude` CLI        | Execute Claude coding sessions                                    |
+| `br` (beads_rust)   | Source of truth for bead state, dependencies, and close/update sync |
+| `bv` (beads_viewer) | Graph-aware triage and planning insight                            |
 
-
-That's it. No external memory, search, or orchestration tools. Grove handles everything else natively.
+That's it. No external memory or search tool is required. Grove owns archive ingest, FTS5 retrieval, handoffs, checkpoints, recovery capsules, and playbook memory natively.
 
 ---
 

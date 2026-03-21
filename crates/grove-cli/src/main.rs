@@ -1,6 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 use camino::Utf8PathBuf;
-use clap::{Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand};
+use serde_json::json;
 use grove_br::{BrClient, BrIssueDetail, CliBrClient, sync_bead_cache};
 use grove_bv::{BvClient, BvTriageOutput, CliBvClient};
 use grove_config::{
@@ -20,6 +21,8 @@ use std::{cmp, env, fs};
 #[command(name = "grove")]
 #[command(about = "Autonomous orchestration for beads-backed Claude work")]
 struct Cli {
+    #[arg(long, global = true, action = ArgAction::SetTrue)]
+    json: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -38,20 +41,57 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Init) => handle_init(),
-        Some(Command::Status) => handle_status(),
-        Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id)),
-        Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id)),
-        Some(Command::Retry { bead_id }) => handle_retry(&BeadId::new(bead_id)),
-        Some(Command::Run) => handle_run(),
+        Some(Command::Init) => run_json_command("init", cli.json, || handle_init(cli.json)),
+        Some(Command::Status) => handle_status(cli.json),
+        Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
+        Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id), cli.json),
+        Some(Command::Retry { bead_id }) => handle_retry(&BeadId::new(bead_id), cli.json),
+        Some(Command::Run) => run_json_command("run", cli.json, || handle_run(cli.json)),
         None => {
-            println!("Use `grove --help` to see available commands.");
+            if cli.json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "ok": true,
+                        "command": null,
+                        "message": "Use `grove --help` to see available commands.",
+                        "available_commands": ["init", "status", "inspect", "log", "retry", "run"],
+                    }))?
+                );
+            } else {
+                println!("Use `grove --help` to see available commands.");
+            }
             Ok(())
         }
     }
 }
 
-fn handle_init() -> Result<()> {
+fn run_json_command<F>(command: &str, json_mode: bool, op: F) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    match op() {
+        Ok(()) => Ok(()),
+        Err(error) if json_mode => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "ok": false,
+                    "command": command,
+                    "error": format_error_chain(&error),
+                }))?
+            );
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn format_error_chain(error: &anyhow::Error) -> Vec<String> {
+    error.chain().map(|cause| cause.to_string()).collect()
+}
+
+fn handle_init(json_mode: bool) -> Result<()> {
     let workspace_root = current_workspace_root()?;
     let config_path = workspace_root.join("grove.toml");
     let wrote_default_config = if config_path.exists() {
@@ -87,6 +127,46 @@ fn handle_init() -> Result<()> {
     } else {
         0
     };
+
+    if json_mode {
+        let notes = [
+            (!br_capability.beads_dir_exists).then_some(
+                "No .beads directory detected yet; run `br init` before `grove status` or `grove run`.",
+            ),
+            (!bv_capability.beads_dir_exists).then_some(
+                "`bv` does not see a .beads directory yet, so triage commands will not be available until beads are initialized.",
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "ok": true,
+                "workspace_root": loaded.paths.workspace_root().as_str(),
+                "db_path": loaded.paths.db_path().as_str(),
+                "config_path": loaded.paths.config_path().as_str(),
+                "transcript_dir": loaded.paths.transcript_dir().as_str(),
+                "checkpoints_dir": loaded.paths.checkpoints_dir().as_str(),
+                "wrote_default_config": wrote_default_config,
+                "synced_beads": synced_beads,
+                "tooling": {
+                    "claude": render_tool_line(&tooling.claude.binary, tooling.claude.version.as_deref()),
+                    "br": render_tool_line("br", br_capability.version_line.as_deref()),
+                    "bv": render_tool_line("bv", bv_capability.version.as_deref()),
+                },
+                "notes": notes,
+                "next_steps": [
+                    "Create or review beads with br",
+                    "Run grove status",
+                    "Run grove inspect <bead-id>",
+                ],
+            }))?
+        );
+        return Ok(());
+    }
 
     println!("Initialized grove workspace.");
     println!("- database: {}", loaded.paths.db_path());
@@ -136,7 +216,7 @@ fn handle_init() -> Result<()> {
     Ok(())
 }
 
-fn handle_status() -> Result<()> {
+fn handle_status(json_mode: bool) -> Result<()> {
     let (loaded, db, br) = open_runtime()?;
     let bv = CliBvClient::new("bv", loaded.paths.workspace_root().as_str());
     let (triage, triage_error) = match bv.triage() {
@@ -153,6 +233,38 @@ fn handle_status() -> Result<()> {
     )
     .context("load workspace status view")?;
 
+    if json_mode {
+        let triage_summary = triage.as_ref().map(|triage| {
+            json!({
+                "generated_at": triage.generated_at,
+                "data_hash": triage.data_hash,
+                "quick_ref": {
+                    "open_count": triage.quick_ref.open_count,
+                    "actionable_count": triage.quick_ref.actionable_count,
+                    "blocked_count": triage.quick_ref.blocked_count,
+                    "in_progress_count": triage.quick_ref.in_progress_count,
+                    "top_pick_ids": triage
+                        .quick_ref
+                        .top_picks
+                        .iter()
+                        .map(|pick| pick.id.as_str())
+                        .collect::<Vec<_>>(),
+                }
+            })
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "workspace_root": loaded.paths.workspace_root().as_str(),
+                "db_path": loaded.paths.db_path().as_str(),
+                "view": view,
+                "triage_summary": triage_summary,
+                "triage_error": triage_error,
+            }))?
+        );
+        return Ok(());
+    }
+
     print_status_view(
         &view,
         loaded.paths.db_path().as_str(),
@@ -162,7 +274,7 @@ fn handle_status() -> Result<()> {
     Ok(())
 }
 
-fn handle_inspect(bead_id: &BeadId) -> Result<()> {
+fn handle_inspect(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     let (loaded, db, br) = open_runtime()?;
     let bv = CliBvClient::new("bv", loaded.paths.workspace_root().as_str());
     let triage = bv.triage().ok();
@@ -181,6 +293,34 @@ fn handle_inspect(bead_id: &BeadId) -> Result<()> {
         bail!("bead {bead_id} was not found in br or the local Grove cache");
     }
 
+    if json_mode {
+        let issue_summary = issue_detail.as_ref().map(|detail| {
+            json!({
+                "id": detail.summary.id.as_str(),
+                "title": detail.summary.title,
+                "status": detail.summary.status,
+                "issue_type": detail.summary.issue_type,
+                "priority": format_priority(detail.summary.priority),
+                "labels": detail.summary.labels,
+                "assignee": detail.summary.assignee,
+                "description": detail.summary.description,
+                "closed_at": detail.closed_at,
+                "close_reason": detail.close_reason,
+                "comment_count": detail.comments.len(),
+            })
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "workspace_root": loaded.paths.workspace_root().as_str(),
+                "bead_id": bead_id.as_str(),
+                "issue_summary": issue_summary,
+                "view": view,
+            }))?
+        );
+        return Ok(());
+    }
+
     print_inspect_report(
         loaded.paths.workspace_root().as_str(),
         issue_detail.as_ref(),
@@ -189,7 +329,7 @@ fn handle_inspect(bead_id: &BeadId) -> Result<()> {
     Ok(())
 }
 
-fn handle_run() -> Result<()> {
+fn handle_run(json_mode: bool) -> Result<()> {
     let (loaded, mut db, br) = open_runtime()?;
     let owner_label = format!("{}:{}", loaded.paths.workspace_root(), std::process::id());
     let lease_ttl = chrono::Duration::milliseconds(
@@ -203,9 +343,10 @@ fn handle_run() -> Result<()> {
     let startup = acquire_startup_coordinator(&mut db, &lease_config, None, now)
         .map_err(|error| anyhow!(error.to_string()))?;
 
-    let startup_result = run_startup_checks(&mut db, &lease_config, startup);
-    startup_result?;
-    println!("Startup recovery checks complete. Beginning dispatch loop.");
+    run_startup_checks(&mut db, &lease_config, startup)?;
+    if !json_mode {
+        println!("Startup recovery checks complete. Beginning dispatch loop.");
+    }
 
     // Create and register shutdown signal for graceful Ctrl-C handling.
     let shutdown_signal = ShutdownSignal::new();
@@ -219,6 +360,7 @@ fn handle_run() -> Result<()> {
         max_poll_cycles: None,
         working_dir: loaded.paths.workspace_root().to_owned(),
         shutdown_signal,
+        db_path: loaded.paths.db_path().to_owned(),
     };
 
     let dispatch_result = run_dispatch_loop(
@@ -251,14 +393,33 @@ fn handle_run() -> Result<()> {
                 }),
                 &chrono::Utc::now(),
             );
-            println!("Dispatch loop exited: {}", outcome.exit_reason);
-            println!("Stop reason: {}", outcome.stop_reason);
-            println!("Total runs dispatched: {}", outcome.dispatched_count);
-            println!("Total poll cycles: {}", outcome.poll_cycles);
-            print_run_startup_report(&loaded, &release_result);
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "ok": true,
+                        "command": "run",
+                        "workspace_root": loaded.paths.workspace_root().as_str(),
+                        "db_path": loaded.paths.db_path().as_str(),
+                        "exit_reason": outcome.exit_reason.to_string(),
+                        "stop_reason": outcome.stop_reason.as_str(),
+                        "dispatched_count": outcome.dispatched_count,
+                        "poll_cycles": outcome.poll_cycles,
+                        "leader_lease_released": release_result.is_some(),
+                        "configured_max_parallel": loaded.config.scheduler.max_parallel,
+                    }))?
+                );
+            } else {
+                println!("Dispatch loop exited: {}", outcome.exit_reason);
+                println!("Stop reason: {}", outcome.stop_reason);
+                println!("Total runs dispatched: {}", outcome.dispatched_count);
+                println!("Total poll cycles: {}", outcome.poll_cycles);
+                print_run_startup_report(&loaded, &release_result);
+            }
             Ok(())
         }
         Err(error) => {
+            let error_message = error.to_string();
             let _ = db.write_event_log(
                 grove_types::EventKind::CoordinatorStopped,
                 None,
@@ -270,30 +431,89 @@ fn handle_run() -> Result<()> {
                     "forced_termination": false,
                     "running_session_count": 0,
                     "leader_released": release_result.is_some(),
-                    "error": error.to_string(),
+                    "error": error_message,
                 }),
                 &chrono::Utc::now(),
             );
-            print_run_startup_report(&loaded, &release_result);
-            Err(error)
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "ok": false,
+                        "command": "run",
+                        "workspace_root": loaded.paths.workspace_root().as_str(),
+                        "db_path": loaded.paths.db_path().as_str(),
+                        "exit_reason": "error",
+                        "stop_reason": grove_types::CoordinatorStopReason::InternalError.as_str(),
+                        "leader_lease_released": release_result.is_some(),
+                        "configured_max_parallel": loaded.config.scheduler.max_parallel,
+                        "error": error_message,
+                    }))?
+                );
+                Ok(())
+            } else {
+                print_run_startup_report(&loaded, &release_result);
+                Err(error)
+            }
         }
     }
 }
 
-fn handle_log(bead_id: &BeadId) -> Result<()> {
+fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     let (_loaded, db, _br) = open_runtime()?;
 
-    // Find the latest run for this bead.
     let runs = db
         .list_task_runs_for_bead(bead_id)
         .with_context(|| format!("list runs for {}", bead_id.as_str()))?;
 
     if runs.is_empty() {
-        println!("No runs found for bead {}.", bead_id.as_str());
+        if json_mode {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "bead_id": bead_id.as_str(),
+                    "run": null,
+                    "events": [],
+                    "latest_session": null,
+                    "latest_checkpoint": null,
+                    "recovery_capsule": null,
+                    "transcript_tail": null,
+                }))?
+            );
+        } else {
+            println!("No runs found for bead {}.", bead_id.as_str());
+        }
         return Ok(());
     }
 
     let latest_run = &runs[0];
+    let events = db
+        .list_events_for_run(&latest_run.id)
+        .with_context(|| format!("list events for run {}", latest_run.id.as_str()))?;
+    let latest_session = db.latest_session_for_run(&latest_run.id)?;
+    let latest_checkpoint = db.latest_checkpoint_for_bead(bead_id)?;
+    let recovery_capsule = db.latest_recovery_capsule_for_bead(bead_id)?;
+    let transcript_tail = latest_session
+        .as_ref()
+        .map(|session| read_transcript_tail(&session.transcript_path, 20))
+        .transpose()?;
+
+    if json_mode {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "bead_id": bead_id.as_str(),
+                "run": latest_run,
+                "events": events,
+                "latest_session": latest_session,
+                "latest_checkpoint": latest_checkpoint,
+                "recovery_capsule": recovery_capsule,
+                "transcript_tail": transcript_tail,
+            }))?
+        );
+        return Ok(());
+    }
+
     println!("Bead: {}", bead_id.as_str());
     println!(
         "Run: {} (attempt {}, status: {:?})",
@@ -302,10 +522,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
         latest_run.status
     );
     println!("Started: {}", latest_run.started_at);
-    println!(
-        "Ended: {}",
-        display_option(latest_run.ended_at.as_ref())
-    );
+    println!("Ended: {}", display_option(latest_run.ended_at.as_ref()));
     if let Some(failure_class) = latest_run.failure_class {
         println!("Failure class: {:?}", failure_class);
     }
@@ -317,11 +534,6 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
         latest_run.session_count, latest_run.checkpoint_count
     );
 
-    // Show event log entries for this run.
-    let events = db
-        .list_events_for_run(&latest_run.id)
-        .with_context(|| format!("list events for run {}", latest_run.id.as_str()))?;
-
     if events.is_empty() {
         println!("\nNo events recorded for this run.");
     } else {
@@ -332,10 +544,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
                 .as_ref()
                 .map(|sid| format!(" ses:{}", sid.as_str()))
                 .unwrap_or_default();
-            println!(
-                "  [{:?}]{} at {}",
-                event.kind, session_label, event.created_at
-            );
+            println!("  [{:?}]{} at {}", event.kind, session_label, event.created_at);
             if event.payload != serde_json::Value::Null {
                 if let Ok(pretty) = serde_json::to_string(&event.payload) {
                     println!("    {pretty}");
@@ -344,8 +553,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
         }
     }
 
-    // Show latest session transcript path.
-    if let Ok(Some(session)) = db.latest_session_for_run(&latest_run.id) {
+    if let Some(session) = latest_session.as_ref() {
         println!("\nLatest session: {}", session.id.as_str());
         println!("  status: {:?}", session.status);
         println!("  transcript: {}", session.transcript_path);
@@ -353,30 +561,20 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
             "  stop reason: {}",
             display_option(session.stop_reason.as_ref().map(|reason| format!("{reason:?}")))
         );
-
-        // Try to read transcript file content if it exists.
-        let transcript_path = std::path::Path::new(&session.transcript_path);
-        if transcript_path.exists() {
-            println!("\nTranscript tail:");
-            match fs::read_to_string(transcript_path) {
-                Ok(content) => {
-                    let lines: Vec<&str> = content.lines().collect();
-                    let start = lines.len().saturating_sub(20);
-                    for line in &lines[start..] {
-                        println!("  {line}");
-                    }
-                }
-                Err(error) => {
-                    println!("  (could not read transcript: {error})");
+        match transcript_tail.as_ref() {
+            Some(Some(lines)) if !lines.is_empty() => {
+                println!("\nTranscript tail:");
+                for line in lines {
+                    println!("  {line}");
                 }
             }
-        } else {
-            println!("  (transcript file not found at {})", session.transcript_path);
+            Some(Some(_)) => println!("  (transcript file is empty)"),
+            Some(None) => println!("  (transcript file not found at {})", session.transcript_path),
+            None => println!("  (transcript unavailable)"),
         }
     }
 
-    // Show latest checkpoint if present.
-    if let Ok(Some(checkpoint)) = db.latest_checkpoint_for_bead(bead_id) {
+    if let Some(checkpoint) = latest_checkpoint.as_ref() {
         println!("\nLatest checkpoint:");
         println!("  progress: {}", checkpoint.progress);
         println!("  next step: {}", checkpoint.next_step);
@@ -384,8 +582,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
         println!("  resume generation: {}", checkpoint.resume_generation);
     }
 
-    // Show recovery capsule if present.
-    if let Ok(Some(capsule_event)) = db.latest_recovery_capsule_for_bead(bead_id) {
+    if let Some(capsule_event) = recovery_capsule.as_ref() {
         println!("\nRecovery capsule:");
         println!("  outcome: {:?}", capsule_event.capsule.outcome);
         println!("  summary: {}", capsule_event.capsule.summary);
@@ -400,7 +597,7 @@ fn handle_log(bead_id: &BeadId) -> Result<()> {
     Ok(())
 }
 
-fn handle_retry(bead_id: &BeadId) -> Result<()> {
+fn handle_retry(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     let (_loaded, mut db, br) = open_runtime()?;
 
     // Check current bead status.
@@ -425,6 +622,31 @@ fn handle_retry(bead_id: &BeadId) -> Result<()> {
     let br_ready = br.ready().unwrap_or_default();
     let is_ready_in_br = br_ready.iter().any(|s| &s.id == bead_id);
 
+    if json_mode {
+        let warning = (!is_ready_in_br).then(|| {
+            format!(
+                "bead {} is not reported as ready by br; proceeding with local retry",
+                bead_id.as_str()
+            )
+        });
+        let now = chrono::Utc::now();
+        db.reset_bead_for_retry(bead_id, &now)
+            .with_context(|| format!("reset bead {} for retry", bead_id.as_str()))?;
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "bead_id": bead_id.as_str(),
+                "reset": true,
+                "previous_grove_status": format!("{:?}", bead.grove_status),
+                "previous_failure_class": bead.last_failure_class.map(|class| format!("{:?}", class)),
+                "ready_in_br": is_ready_in_br,
+                "warning": warning,
+                "next_action": "run grove run to dispatch the bead again",
+            }))?
+        );
+        return Ok(());
+    }
+
     if !is_ready_in_br {
         println!(
             "Warning: bead {} is not reported as ready by br. Proceeding with local retry anyway.",
@@ -432,7 +654,6 @@ fn handle_retry(bead_id: &BeadId) -> Result<()> {
         );
     }
 
-    // Clear retry backoff and reset to Ready status.
     let now = chrono::Utc::now();
     db.reset_bead_for_retry(bead_id, &now)
         .with_context(|| format!("reset bead {} for retry", bead_id.as_str()))?;
@@ -1257,6 +1478,19 @@ where
         Some(value) => value.to_string(),
         None => "-".to_owned(),
     }
+}
+
+fn read_transcript_tail(path: &str, tail_lines: usize) -> Result<Option<Vec<String>>> {
+    let transcript_path = std::path::Path::new(path);
+    if !transcript_path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(transcript_path)
+        .with_context(|| format!("read transcript at {path}"))?;
+    let lines = content.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
+    let start = lines.len().saturating_sub(tail_lines);
+    Ok(Some(lines[start..].to_vec()))
 }
 
 fn command_name(command: &Command) -> &'static str {
