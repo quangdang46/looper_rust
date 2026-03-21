@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 pub use grove_types::EscalationContext;
 use grove_types::{
     BeadId, CheckpointId, ExecutionContract, PromptId, PromptManifest, PromptManifestSection,
@@ -368,6 +369,7 @@ fn estimate_tokens(text: &str) -> u32 {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::{CheckpointPromptInput, PromptMaterializationInput, materialize_prompt};
     use grove_types::{

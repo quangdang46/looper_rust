@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crate::{
     CheckpointPromptInput, ClaudeBackend, ContextMonitor, ExitPolicy, ParserLineKind,
     PromptMaterializationInput, ProtocolParser, ProtocolWarning, StartSessionRequest,
@@ -728,6 +729,7 @@ fn stop_reason_from_terminal_class(terminal_class: SessionTerminalClass) -> Stop
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use crate::{CliClaudeBackend, replay_transcript};

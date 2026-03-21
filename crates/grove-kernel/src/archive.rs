@@ -1,9 +1,8 @@
 use anyhow::Result;
 use grove_session::TranscriptReplay;
 use grove_types::{
-    BeadId, RunId, SessionId,
     archive::{ConversationRecord, MessageRecord, MessageRole, SnippetRecord},
-    TranscriptEvent,
+    BeadId, RunId, SessionId, TranscriptEvent,
 };
 use regex::Regex;
 
@@ -54,7 +53,9 @@ pub fn ingest_transcript_to_archive(
             }
             TranscriptEvent::ParsedProtocol { event, ts } => {
                 let content = match event {
-                    grove_types::ProtocolEvent::Result { summary } => format!("GROVE_RESULT: {summary}"),
+                    grove_types::ProtocolEvent::Result { summary } => {
+                        format!("GROVE_RESULT: {summary}")
+                    }
                     grove_types::ProtocolEvent::Artifacts { items } => {
                         format!("GROVE_ARTIFACTS: {}", items.join(", "))
                     }
@@ -80,7 +81,8 @@ pub fn ingest_transcript_to_archive(
                     author: Some("grove-protocol".to_string()),
                     created_at: Some(ts.clone()),
                     content,
-                    extra_json: serde_json::to_value(event).unwrap_or_else(|_| serde_json::json!({})),
+                    extra_json: serde_json::to_value(event)
+                        .unwrap_or_else(|_| serde_json::json!({})),
                     snippets: Vec::new(),
                 });
             }
@@ -107,7 +109,8 @@ pub fn ingest_transcript_to_archive(
 
 fn extract_markdown_snippets(content: &str) -> Vec<SnippetRecord> {
     let mut snippets = Vec::new();
-    let re = Regex::new(r"(?s)```(\w+)?\n(.*?)```").expect("valid regex");
+    #[allow(clippy::expect_used)]
+    let re = Regex::new(r"(?s)```(\w+)?\n(.*?)```").expect("static regex must be valid");
 
     for cap in re.captures_iter(content) {
         let language = cap.get(1).map(|m: regex::Match<'_>| m.as_str().to_string());

@@ -19,6 +19,7 @@ pub use analyzer::{
 };
 pub use backend::{ClaudeBackend, CliClaudeBackend, RunningSession, StartSessionRequest};
 pub use exit_policy::{ExitDecision, ExitPolicy};
+pub use grove_types::EscalationContext;
 pub use materializer::{
     CheckpointPromptInput, PromptMaterialization, PromptMaterializationInput, materialize_prompt,
 };
