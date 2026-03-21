@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 // Phase 1 Acceptance Tests
 //
 // This test suite validates that that kernel and CLI surfaces align with

@@ -1,4 +1,7 @@
-use crate::{BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, Timestamp};
+use crate::{
+    BeadId, BulletId, CheckpointId, EscalationTier, MutationStrategy, PromptId, RunId, SessionId,
+    SourceId, Timestamp,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +35,7 @@ pub enum PromptSegmentKind {
     Protocol,
     Contract,
     RescueCard,
+    EscalationContext,
 }
 
 impl PromptSegmentKind {
@@ -47,8 +51,18 @@ impl PromptSegmentKind {
             Self::Protocol => "protocol",
             Self::Contract => "contract",
             Self::RescueCard => "rescue_card",
+            Self::EscalationContext => "escalation_context",
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscalationContext {
+    pub tier: EscalationTier,
+    pub mutation_strategy: Option<MutationStrategy>,
+    pub tier_number: u32,
+    pub is_terminal: bool,
+    pub instruction: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

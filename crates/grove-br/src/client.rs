@@ -1,6 +1,6 @@
 use crate::schema::{
-    BrCapability, BrDependencySnapshot, BrIssueDetail, BrIssueSummary, BrVersion, ShowParseError,
-    parse_dep_list_output, parse_list_output, parse_ready_output, parse_show_output,
+    parse_dep_list_output, parse_list_output, parse_ready_output, parse_show_output, BrCapability,
+    BrDependencySnapshot, BrIssueDetail, BrIssueSummary, BrVersion, ShowParseError,
 };
 use grove_types::{BeadId, HandoffRecord};
 use std::{
@@ -310,6 +310,8 @@ impl fmt::Display for CliBrClient {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use grove_types::{BeadId, RunId, Timestamp};
     use std::{error::Error, fs, io::Error as IoError};

@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::{CheckpointPayload, ProtocolEvent};
 use serde_json::Value;
 use thiserror::Error;
@@ -197,6 +198,7 @@ fn push_unique(items: &mut Vec<String>, candidate: &str) {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use std::error::Error;

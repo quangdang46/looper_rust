@@ -10,15 +10,15 @@ pub mod status_view;
 use anyhow::{Context, Result};
 use grove_br::{BrClient, BrDependencySnapshot};
 use grove_bv::BvTriageOutput;
-use grove_config::{DEFAULT_CHECKPOINTS_DIR_NAME, DEFAULT_GROVE_DIR_NAME, GroveConfig};
+use grove_config::{GroveConfig, DEFAULT_CHECKPOINTS_DIR_NAME, DEFAULT_GROVE_DIR_NAME};
 use grove_db::{
     Database, HandoffWriteInput, InterruptedRunRecovery, LeaderLeaseAcquireInput,
     RecoveredReservation, RecoveryCapsuleWriteInput, ReservationAcquireOutcome, ReservationRequest,
     RunFinishInput, RunStartInput, SessionCheckpointInput,
 };
 use grove_session::{
-    ClaudeBackend, SessionLifecycleHooks, SingleTaskSessionRequest, SingleTaskSessionResult,
-    execute_single_task_session_with_hooks, update_circuit_breaker,
+    execute_single_task_session_with_hooks, update_circuit_breaker, ClaudeBackend,
+    SessionLifecycleHooks, SingleTaskSessionRequest, SingleTaskSessionResult,
 };
 use grove_types::{
     AgentActivity, BeadId, CheckpointId, CircuitBreakerState, CircuitState, FailureClass,
@@ -32,7 +32,7 @@ use std::{
 };
 
 pub use dispatch::{
-    DispatchExitReason, DispatchLoopConfig, DispatchLoopOutcome, ShutdownSignal, run_dispatch_loop,
+    run_dispatch_loop, DispatchExitReason, DispatchLoopConfig, DispatchLoopOutcome, ShutdownSignal,
 };
 pub use inspect_view::BeadInspectView;
 pub use status_view::WorkspaceStatusView;
@@ -1072,6 +1072,8 @@ fn collect_local_suppressions(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use grove_types::{
         BeadId, BeadPriority, BeadRef, CircuitBreakerState, CircuitState, RunId, RunStatus,
@@ -1410,8 +1412,8 @@ mod tests {
     }
 
     #[test]
-    fn startup_reconciliation_marks_active_runs_failed_and_releases_stale_reservations()
-    -> TestResult {
+    fn startup_reconciliation_marks_active_runs_failed_and_releases_stale_reservations(
+    ) -> TestResult {
         let dir = tempfile::tempdir()?;
         let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
             .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;
@@ -1800,11 +1802,9 @@ exit "${EXIT_CODE:-0}"
             &GroveConfig::default(),
         )
         .expect_err("checkpoint file write should fail");
-        assert!(
-            error
-                .to_string()
-                .contains("failed to persist checkpoint file")
-        );
+        assert!(error
+            .to_string()
+            .contains("failed to persist checkpoint file"));
 
         let bead = db
             .get_bead_record(&BeadId::new("grove-life"))?
@@ -1828,11 +1828,10 @@ exit "${EXIT_CODE:-0}"
             .into_iter()
             .next()
             .expect("run should persist");
-        assert!(
-            run.failure_detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("failed to persist checkpoint file"))
-        );
+        assert!(run
+            .failure_detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("failed to persist checkpoint file")));
         Ok(())
     }
 

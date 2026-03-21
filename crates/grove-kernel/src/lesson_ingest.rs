@@ -4,11 +4,11 @@
 use anyhow::Result;
 use grove_db::Database;
 use grove_types::{
-    BeadId, BulletId, RunId,
     playbook::{
         BulletMaturity, BulletScope, BulletState, BulletType, FeedbackEventRecord, FeedbackKind,
         PlaybookBulletRecord,
     },
+    BeadId, BulletId, RunId,
 };
 
 /// Ingest lesson strings from handoff or protocol output into the playbook as draft candidates.

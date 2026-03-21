@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
 use grove_types::{
-    BeadId, BulletId, RunId,
     playbook::{
         BulletMaturity, BulletScope, BulletState, BulletType, FeedbackEventRecord, FeedbackKind,
         PlaybookBulletRecord,
     },
+    BeadId, BulletId, RunId,
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{params, OptionalExtension};
 
-use crate::{Database, timestamp_string};
+use crate::{timestamp_string, Database};
 
 impl Database {
     /// Insert a new playbook bullet.
@@ -196,7 +196,10 @@ impl Database {
     }
 
     /// Get a single bullet by ID.
-    pub fn get_playbook_bullet(&self, bullet_id: &BulletId) -> Result<Option<PlaybookBulletRecord>> {
+    pub fn get_playbook_bullet(
+        &self,
+        bullet_id: &BulletId,
+    ) -> Result<Option<PlaybookBulletRecord>> {
         let mut stmt = self.connection().prepare(
             "SELECT id, scope, scope_key, category, text, bullet_type, state, maturity,
                 helpful_count, harmful_count, confidence_decay_half_life_days,

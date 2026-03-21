@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::{ProtocolEvent, ProtocolState};
 
 use crate::protocol::parse_protocol_event;
@@ -92,6 +93,7 @@ fn merge_unique(target: &mut Vec<String>, incoming: &[String]) {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
 

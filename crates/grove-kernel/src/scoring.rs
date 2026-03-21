@@ -6,10 +6,10 @@
 use anyhow::Result;
 use grove_db::Database;
 use grove_types::{
-    BulletId,
     playbook::{
         BulletMaturity, BulletScope, BulletState, BulletType, FeedbackKind, PlaybookBulletRecord,
     },
+    BulletId,
 };
 
 /// Scoring configuration (matches PLAN.md defaults).
@@ -151,9 +151,7 @@ pub fn target_maturity(
         BulletMaturity::Candidate if score > config.promote_threshold => {
             BulletMaturity::Established
         }
-        BulletMaturity::Established if score > config.proven_threshold => {
-            BulletMaturity::Proven
-        }
+        BulletMaturity::Established if score > config.proven_threshold => BulletMaturity::Proven,
         // Demotion: if score drops below zero, demote one level
         BulletMaturity::Proven if score < 0.0 => BulletMaturity::Established,
         BulletMaturity::Established if score < 0.0 => BulletMaturity::Candidate,
@@ -174,8 +172,7 @@ pub fn run_scoring_pass(db: &mut Database, config: &ScoringConfig) -> Result<usi
 
         let new_state = if new_maturity == BulletMaturity::Deprecated {
             BulletState::Retired
-        } else if bullet.state == BulletState::Draft
-            && new_maturity >= BulletMaturity::Established
+        } else if bullet.state == BulletState::Draft && new_maturity >= BulletMaturity::Established
         {
             BulletState::Active
         } else {
@@ -189,7 +186,9 @@ pub fn run_scoring_pass(db: &mut Database, config: &ScoringConfig) -> Result<usi
                 // Invert Rule into an AntiPattern if we have enough statistical evidence
                 // that this rule is systematically harmful.
                 let total_events = bullet.helpful_count + bullet.harmful_count;
-                if bullet.bullet_type == BulletType::Rule && total_events >= config.min_events_for_promotion {
+                if bullet.bullet_type == BulletType::Rule
+                    && total_events >= config.min_events_for_promotion
+                {
                     let anti_text = format!("AVOID: {}", bullet.text);
                     let inverted_id = BulletId::new(format!("{}-inv", bullet.id.as_str()));
 
@@ -229,12 +228,7 @@ pub fn run_scoring_pass(db: &mut Database, config: &ScoringConfig) -> Result<usi
                     replaced_by.as_ref(), // Pass the reference
                 )?;
             } else {
-                db.update_bullet_maturity(
-                    &bullet.id,
-                    new_state,
-                    new_maturity,
-                    Some(score as f32),
-                )?;
+                db.update_bullet_maturity(&bullet.id, new_state, new_maturity, Some(score as f32))?;
             }
 
             db.log_curation_action(
@@ -331,7 +325,10 @@ mod tests {
         let bullet = sample_bullet();
         let config = ScoringConfig::default();
         let score = effective_score(&bullet, &config);
-        assert!(score > 0.0, "score with 3 helpful events should be positive: {score}");
+        assert!(
+            score > 0.0,
+            "score with 3 helpful events should be positive: {score}"
+        );
     }
 
     #[test]

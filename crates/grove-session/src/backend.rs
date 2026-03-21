@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use anyhow::{Context, Result, anyhow};
 use camino::Utf8PathBuf;
 use std::{
@@ -87,6 +88,7 @@ impl ClaudeBackend for CliClaudeBackend {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::{ClaudeBackend, CliClaudeBackend, StartSessionRequest};
     use camino::Utf8PathBuf;

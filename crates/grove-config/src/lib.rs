@@ -44,6 +44,8 @@ pub const CRATE_PURPOSE: &str = "Configuration loading, validation, and path own
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::*;
     use camino::Utf8PathBuf;
     use grove_types::{ReactionAction, ReactionTrigger};
@@ -67,7 +69,10 @@ mod tests {
     fn env_override_sets_shutdown_grace_period() -> TestResult {
         let loaded = load_with_text(
             "",
-            &HashMap::from([(String::from("GROVE_SCHEDULER__SHUTDOWN_GRACE_PERIOD_MS"), String::from("2500"))]),
+            &HashMap::from([(
+                String::from("GROVE_SCHEDULER__SHUTDOWN_GRACE_PERIOD_MS"),
+                String::from("2500"),
+            )]),
         )?;
         assert_eq!(loaded.config.scheduler.shutdown_grace_period_ms, 2500);
         Ok(())
@@ -79,7 +84,9 @@ mod tests {
             "",
             &HashMap::from([(
                 String::from("GROVE_REACTIONS__RULES"),
-                String::from(r#"[{ trigger = "MirrorFailed", action = "EnqueueMirrorRetry", enabled = true, max_attempts = 7 }]"#),
+                String::from(
+                    r#"[{ trigger = "MirrorFailed", action = "EnqueueMirrorRetry", enabled = true, max_attempts = 7 }]"#,
+                ),
             )]),
         )?;
         assert_eq!(loaded.config.reactions.rules.len(), 1);
@@ -106,7 +113,9 @@ mod tests {
         )
         .err()
         .expect("expected validation error");
-        assert!(matches!(err, ConfigError::Validation { field, .. } if field == "GROVE_REACTIONS__RULES"));
+        assert!(
+            matches!(err, ConfigError::Validation { field, .. } if field == "GROVE_REACTIONS__RULES")
+        );
     }
 
     #[test]

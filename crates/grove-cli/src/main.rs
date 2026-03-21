@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, anyhow, bail};
 use camino::Utf8PathBuf;
 use clap::{ArgAction, Parser, Subcommand};
-use serde_json::json;
 use grove_br::{BrClient, BrIssueDetail, CliBrClient, sync_bead_cache};
 use grove_bv::{BvClient, BvTriageOutput, CliBvClient};
 use grove_config::{
@@ -10,11 +9,12 @@ use grove_config::{
 };
 use grove_db::Database;
 use grove_kernel::{
-    BeadInspectView, LeaderLeaseConfig, LeaderLeaseManager, ShutdownSignal, StartupRecoveryReport,
-    WorkspaceStatusView, acquire_startup_coordinator, load_bead_inspect_view,
-    load_workspace_status_view, run_dispatch_loop, DispatchLoopConfig,
+    BeadInspectView, DispatchLoopConfig, LeaderLeaseConfig, LeaderLeaseManager, ShutdownSignal,
+    StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
+    load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop,
 };
 use grove_types::{BeadId, BeadPriority, GroveBeadStatus, LeaderLeaseRecord};
+use serde_json::json;
 use std::{cmp, env, fs};
 
 #[derive(Parser)]
@@ -544,7 +544,10 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
                 .as_ref()
                 .map(|sid| format!(" ses:{}", sid.as_str()))
                 .unwrap_or_default();
-            println!("  [{:?}]{} at {}", event.kind, session_label, event.created_at);
+            println!(
+                "  [{:?}]{} at {}",
+                event.kind, session_label, event.created_at
+            );
             if event.payload != serde_json::Value::Null {
                 if let Ok(pretty) = serde_json::to_string(&event.payload) {
                     println!("    {pretty}");
@@ -559,7 +562,12 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
         println!("  transcript: {}", session.transcript_path);
         println!(
             "  stop reason: {}",
-            display_option(session.stop_reason.as_ref().map(|reason| format!("{reason:?}")))
+            display_option(
+                session
+                    .stop_reason
+                    .as_ref()
+                    .map(|reason| format!("{reason:?}"))
+            )
         );
         match transcript_tail.as_ref() {
             Some(Some(lines)) if !lines.is_empty() => {
@@ -569,7 +577,10 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
                 }
             }
             Some(Some(_)) => println!("  (transcript file is empty)"),
-            Some(None) => println!("  (transcript file not found at {})", session.transcript_path),
+            Some(None) => println!(
+                "  (transcript file not found at {})",
+                session.transcript_path
+            ),
             None => println!("  (transcript unavailable)"),
         }
     }
@@ -785,8 +796,14 @@ fn print_status_view(
     }
     match &view.last_coordinator_stop {
         Some(stop) => {
-            println!("Last coordinator stop: {} at {}", stop.reason, stop.created_at);
-            println!("Coordinator forced termination: {}", if stop.forced { "yes" } else { "no" });
+            println!(
+                "Last coordinator stop: {} at {}",
+                stop.reason, stop.created_at
+            );
+            println!(
+                "Coordinator forced termination: {}",
+                if stop.forced { "yes" } else { "no" }
+            );
             println!(
                 "Coordinator leader released: {}",
                 display_option(stop.leader_released)

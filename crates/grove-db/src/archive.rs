@@ -1,15 +1,15 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Row};
 use grove_types::{
-    BeadId, RunId, SessionId, SourceId,
     archive::{
         ConversationRecord, MessageRecord, MessageRole, RelevantSnippet, RetrievalBundle,
         SnippetRecord, SourceRecord,
     },
+    BeadId, RunId, SessionId, SourceId,
 };
+use rusqlite::{params, OptionalExtension, Row};
 
-use crate::{Database, timestamp_string, parse_json};
+use crate::{parse_json, timestamp_string, Database};
 
 impl Database {
     pub fn insert_source_record(&mut self, record: &SourceRecord) -> Result<()> {
@@ -40,7 +40,10 @@ impl Database {
                     record.bead_id.as_ref().map(|id: &BeadId| id.as_str()),
                     record.run_id.as_ref().map(|id: &RunId| id.as_str()),
                     record.session_id.as_str(),
-                    record.workspace.as_ref().map(|w: &camino::Utf8PathBuf| w.as_str()),
+                    record
+                        .workspace
+                        .as_ref()
+                        .map(|w: &camino::Utf8PathBuf| w.as_str()),
                     record.title.as_deref(),
                     record.source_path.as_str(),
                     record.started_at.as_ref().map(timestamp_string),
@@ -114,7 +117,7 @@ impl Database {
              JOIN archive_conversations c ON m.conversation_id = c.id
              WHERE archive_fts MATCH ?1
              ORDER BY score ASC
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
 
         let mut snippets = Vec::new();
@@ -129,7 +132,9 @@ impl Database {
             Ok(RelevantSnippet {
                 message_id: row.get(0)?,
                 conversation_id,
-                file_path: row.get::<_, Option<String>>(2)?.map(camino::Utf8PathBuf::from),
+                file_path: row
+                    .get::<_, Option<String>>(2)?
+                    .map(camino::Utf8PathBuf::from),
                 snippet: row.get(3)?,
                 score: score_f32,
             })
@@ -149,11 +154,14 @@ impl Database {
 
     /// Check if a session has already been ingested for a given source.
     pub fn is_session_ingested(&self, source_id: &str, session_id: &str) -> Result<bool> {
-        let count: i64 = self.connection().query_row(
-            "SELECT COUNT(*) FROM archive_watermarks WHERE source_id = ?1 AND session_id = ?2",
-            params![source_id, session_id],
-            |row| row.get(0),
-        ).context("check archive watermark")?;
+        let count: i64 = self
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM archive_watermarks WHERE source_id = ?1 AND session_id = ?2",
+                params![source_id, session_id],
+                |row| row.get(0),
+            )
+            .context("check archive watermark")?;
         Ok(count > 0)
     }
 
@@ -174,7 +182,10 @@ impl Database {
     }
 
     /// Idempotent conversation insert — skips if already archived for this source+session.
-    pub fn insert_conversation_idempotent(&mut self, record: &ConversationRecord) -> Result<Option<i64>> {
+    pub fn insert_conversation_idempotent(
+        &mut self,
+        record: &ConversationRecord,
+    ) -> Result<Option<i64>> {
         if self.is_session_ingested(record.source_id.as_str(), record.session_id.as_str())? {
             return Ok(None);
         }
@@ -192,7 +203,10 @@ impl Database {
     }
 
     /// List all watermarks for a given source.
-    pub fn list_watermarks_for_source(&self, source_id: &str) -> Result<Vec<(String, String, i64)>> {
+    pub fn list_watermarks_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<Vec<(String, String, i64)>> {
         let mut stmt = self.connection().prepare(
             "SELECT session_id, ingested_at, record_count FROM archive_watermarks WHERE source_id = ?1 ORDER BY ingested_at DESC"
         )?;
@@ -210,4 +224,3 @@ impl Database {
         Ok(results)
     }
 }
-

@@ -3,8 +3,8 @@
 //! Implements pragmatic trust checks before returning a `Succeeded` status
 //! as defined in PLAN.md §1.4.8.
 
-use std::process::Command;
 use grove_types::{ExecutionContract, PromptManifest};
+use std::process::Command;
 
 /// Pragmatic modes of verification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

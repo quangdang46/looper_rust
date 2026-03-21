@@ -3,14 +3,16 @@
 //! Wires grove_types::reaction types into the dispatch loop. Reactions are
 //! evaluated after each dispatch outcome and produce logged, auditable records.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use chrono::Utc;
 use grove_db::Database;
 use grove_types::{
-    AgentActivity, BeadId, EscalationTier, FailureClass, RunId, RunStatus, SessionOutcome,
     reaction::{
         ReactionAction, ReactionContextSnapshot, ReactionOutcome, ReactionRecord, ReactionRule,
         ReactionTrigger,
     },
+    AgentActivity, BeadId, EscalationTier, FailureClass, RunId, RunStatus, SessionOutcome,
 };
 
 /// Runtime state snapshot used to evaluate triggers.
@@ -39,7 +41,9 @@ pub fn infer_agent_activity(outcome: &SessionOutcome, run_status: RunStatus) -> 
     }
     if matches!(run_status, RunStatus::Failed) {
         return match outcome.session.stop_reason {
-            Some(grove_types::StopReason::Kill) | Some(grove_types::StopReason::Crash) => AgentActivity::Exited,
+            Some(grove_types::StopReason::Kill) | Some(grove_types::StopReason::Crash) => {
+                AgentActivity::Exited
+            }
             Some(grove_types::StopReason::PermissionDenied) => AgentActivity::Blocked,
             _ if outcome.analysis.permission_denials > 0 => AgentActivity::Blocked,
             _ if outcome.analysis.repeated_error_fingerprint.is_some() => AgentActivity::Idle,
@@ -92,11 +96,8 @@ pub fn evaluate_reactions(
         // Apply the action (in this implementation, actions are logged but
         // the actual side-effects like rescue injection happen in the dispatch
         // loop which reads the reaction records).
-        let (outcome, applied_action, escalated_to) = apply_action(
-            &rule.action,
-            rule.escalate_to.as_deref(),
-            &tier,
-        );
+        let (outcome, applied_action, escalated_to) =
+            apply_action(&rule.action, rule.escalate_to.as_deref(), &tier);
 
         let record = ReactionRecord {
             id: reaction_id,
@@ -147,15 +148,11 @@ fn trigger_matches(trigger: &ReactionTrigger, ctx: &TriggerContext) -> bool {
                 && ctx.failure_class == Some(FailureClass::NoProgress)
         }
         ReactionTrigger::AgentIdle { .. } => ctx.activity == AgentActivity::Idle,
-        ReactionTrigger::ContextPressureHigh => {
-            ctx.context_pressure_pct.unwrap_or(0.0) >= 0.85
-        }
+        ReactionTrigger::ContextPressureHigh => ctx.context_pressure_pct.unwrap_or(0.0) >= 0.85,
         ReactionTrigger::MirrorFailed => {
             ctx.mirror_failed || ctx.failure_class == Some(FailureClass::BrMirrorFailed)
         }
-        ReactionTrigger::RetryBudgetExhausted => {
-            ctx.escalation_tier.is_terminal()
-        }
+        ReactionTrigger::RetryBudgetExhausted => ctx.escalation_tier.is_terminal(),
     }
 }
 
@@ -198,7 +195,11 @@ fn apply_action(
     if can_apply {
         (ReactionOutcome::Applied, action.clone(), None)
     } else if let Some(fallback) = escalate_to {
-        (ReactionOutcome::Escalated, fallback.clone(), Some(fallback.clone()))
+        (
+            ReactionOutcome::Escalated,
+            fallback.clone(),
+            Some(fallback.clone()),
+        )
     } else {
         (ReactionOutcome::Skipped, action.clone(), None)
     }
@@ -260,7 +261,10 @@ mod tests {
     #[test]
     fn retry_budget_exhausted_at_give_up() {
         let ctx = make_ctx(RunStatus::Failed, 5, EscalationTier::GiveUp);
-        assert!(trigger_matches(&ReactionTrigger::RetryBudgetExhausted, &ctx));
+        assert!(trigger_matches(
+            &ReactionTrigger::RetryBudgetExhausted,
+            &ctx
+        ));
     }
 
     #[test]
@@ -359,7 +363,10 @@ mod tests {
             stderr_tail: vec!["permission denied".into()],
         };
 
-        assert_eq!(infer_agent_activity(&outcome, RunStatus::Failed), AgentActivity::Blocked);
+        assert_eq!(
+            infer_agent_activity(&outcome, RunStatus::Failed),
+            AgentActivity::Blocked
+        );
     }
 
     #[test]

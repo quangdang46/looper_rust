@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::IterationAnalysis;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +46,7 @@ impl ExitPolicy {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use grove_types::IterationAnalysis;

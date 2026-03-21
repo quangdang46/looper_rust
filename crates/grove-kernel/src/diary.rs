@@ -9,8 +9,8 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use grove_db::Database;
 use grove_types::{
-    BeadId, BulletId, PromptManifest, PromptSegmentKind, RunId, SessionOutcome, SessionStatus,
     playbook::{FeedbackEventRecord, FeedbackKind},
+    BeadId, BulletId, PromptManifest, PromptSegmentKind, RunId, SessionOutcome, SessionStatus,
 };
 use std::fs;
 use std::path::Path;
@@ -69,9 +69,7 @@ pub fn apply_outcome_feedback(
 ) -> Result<()> {
     // Determine duration
     let duration_secs = if let Some(ended) = outcome.session.ended_at {
-        (ended - outcome.session.started_at)
-            .num_seconds()
-            .max(0) as u64
+        (ended - outcome.session.started_at).num_seconds().max(0) as u64
     } else {
         0
     };
@@ -115,7 +113,10 @@ pub fn apply_outcome_feedback(
     }
 
     let now = Utc::now();
-    let context_msg = format!("Implicit diary feedback (Duration: {}s, Errors: {})", diary.duration_secs, diary.error_count);
+    let context_msg = format!(
+        "Implicit diary feedback (Duration: {}s, Errors: {})",
+        diary.duration_secs, diary.error_count
+    );
 
     for bullet_id in active_bullet_ids {
         if helpful_weight > 0.0 {

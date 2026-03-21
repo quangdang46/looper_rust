@@ -5150,7 +5150,6 @@ mod tests {
         assert_eq!(metrics.run_id.as_str(), "run-metrics-test");
         assert_eq!(metrics.checkpoints_taken, 0);
         assert_eq!(metrics.retries_attempted, 0);
-        assert!(metrics.total_duration_secs >= 0);
 
         let report = db.generate_run_report(&RunId::new("run-metrics-test"))?;
         assert!(report.is_some());

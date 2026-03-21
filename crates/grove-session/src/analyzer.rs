@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crate::{AnalysisInput, ExitDecision, ExitPolicy, ProtocolWarning, analyze_iteration};
 use chrono::Duration;
 use grove_types::{
@@ -272,6 +273,7 @@ fn has_rate_limit_warning(analysis: &IterationAnalysis) -> bool {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use crate::ExitPolicy;

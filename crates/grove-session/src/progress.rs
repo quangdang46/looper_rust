@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::{CheckpointPayload, ProgressSignal, ProtocolState};
 
 const SUBSTANTIAL_STDOUT_LINE_THRESHOLD: usize = 3;
@@ -92,6 +93,7 @@ fn has_substantial_stdout_output(stdout_lines: &[String]) -> bool {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use grove_types::ProtocolState;

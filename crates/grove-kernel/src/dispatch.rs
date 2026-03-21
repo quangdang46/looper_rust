@@ -1,23 +1,23 @@
 use crate::{
-    AcquireReservationInput, DispatchEligibilityContext, LeaderLeaseConfig, LeaderLeaseManager,
-    PersistedTaskRunOutcome, ReservationManager, execute_persisted_single_task_session,
+    execute_persisted_single_task_session, AcquireReservationInput, DispatchEligibilityContext,
+    LeaderLeaseConfig, LeaderLeaseManager, PersistedTaskRunOutcome, ReservationManager,
 };
 use anyhow::{Context, Result};
+use camino::{Utf8Path, Utf8PathBuf};
 use grove_br::BrClient;
 use grove_config::GroveConfig;
 use grove_db::Database;
-use camino::{Utf8Path, Utf8PathBuf};
 use grove_session::{
     ClaudeBackend, ContextMonitor, ExitPolicy, SessionShutdownConfig, SingleTaskSessionRequest,
 };
 use grove_types::{
-    BeadId, CoordinatorStopReason, ExecutionContract, GroveBeadRecord, GroveBeadStatus,
-    PromptId, ReservationMode, RunId, SessionId, Timestamp,
+    BeadId, CoordinatorStopReason, EscalationTier, ExecutionContract, GroveBeadRecord,
+    GroveBeadStatus, MutationStrategy, PromptId, ReservationMode, RunId, SessionId, Timestamp,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -214,38 +214,49 @@ fn apply_reaction_side_effects(
     error_detail: Option<&str>,
     mirror_failed: bool,
 ) {
-    let (run_status, failure_class, failure_detail, escalation_tier, context_pressure_pct, inferred_activity) =
-        if let Some(outcome) = outcome {
-            let run = &outcome.run;
-            let failure_detail = run.failure_detail.clone().or_else(|| error_detail.map(str::to_owned));
-            (
-                run.status,
-                run.failure_class,
-                failure_detail,
-                run.escalation_tier,
-                outcome.session.context_pressure_pct,
-                crate::reactions::infer_agent_activity(&outcome.session, run.status),
-            )
+    let (
+        run_status,
+        failure_class,
+        failure_detail,
+        escalation_tier,
+        context_pressure_pct,
+        inferred_activity,
+    ) = if let Some(outcome) = outcome {
+        let run = &outcome.run;
+        let failure_detail = run
+            .failure_detail
+            .clone()
+            .or_else(|| error_detail.map(str::to_owned));
+        (
+            run.status,
+            run.failure_class,
+            failure_detail,
+            run.escalation_tier,
+            outcome.session.context_pressure_pct,
+            crate::reactions::infer_agent_activity(&outcome.session, run.status),
+        )
+    } else {
+        let failure_class = if mirror_failed {
+            Some(grove_types::FailureClass::BrMirrorFailed)
         } else {
-            let failure_class = if mirror_failed {
-                Some(grove_types::FailureClass::BrMirrorFailed)
-            } else {
-                Some(grove_types::FailureClass::Unknown)
-            };
-            let run_status = grove_types::RunStatus::Failed;
-            (
-                run_status,
-                failure_class,
-                error_detail.map(str::to_owned),
-                grove_types::EscalationTier::FirstAttempt,
-                None,
-                match failure_class {
-                    Some(grove_types::FailureClass::PermissionDenied) => grove_types::AgentActivity::Blocked,
-                    Some(grove_types::FailureClass::NoProgress) => grove_types::AgentActivity::Idle,
-                    _ => grove_types::AgentActivity::Exited,
-                },
-            )
+            Some(grove_types::FailureClass::Unknown)
         };
+        let run_status = grove_types::RunStatus::Failed;
+        (
+            run_status,
+            failure_class,
+            error_detail.map(str::to_owned),
+            grove_types::EscalationTier::FirstAttempt,
+            None,
+            match failure_class {
+                Some(grove_types::FailureClass::PermissionDenied) => {
+                    grove_types::AgentActivity::Blocked
+                }
+                Some(grove_types::FailureClass::NoProgress) => grove_types::AgentActivity::Idle,
+                _ => grove_types::AgentActivity::Exited,
+            },
+        )
+    };
 
     let bead_record = db.get_bead_record(&ctx.bead_id).ok().flatten();
     let run_history = db.list_task_runs_for_bead(&ctx.bead_id).ok();
@@ -254,11 +265,8 @@ fn apply_reaction_side_effects(
         .and_then(|runs| runs.iter().find(|run| run.id == ctx.run_id))
         .map(|run| run.escalation_tier)
         .unwrap_or(escalation_tier);
-    let consecutive_failures = consecutive_failures_from_history(
-        run_history.as_deref(),
-        &ctx.run_id,
-        run_status,
-    );
+    let consecutive_failures =
+        consecutive_failures_from_history(run_history.as_deref(), &ctx.run_id, run_status);
 
     let trigger_ctx = crate::reactions::TriggerContext {
         bead_id: ctx.bead_id.clone(),
@@ -283,7 +291,8 @@ fn apply_reaction_side_effects(
 
     let _ = db.update_run_activity(&ctx.bead_id, &ctx.run_id, inferred_activity, &now);
     if reaction_eval.new_tier != existing_tier {
-        let _ = db.update_run_escalation_tier(&ctx.bead_id, &ctx.run_id, reaction_eval.new_tier, &now);
+        let _ =
+            db.update_run_escalation_tier(&ctx.bead_id, &ctx.run_id, reaction_eval.new_tier, &now);
     }
 
     if let Some(outcome) = outcome {
@@ -353,7 +362,9 @@ fn apply_reaction_side_effects(
                     created_at: now,
                 });
             }
-            grove_types::ReactionAction::CreateRecoveryCapsule { outcome: capsule_outcome } => {
+            grove_types::ReactionAction::CreateRecoveryCapsule {
+                outcome: capsule_outcome,
+            } => {
                 if let Some(capsule) = grove_types::RecoveryCapsule::from_parts(
                     *capsule_outcome,
                     failure_class,
@@ -455,19 +466,18 @@ fn select_best_candidate_excluding<'a>(
     let mut candidates: Vec<_> = beads
         .iter()
         .filter(|bead| {
-            !excluded_ids.contains(&bead.bead.id)
-                && {
-                    let eligibility = crate::evaluate_dispatch_eligibility(
-                        bead,
-                        &DispatchEligibilityContext {
-                            ready_in_br: ready_ids.contains(&bead.bead.id),
-                            circuit_state: crate::circuit_state_for_bead(bead),
-                            reservation_conflicts: Vec::new(),
-                            now,
-                        },
-                    );
-                    eligibility.dispatchable_in_grove
-                }
+            !excluded_ids.contains(&bead.bead.id) && {
+                let eligibility = crate::evaluate_dispatch_eligibility(
+                    bead,
+                    &DispatchEligibilityContext {
+                        ready_in_br: ready_ids.contains(&bead.bead.id),
+                        circuit_state: crate::circuit_state_for_bead(bead),
+                        reservation_conflicts: Vec::new(),
+                        now,
+                    },
+                );
+                eligibility.dispatchable_in_grove
+            }
         })
         .collect();
 
@@ -491,6 +501,7 @@ fn build_session_request(
     run_id: &RunId,
     session_id: &SessionId,
     parent_handoffs: Vec<String>,
+    escalation_tier: EscalationTier,
 ) -> SingleTaskSessionRequest {
     let prompt_id = PromptId::new(format!("prompt-{}", run_id.as_str()));
     let transcript_path = Utf8PathBuf::from(format!(
@@ -498,10 +509,8 @@ fn build_session_request(
         bead.bead.id.as_str(),
         session_id.as_str()
     ));
-    let prompt_manifest_path = Utf8PathBuf::from(format!(
-        ".grove/prompts/{}.json",
-        prompt_id.as_str()
-    ));
+    let prompt_manifest_path =
+        Utf8PathBuf::from(format!(".grove/prompts/{}.json", prompt_id.as_str()));
 
     SingleTaskSessionRequest {
         bead_id: bead.bead.id.clone(),
@@ -509,11 +518,7 @@ fn build_session_request(
         session_id: session_id.clone(),
         prompt_id,
         task_title: bead.bead.title.clone(),
-        task_description: bead
-            .bead
-            .description
-            .clone()
-            .unwrap_or_default(),
+        task_description: bead.bead.description.clone().unwrap_or_default(),
         contract: ExecutionContract::SingleTask,
         model: config.runtime.default_model.clone(),
         working_dir: working_dir.to_owned(),
@@ -544,15 +549,22 @@ fn build_session_request(
         playbook_rules: Vec::new(),
         env: Vec::new(),
         shutdown: SessionShutdownConfig::default(),
+        escalation_tier,
+        mutation_strategy: escalation_tier.default_mutation(),
     }
 }
 
 /// Process unresolved mirror outbox entries, attempting to sync them to br.
-pub fn process_mirror_outbox<C: BrClient>(db: &mut Database, br: &C, config: &GroveConfig) -> Result<()> {
+pub fn process_mirror_outbox<C: BrClient>(
+    db: &mut Database,
+    br: &C,
+    config: &GroveConfig,
+) -> Result<()> {
     // Attempt up to 5 at a time to avoid stalling the dispatch loop indefinitely.
-    let pending = db.list_pending_mirror_operations(5)
+    let pending = db
+        .list_pending_mirror_operations(5)
         .context("list pending mirror operations")?;
-        
+
     for record in pending {
         db.mark_mirror_in_progress(&record.id)
             .context("mark mirror in progress")?;
@@ -573,12 +585,8 @@ pub fn process_mirror_outbox<C: BrClient>(db: &mut Database, br: &C, config: &Gr
                 let next_retry = chrono::Utc::now() + chrono::Duration::minutes(backoff_mins);
 
                 let error_msg = error.to_string();
-                db.record_mirror_failure(
-                    &record.id,
-                    &record.run_id,
-                    &error_msg,
-                    Some(&next_retry),
-                ).context("record mirror failure")?;
+                db.record_mirror_failure(&record.id, &record.run_id, &error_msg, Some(&next_retry))
+                    .context("record mirror failure")?;
 
                 let trigger_ctx = crate::reactions::TriggerContext {
                     bead_id: record.bead_id.clone(),
@@ -619,7 +627,7 @@ pub fn process_mirror_outbox<C: BrClient>(db: &mut Database, br: &C, config: &Gr
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -725,10 +733,7 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                 }
                 Err(error) => {
                     apply_reaction_side_effects(db, &config, &ctx, None, Some(&error), false);
-                    eprintln!(
-                        "grove dispatch: {} failed: {error}",
-                        ctx.bead_id.as_str()
-                    );
+                    eprintln!("grove dispatch: {} failed: {error}", ctx.bead_id.as_str());
                     if config.reservations.enabled {
                         let _ = ReservationManager::release_for_run(
                             db,
@@ -802,7 +807,9 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
             eprintln!("grove mirror: failed to process outbox: {error:#}");
         }
 
-        if let Err(error) = crate::scoring::run_scoring_pass(db, &crate::scoring::ScoringConfig::default()) {
+        if let Err(error) =
+            crate::scoring::run_scoring_pass(db, &crate::scoring::ScoringConfig::default())
+        {
             eprintln!("grove playbook: scoring pass failed: {error:#}");
         }
 
@@ -815,7 +822,10 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
             }
         };
 
-        let available_slots = config.scheduler.max_parallel.saturating_sub(inflight_workers.len());
+        let available_slots = config
+            .scheduler
+            .max_parallel
+            .saturating_sub(inflight_workers.len());
         if available_slots == 0 {
             std::thread::sleep(poll_sleep);
             continue;
@@ -851,7 +861,9 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
         let mut launched_any = false;
 
         for _ in 0..available_slots {
-            let Some(bead) = select_best_candidate_excluding(&beads, &ready_ids, &excluded_ids, &config, now) else {
+            let Some(bead) =
+                select_best_candidate_excluding(&beads, &ready_ids, &excluded_ids, &config, now)
+            else {
                 break;
             };
 
@@ -868,8 +880,8 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                 .unwrap_or(1);
 
             if config.reservations.enabled && !bead.declared_paths.is_empty() {
-                let expires_at = now
-                    + chrono::Duration::minutes(config.reservations.default_ttl_minutes as i64);
+                let expires_at =
+                    now + chrono::Duration::minutes(config.reservations.default_ttl_minutes as i64);
                 let requests: Vec<AcquireReservationInput> = bead
                     .declared_paths
                     .iter()
@@ -898,8 +910,15 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                 }
             }
 
-            let parent_handoffs = crate::parent_handoff_summaries(db, &bead_id)
-                .unwrap_or_default();
+            let parent_handoffs = crate::parent_handoff_summaries(db, &bead_id).unwrap_or_default();
+
+            let escalation_tier = db
+                .list_task_runs_for_bead(&bead_id)
+                .ok()
+                .and_then(|runs| runs.into_iter().find(|r| r.id == run_id))
+                .map(|r| r.escalation_tier)
+                .unwrap_or(EscalationTier::FirstAttempt);
+
             let mut request = build_session_request(
                 bead,
                 &config,
@@ -907,9 +926,12 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                 &run_id,
                 &session_id,
                 parent_handoffs,
+                escalation_tier,
             );
 
-            let mut search_tokens: Vec<String> = bead.bead.title
+            let mut search_tokens: Vec<String> = bead
+                .bead
+                .title
                 .chars()
                 .map(|c| if c.is_alphanumeric() { c } else { ' ' })
                 .collect::<String>()
@@ -923,7 +945,7 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                         .map(|c| if c.is_alphanumeric() { c } else { ' ' })
                         .collect::<String>()
                         .split_whitespace()
-                        .map(|s| s.to_string())
+                        .map(|s| s.to_string()),
                 );
             }
 
@@ -955,7 +977,9 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
 
             request.shutdown = SessionShutdownConfig {
                 signal: Some(loop_config.shutdown_signal.shared_flag()),
-                grace_period: Some(Duration::from_millis(config.scheduler.shutdown_grace_period_ms)),
+                grace_period: Some(Duration::from_millis(
+                    config.scheduler.shutdown_grace_period_ms,
+                )),
             };
 
             eprintln!(
@@ -991,8 +1015,8 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
             let worker_config = config.clone();
             let handle = std::thread::spawn(move || {
                 let result = (|| -> Result<PersistedTaskRunOutcome, String> {
-                    let mut worker_db = Database::open(&worker_db_path)
-                        .map_err(|error| error.to_string())?;
+                    let mut worker_db =
+                        Database::open(&worker_db_path).map_err(|error| error.to_string())?;
                     worker_db.migrate().map_err(|error| error.to_string())?;
                     execute_persisted_single_task_session(
                         &mut worker_db,
@@ -1024,7 +1048,10 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grove_br::{BeadCacheStore, BrCapability, BrDependencySnapshot, BrError, BrIssueDetail, BrIssueSummary, BrVersion};
+    use grove_br::{
+        BeadCacheStore, BrCapability, BrDependencySnapshot, BrError, BrIssueDetail, BrIssueSummary,
+        BrVersion,
+    };
     use grove_session::CliClaudeBackend;
     use grove_types::{
         BeadId, BeadPriority, BeadRef, CircuitBreakerState, CircuitState, GroveBeadRecord,
@@ -1183,10 +1210,7 @@ mod tests {
         let now: Timestamp = "2026-03-16T12:00:00Z".parse()?;
 
         let result = select_best_candidate(&beads, &ready_ids, &config, now);
-        assert_eq!(
-            result.map(|b| b.bead.id.as_str()),
-            Some("grove-high")
-        );
+        assert_eq!(result.map(|b| b.bead.id.as_str()), Some("grove-high"));
         Ok(())
     }
 
@@ -1201,10 +1225,7 @@ mod tests {
         let now: Timestamp = "2026-03-16T12:00:00Z".parse()?;
 
         let result = select_best_candidate(&beads, &ready_ids, &config, now);
-        assert_eq!(
-            result.map(|b| b.bead.id.as_str()),
-            Some("grove-ready")
-        );
+        assert_eq!(result.map(|b| b.bead.id.as_str()), Some("grove-ready"));
         Ok(())
     }
 
@@ -1213,7 +1234,11 @@ mod tests {
         let config = GroveConfig::default();
         let beads = vec![
             sample_bead("grove-running", BeadPriority::P0, GroveBeadStatus::Running)?,
-            sample_bead("grove-succeeded", BeadPriority::P1, GroveBeadStatus::Succeeded)?,
+            sample_bead(
+                "grove-succeeded",
+                BeadPriority::P1,
+                GroveBeadStatus::Succeeded,
+            )?,
         ];
         let ready_ids: HashSet<BeadId> = beads.iter().map(|b| b.bead.id.clone()).collect();
         let now: Timestamp = "2026-03-16T12:00:00Z".parse()?;
@@ -1228,7 +1253,11 @@ mod tests {
         let config = GroveConfig::default();
         let beads = vec![
             sample_bead("grove-ready-both", BeadPriority::P2, GroveBeadStatus::Ready)?,
-            sample_bead("grove-ready-local-only", BeadPriority::P0, GroveBeadStatus::Ready)?,
+            sample_bead(
+                "grove-ready-local-only",
+                BeadPriority::P0,
+                GroveBeadStatus::Ready,
+            )?,
         ];
         // Only the P2 bead is in the br ready set.
         let mut ready_ids = HashSet::new();
@@ -1236,10 +1265,7 @@ mod tests {
         let now: Timestamp = "2026-03-16T12:00:00Z".parse()?;
 
         let result = select_best_candidate(&beads, &ready_ids, &config, now);
-        assert_eq!(
-            result.map(|b| b.bead.id.as_str()),
-            Some("grove-ready-both")
-        );
+        assert_eq!(result.map(|b| b.bead.id.as_str()), Some("grove-ready-both"));
         Ok(())
     }
 
@@ -1255,7 +1281,8 @@ mod tests {
         let excluded_ids = HashSet::from([BeadId::new("grove-p0")]);
         let now: Timestamp = "2026-03-16T12:00:00Z".parse()?;
 
-        let result = select_best_candidate_excluding(&beads, &ready_ids, &excluded_ids, &config, now);
+        let result =
+            select_best_candidate_excluding(&beads, &ready_ids, &excluded_ids, &config, now);
         assert_eq!(result.map(|b| b.bead.id.as_str()), Some("grove-p1"));
         Ok(())
     }
@@ -1320,7 +1347,8 @@ mod tests {
             db_path,
         };
 
-        let outcome = run_dispatch_loop(&mut db, &backend, &br, &config, &lease_config, &loop_config)?;
+        let outcome =
+            run_dispatch_loop(&mut db, &backend, &br, &config, &lease_config, &loop_config)?;
         assert_eq!(outcome.dispatched_count, 2);
 
         let runs = db.connection().query_row(
@@ -1521,7 +1549,11 @@ mod tests {
 
         let runs = db.list_task_runs_for_bead(&bead.id)?;
         assert_eq!(
-            consecutive_failures_from_history(Some(&runs), &run2, grove_types::RunStatus::WaitingToRetry),
+            consecutive_failures_from_history(
+                Some(&runs),
+                &run2,
+                grove_types::RunStatus::WaitingToRetry
+            ),
             2
         );
         Ok(())
@@ -1672,7 +1704,10 @@ mod tests {
         let capsule = db
             .latest_recovery_capsule_for_bead(&bead.id)?
             .ok_or_else(|| std::io::Error::other("expected recovery capsule"))?;
-        assert_eq!(capsule.capsule.outcome, grove_types::RecoveryCapsuleOutcome::Failed);
+        assert_eq!(
+            capsule.capsule.outcome,
+            grove_types::RecoveryCapsuleOutcome::Failed
+        );
         assert!(capsule
             .capsule
             .strongest_evidence

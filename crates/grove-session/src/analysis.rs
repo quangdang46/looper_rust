@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use crate::{ProtocolWarning, infer_progress_signal};
 use grove_types::{IterationAnalysis, ProtocolEvent, ProtocolState};
 use std::collections::HashMap;
@@ -228,6 +229,7 @@ fn normalize_line(line: &str) -> String {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
     use grove_types::{CheckpointPayload, ProtocolEvent};

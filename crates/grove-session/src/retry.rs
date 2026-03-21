@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::{ExecutionContract, FailureClass, ProgressSignal, SessionOutcome};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +166,7 @@ fn compact_excerpt(text: &str) -> String {
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::plan_retry_mutation;
     use grove_types::{

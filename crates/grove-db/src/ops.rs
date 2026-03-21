@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, OptionalExtension, Row};
 use grove_types::{
-    BeadId, RunId, SessionId, ConfigSnapshotRecord, DispatchDecisionRecord, IntegrityCheckRecord,
-    PromptMaterializationRecord,
+    BeadId, ConfigSnapshotRecord, DispatchDecisionRecord, IntegrityCheckRecord,
+    PromptMaterializationRecord, RunId, SessionId,
 };
+use rusqlite::{params, OptionalExtension, Row};
 
-use crate::{Database, timestamp_string};
+use crate::{timestamp_string, Database};
 
 impl Database {
     // 21.2 Prompt materialization
@@ -60,19 +60,21 @@ impl Database {
                 prompt_hash: row.get(6)?,
                 byte_count: row.get(7)?,
                 segment_manifest_json: row.get(8)?,
-                created_at: row.get::<_, String>(9)?.parse().map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, 0))?, // simplistic error mapping
+                created_at: row
+                    .get::<_, String>(9)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, 0))?, // simplistic error mapping
             })
         })?;
 
-        let records = rows.collect::<Result<Vec<_>, _>>().context("fetch prompt materializations")?;
+        let records = rows
+            .collect::<Result<Vec<_>, _>>()
+            .context("fetch prompt materializations")?;
         Ok(records)
     }
 
     // 21.3 Dispatch decision
-    pub fn insert_dispatch_decision(
-        &mut self,
-        record: &DispatchDecisionRecord,
-    ) -> Result<()> {
+    pub fn insert_dispatch_decision(&mut self, record: &DispatchDecisionRecord) -> Result<()> {
         self.with_tx(|tx| {
             tx.execute(
                 "INSERT INTO dispatch_decisions(\
@@ -117,19 +119,21 @@ impl Database {
                 score_breakdown_json: row.get(4)?,
                 blocking_reasons_json: row.get(5)?,
                 competing_bead_ids_json: row.get(6)?,
-                created_at: row.get::<_, String>(7)?.parse().map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, 0))?,
+                created_at: row
+                    .get::<_, String>(7)?
+                    .parse()
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, 0))?,
             })
         })?;
 
-        let records = rows.collect::<Result<Vec<_>, _>>().context("fetch dispatch decisions")?;
+        let records = rows
+            .collect::<Result<Vec<_>, _>>()
+            .context("fetch dispatch decisions")?;
         Ok(records)
     }
 
     // 21.5 Config snapshot
-    pub fn insert_config_snapshot(
-        &mut self,
-        record: &ConfigSnapshotRecord,
-    ) -> Result<()> {
+    pub fn insert_config_snapshot(&mut self, record: &ConfigSnapshotRecord) -> Result<()> {
         self.with_tx(|tx| {
             tx.execute(
                 "INSERT OR IGNORE INTO config_snapshots(\
@@ -149,10 +153,7 @@ impl Database {
     }
 
     // 21.6 Integrity checks
-    pub fn insert_integrity_check(
-        &mut self,
-        record: &IntegrityCheckRecord,
-    ) -> Result<()> {
+    pub fn insert_integrity_check(&mut self, record: &IntegrityCheckRecord) -> Result<()> {
         self.with_tx(|tx| {
             tx.execute(
                 "INSERT INTO integrity_checks(\

@@ -1,22 +1,24 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use crate::status_view::{
-    DispatchExplanationView, MirrorPendingView, ReservationConflictView, ScoreComponentView,
     conflicts_for_bead, find_reservation_conflicts, latest_mirror_pending_for_bead,
-    ready_age_minutes, triage_context_for_bead,
+    ready_age_minutes, triage_context_for_bead, DispatchExplanationView, MirrorPendingView,
+    ReservationConflictView, ScoreComponentView,
 };
-use crate::{DispatchEligibilityContext, evaluate_dispatch_eligibility};
+use crate::{evaluate_dispatch_eligibility, DispatchEligibilityContext};
 use anyhow::Result;
 use chrono::Utc;
-use serde::Serialize;
 use grove_br::BrClient;
 use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
 use grove_db::{Database, RecoveryCapsuleEvent};
 use grove_types::{
-    BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, EventLogRecord, GroveBeadRecord,
-    GroveBeadStatus, HandoffRecord, PlaybookBulletRecord, PromptManifest, RecoveryCapsule,
-    RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord,
-    Timestamp, DispatchDecisionRecord, PromptMaterializationRecord,
+    BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, DispatchDecisionRecord,
+    EventLogRecord, GroveBeadRecord, GroveBeadStatus, HandoffRecord, PlaybookBulletRecord,
+    PromptManifest, PromptMaterializationRecord, RecoveryCapsule, RecoveryCapsuleOutcome,
+    RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord, Timestamp,
 };
+use serde::Serialize;
 use std::fs;
 
 pub const QUERY_PURPOSE: &str =
@@ -110,7 +112,10 @@ pub fn load_inspect_snapshot<C: BrClient>(
                 .iter()
                 .filter(|section| section.kind == "playbook" && section.included)
                 .flat_map(|section| section.bullet_ids.iter())
-                .filter_map(|bullet_id| db.get_playbook_bullet(&BulletId::new(bullet_id.clone())).ok())
+                .filter_map(|bullet_id| {
+                    db.get_playbook_bullet(&BulletId::new(bullet_id.clone()))
+                        .ok()
+                })
                 .flatten()
                 .collect::<Vec<_>>()
         })
@@ -145,8 +150,12 @@ pub fn load_inspect_snapshot<C: BrClient>(
         .collect();
     let mirror_pending = latest_mirror_pending_for_bead(bead_id, db)?;
 
-    let historical_dispatch_decisions = db.list_dispatch_decisions_for_bead(bead_id, 10).unwrap_or_default();
-    let prompt_materializations = db.list_prompt_materializations_for_bead(bead_id).unwrap_or_default();
+    let historical_dispatch_decisions = db
+        .list_dispatch_decisions_for_bead(bead_id, 10)
+        .unwrap_or_default();
+    let prompt_materializations = db
+        .list_prompt_materializations_for_bead(bead_id)
+        .unwrap_or_default();
 
     let retrieval_bundle = latest_session
         .as_ref()
@@ -213,7 +222,10 @@ fn retrieval_bundle_from_prompt_provenance(
     if snippets.is_empty() {
         None
     } else {
-        let conversations: Vec<i64> = snippets.iter().map(|snippet| snippet.conversation_id).collect();
+        let conversations: Vec<i64> = snippets
+            .iter()
+            .map(|snippet| snippet.conversation_id)
+            .collect();
         Some(RetrievalBundle {
             snippets,
             conversations,
@@ -1680,7 +1692,10 @@ mod tests {
             Some("[TASK] fix inspect")
         );
         assert_eq!(snapshot.selected_playbook_bullets.len(), 1);
-        assert_eq!(snapshot.selected_playbook_bullets[0].id.as_str(), "bullet-keep");
+        assert_eq!(
+            snapshot.selected_playbook_bullets[0].id.as_str(),
+            "bullet-keep"
+        );
         Ok(())
     }
 
