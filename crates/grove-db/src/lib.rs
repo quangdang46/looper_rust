@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use glob::{MatchOptions, Pattern};
@@ -9,18 +9,18 @@ use grove_br::{
 };
 use grove_types::{
     BeadId, BeadPriority, BeadRef, CheckpointId, CheckpointPayload, CheckpointRecord,
-    CircuitBreakerState, ClaudeSessionRecord, EventKind, EventLogRecord, FailureClass,
-    GroveBeadRecord, GroveBeadStatus, HandoffRecord, LeaderLeaseRecord, MirrorOutboxRecord,
-    MirrorStatus, PromptId, RecoveryCapsule, RecoveryCapsuleOutcome, ReservationConflict,
-    ReservationMode, ReservationRecord, RunId, RunStatus, SessionId, SessionStatus, StopReason,
-    TaskRunRecord, Timestamp,
+    CircuitBreakerState, ClaudeSessionRecord, ContextSnapshot, EventError, EventKind,
+    EventLogRecord, EventOutcome, FailureClass, GroveBeadRecord, GroveBeadStatus, HandoffRecord,
+    LeaderLeaseRecord, MirrorOutboxRecord, MirrorStatus, PromptId, RecoveryCapsule,
+    RecoveryCapsuleOutcome, ReservationConflict, ReservationMode, ReservationRecord, RunId,
+    RunStatus, SessionId, SessionStatus, StopReason, TaskRunRecord, Timestamp,
 };
 
-mod ops;
 mod archive;
+mod ops;
 mod playbook;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -96,6 +96,17 @@ pub struct HandoffWriteInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct EventLogInput {
+    pub kind: EventKind,
+    pub bead_id: Option<BeadId>,
+    pub run_id: Option<RunId>,
+    pub session_id: Option<SessionId>,
+    pub payload: Value,
+    pub created_at: chrono::DateTime<Utc>,
+    pub observability: EventObservability,
+}
+
+#[derive(Debug, Clone)]
 pub struct LeaderLeaseAcquireInput {
     pub owner_label: String,
     pub run_id: Option<RunId>,
@@ -140,6 +151,16 @@ pub struct RecoveryCapsuleWriteInput {
     pub run_id: RunId,
     pub capsule: RecoveryCapsule,
     pub created_at: chrono::DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EventObservability {
+    pub correlation_id: Option<String>,
+    pub operation: Option<String>,
+    pub outcome: Option<EventOutcome>,
+    pub duration_ms: Option<u64>,
+    pub error: Option<EventError>,
+    pub context_snapshot: Option<ContextSnapshot>,
 }
 
 const PRAGMAS: &[&str] = &[
@@ -320,6 +341,12 @@ struct RawEventLogRow {
     session_id: Option<String>,
     payload_json: String,
     created_at: String,
+    correlation_id: Option<String>,
+    operation: Option<String>,
+    outcome: Option<String>,
+    duration_ms: Option<i64>,
+    error_json: Option<String>,
+    context_snapshot_json: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1316,7 +1343,9 @@ impl Database {
         payload: &serde_json::Value,
         created_at: &chrono::DateTime<Utc>,
     ) -> Result<()> {
-        self.with_tx(|tx| insert_event_log_tx(tx, kind, bead_id, run_id, session_id, payload, created_at))
+        self.with_tx(|tx| {
+            insert_event_log_tx(tx, kind, bead_id, run_id, session_id, payload, created_at)
+        })
     }
 
     pub fn update_run_activity(
@@ -1387,7 +1416,8 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
                  FROM event_log \
                  WHERE bead_id = ?1 \
                  ORDER BY id DESC",
@@ -1429,7 +1459,8 @@ impl Database {
 
         let row = tx
             .query_row(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
                  FROM event_log \
                  WHERE bead_id = ?1 AND run_id = ?2 AND kind = ?3 \
                  ORDER BY id DESC \
@@ -1460,7 +1491,8 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
                  FROM event_log \
                  WHERE bead_id = ?1 AND kind = ?2 \
                  ORDER BY id DESC \
@@ -1544,7 +1576,7 @@ impl Database {
             .conn
             .transaction()
             .context("begin reset bead for retry transaction")?;
-        
+
         tx.execute(
             "UPDATE bead_runtime \
              SET grove_status = ?2, retry_after = NULL, circuit_breaker_json = NULL, runtime_updated_at = ?3 \
@@ -1567,7 +1599,8 @@ impl Database {
             now,
         )?;
 
-        tx.commit().context("commit reset bead for retry transaction")?;
+        tx.commit()
+            .context("commit reset bead for retry transaction")?;
         Ok(())
     }
 
@@ -1575,7 +1608,8 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
                  FROM event_log \
                  WHERE kind = ?1 \
                  ORDER BY id DESC LIMIT 1",
@@ -1593,7 +1627,8 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
                  FROM event_log \
                  WHERE run_id = ?1 \
                  ORDER BY id ASC",
@@ -1611,6 +1646,169 @@ impl Database {
             .collect()
     }
 
+    pub fn aggregate_run_metrics(&self, run_id: &RunId) -> Result<Option<grove_types::RunMetrics>> {
+        let events = self.list_events_for_run(run_id)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+
+        let run = self
+            .conn
+            .query_row(
+                "SELECT started_at, ended_at, checkpoint_count FROM task_runs WHERE id = ?1",
+                [run_id.as_str()],
+                |row| {
+                    let started_at: String = row.get(0)?;
+                    let ended_at: Option<String> = row.get(1)?;
+                    let checkpoint_count: i32 = row.get(2)?;
+                    Ok((started_at, ended_at, checkpoint_count))
+                },
+            )
+            .optional()
+            .context("query run for metrics aggregation")?;
+
+        let Some((started_at, ended_at, checkpoint_count)) = run else {
+            return Ok(None);
+        };
+
+        let started = parse_timestamp(&started_at)?;
+        let ended = ended_at.as_ref().and_then(|s| parse_timestamp(s).ok());
+        let total_duration_secs = ended
+            .map(|e| (e - started).num_seconds() as u64)
+            .unwrap_or(0);
+
+        let checkpoints_taken = checkpoint_count as u32;
+        let retries_attempted = events
+            .iter()
+            .filter(|e| e.kind == EventKind::RunStarted)
+            .count()
+            .saturating_sub(1) as u32;
+        let rescue_injections = events
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::EscalationTierChanged))
+            .count() as u32;
+        let reactions_invoked = events
+            .iter()
+            .filter(|e| e.kind == EventKind::ReactionInvoked)
+            .count() as u32;
+
+        let max_escalation_tier = events
+            .iter()
+            .filter_map(|e| {
+                e.payload
+                    .get("escalation_tier")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| {
+                        let normalized = s
+                            .chars()
+                            .filter(|c| c.is_alphanumeric())
+                            .collect::<String>()
+                            .to_lowercase();
+                        match normalized.as_str() {
+                            "firstattempt" => Some(0),
+                            "secondattempt" => Some(1),
+                            "thirdattempt" => Some(2),
+                            "finalattempt" => Some(3),
+                            "giveup" => Some(4),
+                            _ => None,
+                        }
+                    })
+            })
+            .max()
+            .unwrap_or(0);
+
+        let termination_reason = events
+            .iter()
+            .find(|e| matches!(e.kind, EventKind::RunSucceeded | EventKind::RunFailed))
+            .map(|e| format!("{:?}", e.kind));
+
+        let termination_reason = termination_reason.or_else(|| {
+            if ended.is_some() {
+                Some("Ended".to_string())
+            } else {
+                None
+            }
+        });
+
+        Ok(Some(grove_types::RunMetrics {
+            run_id: run_id.clone(),
+            total_duration_secs,
+            checkpoints_taken,
+            retries_attempted,
+            rescue_injections,
+            reactions_invoked,
+            max_escalation_tier,
+            termination_reason,
+        }))
+    }
+
+    pub fn generate_run_report(&self, run_id: &RunId) -> Result<Option<grove_types::RunReport>> {
+        use crate::RecoveryCapsuleEvent;
+        use grove_types::RunReport;
+
+        let events = self.list_events_for_run(run_id)?;
+        if events.is_empty() {
+            return Ok(None);
+        }
+
+        let runs = self
+            .conn
+            .query_row(
+                "SELECT bead_id, status, failure_class FROM task_runs WHERE id = ?1",
+                [run_id.as_str()],
+                |row| {
+                    let bead_id: String = row.get(0)?;
+                    let status: String = row.get(1)?;
+                    let failure_class: Option<String> = row.get(2)?;
+                    Ok((bead_id, status, failure_class))
+                },
+            )
+            .optional()
+            .context("query run for report")?;
+
+        let Some((bead_id_str, status_str, failure_class_str)) = runs else {
+            return Ok(None);
+        };
+
+        let bead_id = BeadId::new(bead_id_str);
+        let run_status = parse_run_status(&status_str)?;
+        let failure_class = failure_class_str
+            .as_ref()
+            .and_then(|s| parse_failure_class(s).ok());
+
+        let metrics =
+            self.aggregate_run_metrics(run_id)?
+                .unwrap_or_else(|| grove_types::RunMetrics {
+                    run_id: run_id.clone(),
+                    total_duration_secs: 0,
+                    checkpoints_taken: 0,
+                    retries_attempted: 0,
+                    rescue_injections: 0,
+                    reactions_invoked: 0,
+                    max_escalation_tier: 0,
+                    termination_reason: None,
+                });
+
+        let event_count = events.len() as u32;
+        let first_event_at = events.first().map(|e| e.created_at);
+        let last_event_at = events.last().map(|e| e.created_at);
+
+        let recovery_capsule = self
+            .latest_recovery_capsule_for_bead(&bead_id)?
+            .map(|e: RecoveryCapsuleEvent| e.capsule);
+
+        Ok(Some(RunReport {
+            run_id: run_id.clone(),
+            bead_id,
+            status: run_status,
+            metrics,
+            failure_class,
+            recovery_capsule,
+            event_count,
+            first_event_at,
+            last_event_at,
+        }))
+    }
 
     pub fn acquire_reservations(
         &mut self,
@@ -2504,6 +2702,12 @@ fn raw_event_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RawEventLogRow
         session_id: row.get(4)?,
         payload_json: row.get(5)?,
         created_at: row.get(6)?,
+        correlation_id: row.get(7)?,
+        operation: row.get(8)?,
+        outcome: row.get(9)?,
+        duration_ms: row.get(10)?,
+        error_json: row.get(11)?,
+        context_snapshot_json: row.get(12)?,
     })
 }
 
@@ -2675,6 +2879,16 @@ fn raw_handoff_into_record(row: RawHandoffRow) -> Result<HandoffRecord> {
 }
 
 fn raw_event_log_into_record(row: RawEventLogRow) -> Result<EventLogRecord> {
+    let error = row
+        .error_json
+        .as_ref()
+        .and_then(|json| parse_json::<EventError>(json, "event error").ok());
+    let context_snapshot = row
+        .context_snapshot_json
+        .as_ref()
+        .and_then(|json| parse_json::<ContextSnapshot>(json, "context snapshot").ok());
+    let outcome = row.outcome.as_ref().and_then(|s| parse_event_outcome(s));
+
     Ok(EventLogRecord {
         id: row.id,
         kind: parse_event_kind(&row.kind)?,
@@ -2683,13 +2897,12 @@ fn raw_event_log_into_record(row: RawEventLogRow) -> Result<EventLogRecord> {
         session_id: row.session_id.map(SessionId::new),
         payload: parse_json(&row.payload_json, "event log payload")?,
         created_at: parse_timestamp(&row.created_at)?,
-        // New observability fields - will be None for existing records
-        correlation_id: None,
-        operation: None,
-        outcome: None,
-        duration_ms: None,
-        error: None,
-        context_snapshot: None,
+        correlation_id: row.correlation_id,
+        operation: row.operation,
+        outcome,
+        duration_ms: row.duration_ms.map(|ms| ms as u64),
+        error,
+        context_snapshot,
     })
 }
 
@@ -3030,19 +3243,53 @@ fn insert_event_log_tx(
     payload: &serde_json::Value,
     created_at: &chrono::DateTime<Utc>,
 ) -> Result<()> {
+    let input = EventLogInput {
+        kind,
+        bead_id: bead_id.cloned(),
+        run_id: run_id.cloned(),
+        session_id: session_id.cloned(),
+        payload: payload.clone(),
+        created_at: *created_at,
+        observability: EventObservability::default(),
+    };
+    insert_event_log_with_observability_tx(tx, &input)
+}
+
+fn insert_event_log_with_observability_tx(
+    tx: &Transaction<'_>,
+    input: &EventLogInput,
+) -> Result<()> {
+    let error_json = input
+        .observability
+        .error
+        .as_ref()
+        .and_then(|e| serde_json::to_string(e).ok());
+    let context_snapshot_json = input
+        .observability
+        .context_snapshot
+        .as_ref()
+        .and_then(|cs| serde_json::to_string(cs).ok());
+
     tx.execute(
-        "INSERT INTO event_log(kind, bead_id, run_id, session_id, payload_json, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO event_log(kind, bead_id, run_id, session_id, payload_json, created_at, \
+            correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
-            encode_event_kind(kind),
-            bead_id.map(BeadId::as_str),
-            run_id.map(RunId::as_str),
-            session_id.map(SessionId::as_str),
-            payload.to_string(),
-            timestamp_string(created_at),
+            encode_event_kind(input.kind),
+            input.bead_id.as_ref().map(BeadId::as_str),
+            input.run_id.as_ref().map(RunId::as_str),
+            input.session_id.as_ref().map(SessionId::as_str),
+            input.payload.to_string(),
+            timestamp_string(&input.created_at),
+            input.observability.correlation_id.as_deref(),
+            input.observability.operation.as_deref(),
+            input.observability.outcome.map(encode_event_outcome),
+            input.observability.duration_ms.map(|ms| ms as i64),
+            error_json,
+            context_snapshot_json,
         ],
     )
-    .with_context(|| format!("insert event log {:?}", kind))?;
+    .with_context(|| format!("insert event log {:?}", input.kind))?;
     Ok(())
 }
 
@@ -3517,10 +3764,27 @@ fn parse_event_kind(text: &str) -> Result<EventKind> {
         "brmirrorfailed" => Ok(EventKind::BrMirrorFailed),
         "reactioninvoked" => Ok(EventKind::ReactionInvoked),
         "escalationtierchanged" => Ok(EventKind::EscalationTierChanged),
-            "escalationtierreset" => Ok(EventKind::EscalationTierReset),
+        "escalationtierreset" => Ok(EventKind::EscalationTierReset),
         "activitystatechanged" => Ok(EventKind::ActivityStateChanged),
         "recoverycapsulecreated" => Ok(EventKind::RecoveryCapsuleCreated),
         _ => bail!("unsupported event kind {text}"),
+    }
+}
+
+fn parse_event_outcome(text: &str) -> Option<EventOutcome> {
+    match normalize_enum_token(text).as_str() {
+        "success" => Some(EventOutcome::Success),
+        "failure" => Some(EventOutcome::Failure),
+        "partial" => Some(EventOutcome::Partial),
+        _ => None,
+    }
+}
+
+fn encode_event_outcome(outcome: EventOutcome) -> &'static str {
+    match outcome {
+        EventOutcome::Success => "Success",
+        EventOutcome::Failure => "Failure",
+        EventOutcome::Partial => "Partial",
     }
 }
 
@@ -3533,13 +3797,15 @@ fn normalize_enum_token(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
     use super::reservation_patterns_overlap;
     use anyhow::Result;
     use camino::Utf8PathBuf;
     use chrono::Utc;
     use grove_br::{
-        BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError, BrIssueDetail,
-        BrIssueSummary, BrVersion, sync_bead_cache,
+        sync_bead_cache, BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError,
+        BrIssueDetail, BrIssueSummary, BrVersion,
     };
     use grove_types::{
         BeadId, BeadPriority, CheckpointId, CheckpointPayload, CircuitBreakerState,
@@ -3873,9 +4139,7 @@ mod tests {
             },
         )?;
 
-        let bead = db
-            .get_bead_record(&BeadId::new("grove-breaker"))?
-            .expect("breaker bead should persist");
+        let bead = db.get_bead_record(&BeadId::new("grove-breaker"))?.unwrap();
         assert_eq!(bead.circuit_breaker_state, Some(breaker));
         Ok(())
     }
@@ -3988,7 +4252,7 @@ mod tests {
                 acquired_at,
                 expires_at: "2026-03-16T12:00:30Z".parse()?,
             })?
-            .expect("lease should be acquired");
+            .unwrap();
         assert_eq!(lease.owner_label, "leader-a");
         assert_eq!(lease.acquired_at, acquired_at);
         assert_eq!(lease.heartbeat_at, acquired_at);
@@ -4004,7 +4268,7 @@ mod tests {
         let heartbeat_at: Timestamp = "2026-03-16T12:00:10Z".parse()?;
         let heartbeat = db
             .heartbeat_leader_lease("leader-a", &heartbeat_at, &"2026-03-16T12:00:40Z".parse()?)?
-            .expect("heartbeat should keep active lease");
+            .unwrap();
         assert_eq!(heartbeat.heartbeat_at, heartbeat_at);
         assert_eq!(
             heartbeat.expires_at,
@@ -4013,12 +4277,11 @@ mod tests {
 
         let released = db
             .release_leader_lease("leader-a", &"2026-03-16T12:00:20Z".parse()?)?
-            .expect("owned lease should release");
+            .unwrap();
         assert_eq!(released.owner_label, "leader-a");
-        assert!(
-            db.active_leader_lease(&"2026-03-16T12:00:20Z".parse()?)?
-                .is_none()
-        );
+        assert!(db
+            .active_leader_lease(&"2026-03-16T12:00:20Z".parse()?)?
+            .is_none());
         Ok(())
     }
 
@@ -4050,13 +4313,13 @@ mod tests {
 
         let bead = db
             .get_bead_record(&BeadId::new("grove-interrupted"))?
-            .expect("bead runtime should exist");
+            .unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
         assert_eq!(bead.last_failure_class, Some(FailureClass::Interrupted));
 
         let capsule = db
             .latest_recovery_capsule_for_bead(&BeadId::new("grove-interrupted"))?
-            .expect("interrupted run should persist recovery capsule");
+            .unwrap();
         assert_eq!(capsule.capsule.outcome, RecoveryCapsuleOutcome::Interrupted);
         assert!(capsule.capsule.summary.contains("persisted durable state"));
         Ok(())
@@ -4095,10 +4358,9 @@ mod tests {
             recovered[0].reason,
             crate::RecoveryReason::RunNoLongerActive
         );
-        assert!(
-            db.list_active_reservations_at(&"2026-03-16T12:05:00Z".parse()?)?
-                .is_empty()
-        );
+        assert!(db
+            .list_active_reservations_at(&"2026-03-16T12:05:00Z".parse()?)?
+            .is_empty());
         Ok(())
     }
 
@@ -4160,7 +4422,7 @@ mod tests {
         assert_eq!(checkpoint.id.as_str(), "chk-life");
         assert_eq!(
             db.get_bead_record(&BeadId::new("grove-life"))?
-                .expect("checkpoint should update runtime")
+                .unwrap()
                 .declared_paths,
             vec!["crates/grove-db/src/lib.rs".to_owned()]
         );
@@ -4175,9 +4437,7 @@ mod tests {
         };
         db.record_session_finished(&BeadId::new("grove-life"), &session_finished)?;
 
-        let bead = db
-            .get_bead_record(&BeadId::new("grove-life"))?
-            .expect("bead runtime should exist after session finish");
+        let bead = db.get_bead_record(&BeadId::new("grove-life"))?.unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::Checkpointed);
         assert_eq!(
             bead.declared_paths,
@@ -4207,20 +4467,16 @@ mod tests {
             Some("chk-life")
         );
 
-        let latest_session = db
-            .latest_session_for_run(&RunId::new("run-life"))?
-            .expect("latest session should exist");
+        let latest_session = db.latest_session_for_run(&RunId::new("run-life"))?.unwrap();
         assert_eq!(latest_session.status, SessionStatus::Checkpointed);
         assert_eq!(latest_session.stop_reason, Some(StopReason::Checkpoint));
 
         let latest_checkpoint = db
             .latest_checkpoint_for_bead(&BeadId::new("grove-life"))?
-            .expect("latest checkpoint should exist");
+            .unwrap();
         assert_eq!(latest_checkpoint.next_step, "finish lifecycle");
 
-        let bead = db
-            .get_bead_record(&BeadId::new("grove-life"))?
-            .expect("bead runtime should exist");
+        let bead = db.get_bead_record(&BeadId::new("grove-life"))?.unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::Checkpointed);
         assert_eq!(
             bead.last_run_id.as_ref().map(|id| id.as_str()),
@@ -4306,11 +4562,9 @@ mod tests {
                 },
             )
             .expect_err("session finish should reject a mismatched bead");
-        assert!(
-            wrong_bead_err
-                .to_string()
-                .contains("belongs to bead grove-a, not grove-b")
-        );
+        assert!(wrong_bead_err
+            .to_string()
+            .contains("belongs to bead grove-a, not grove-b"));
 
         let wrong_run_err = db.record_checkpoint_saved(SessionCheckpointInput {
             checkpoint_id: CheckpointId::new("chk-bad"),
@@ -4348,11 +4602,9 @@ mod tests {
                 resume_generation: 2,
             })
             .expect_err("checkpoint save should reject a mismatched session/run pair");
-        assert!(
-            cross_run_session_err
-                .to_string()
-                .contains("session ses-a belongs to run run-a, not run-a-2")
-        );
+        assert!(cross_run_session_err
+            .to_string()
+            .contains("session ses-a belongs to run run-a, not run-a-2"));
         Ok(())
     }
 
@@ -4655,11 +4907,9 @@ mod tests {
         assert!(row.4.is_none());
 
         let events = db.list_event_logs_for_bead(&BeadId::new("grove-mirror-success"))?;
-        assert!(
-            events
-                .iter()
-                .any(|event| event.kind == EventKind::BrMirrorSucceeded)
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.kind == EventKind::BrMirrorSucceeded));
         Ok(())
     }
 
@@ -4703,11 +4953,9 @@ mod tests {
         )?;
 
         let events = db.list_event_logs_for_bead(&BeadId::new("grove-mirror-failure"))?;
-        assert!(
-            events
-                .iter()
-                .any(|event| event.kind == EventKind::BrMirrorFailed)
-        );
+        assert!(events
+            .iter()
+            .any(|event| event.kind == EventKind::BrMirrorFailed));
         Ok(())
     }
 
@@ -4824,9 +5072,13 @@ mod tests {
             bead_id: BeadId::new("grove-activity"),
             attempt_no: 1,
             started_at: "2026-03-16T11:00:00Z".parse()?,
+            escalation_tier: grove_types::EscalationTier::FirstAttempt,
         })?;
         assert_eq!(started.activity, Some(grove_types::AgentActivity::Active));
-        assert_eq!(started.escalation_tier, grove_types::EscalationTier::FirstAttempt);
+        assert_eq!(
+            started.escalation_tier,
+            grove_types::EscalationTier::FirstAttempt
+        );
 
         let updated_at: Timestamp = "2026-03-16T11:05:00Z".parse()?;
         db.update_run_activity(
@@ -4846,7 +5098,114 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].activity, Some(grove_types::AgentActivity::Idle));
         assert_eq!(runs[0].last_activity_at, Some(updated_at));
-        assert_eq!(runs[0].escalation_tier, grove_types::EscalationTier::ThirdAttempt);
+        assert_eq!(
+            runs[0].escalation_tier,
+            grove_types::EscalationTier::ThirdAttempt
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn run_metrics_aggregation_returns_none_for_empty_run() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-metrics", "Metrics bead")?;
+
+        let metrics = db.aggregate_run_metrics(&RunId::new("run-nonexistent"))?;
+        assert!(metrics.is_none());
+
+        let report = db.generate_run_report(&RunId::new("run-nonexistent"))?;
+        assert!(report.is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn run_metrics_aggregation_computes_correct_values() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-metrics-test", "Metrics test bead")?;
+
+        let started = db.record_run_started(RunStartInput {
+            run_id: RunId::new("run-metrics-test"),
+            bead_id: BeadId::new("grove-metrics-test"),
+            attempt_no: 1,
+            started_at: "2026-03-16T11:00:00Z".parse()?,
+            escalation_tier: grove_types::EscalationTier::FirstAttempt,
+        })?;
+        assert_eq!(started.activity, Some(grove_types::AgentActivity::Active));
+
+        let events = db.list_events_for_run(&RunId::new("run-metrics-test"))?;
+        assert!(!events.is_empty());
+
+        let metrics = db.aggregate_run_metrics(&RunId::new("run-metrics-test"))?;
+        assert!(metrics.is_some());
+        let metrics = metrics.unwrap();
+        assert_eq!(metrics.run_id.as_str(), "run-metrics-test");
+        assert_eq!(metrics.checkpoints_taken, 0);
+        assert_eq!(metrics.retries_attempted, 0);
+        assert!(metrics.total_duration_secs >= 0);
+
+        let report = db.generate_run_report(&RunId::new("run-metrics-test"))?;
+        assert!(report.is_some());
+        let report = report.unwrap();
+        assert_eq!(report.run_id.as_str(), "run-metrics-test");
+        assert_eq!(report.bead_id.as_str(), "grove-metrics-test");
+        assert_eq!(report.event_count, events.len() as u32);
+        assert!(report.first_event_at.is_some());
+        assert!(report.last_event_at.is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn run_report_includes_failure_info() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-failure-test", "Failure test bead")?;
+
+        let started = db.record_run_started(RunStartInput {
+            run_id: RunId::new("run-failure-test"),
+            bead_id: BeadId::new("grove-failure-test"),
+            attempt_no: 1,
+            started_at: "2026-03-16T11:00:00Z".parse()?,
+            escalation_tier: grove_types::EscalationTier::FirstAttempt,
+        })?;
+
+        let finished = db.record_run_finished(
+            &BeadId::new("grove-failure-test"),
+            RunFinishInput {
+                run_id: RunId::new("run-failure-test"),
+                status: grove_types::RunStatus::Failed,
+                failure_class: Some(grove_types::FailureClass::Timeout),
+                failure_detail: Some("Test timeout".to_owned()),
+                ended_at: "2026-03-16T11:10:00Z".parse()?,
+                retry_after: None,
+                circuit_breaker_state: None,
+            },
+        )?;
+
+        assert_eq!(finished.status, grove_types::RunStatus::Failed);
+
+        let report = db.generate_run_report(&RunId::new("run-failure-test"))?;
+        assert!(report.is_some());
+        let report = report.unwrap();
+        assert_eq!(report.status, grove_types::RunStatus::Failed);
+        assert_eq!(
+            report.failure_class,
+            Some(grove_types::FailureClass::Timeout)
+        );
+        assert!(report.metrics.total_duration_secs > 0);
+
         Ok(())
     }
 

@@ -37,8 +37,8 @@ pub use playbook::{
 };
 pub use priority::BeadPriority;
 pub use prompt::{
-    ExecutionContract, PromptManifest, PromptManifestSection, PromptSectionProvenance,
-    PromptSegment, PromptSegmentKind, PromptTrimReason,
+    EscalationContext, ExecutionContract, PromptManifest, PromptManifestSection,
+    PromptSectionProvenance, PromptSegment, PromptSegmentKind, PromptTrimReason,
 };
 pub use reaction::{
     MutationStrategy, ReactionAction, ReactionContextSnapshot, ReactionOutcome, ReactionRecord,
