@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 // Phase 3 Acceptance Tests
 //
 // This test suite covers Phase 3 orchestration requirements:
@@ -5,22 +7,23 @@
 // 2. Parallel Orchestration Safety (Leader Leases & Reservations)
 // 3. Crash Recovery (Reconciling interrupted runs)
 // 4. Mirror-pending Behavior
+// 5. Run Metrics Aggregation & Post-mortem Analysis
 
 use camino::Utf8PathBuf;
 use chrono::{DateTime, Utc};
 use grove_config::GroveConfig;
-use grove_db::Database;
+use grove_db::{Database, RunFinishInput, RunStartInput};
 use grove_kernel::{
-    DispatchExitReason, LeaderLeaseConfig, LeaderLeaseManager, ReservationManager, ShutdownSignal,
-    execute_persisted_single_task_session,
+    execute_persisted_single_task_session, DispatchExitReason, LeaderLeaseConfig,
+    LeaderLeaseManager, ReservationManager, ShutdownSignal,
 };
 use grove_session::{
-    CliClaudeBackend, ContextMonitor, ExitPolicy, SessionLifecycleHooks, SessionShutdownConfig,
-    SingleTaskSessionRequest, execute_single_task_session_with_hooks,
+    execute_single_task_session_with_hooks, CliClaudeBackend, ContextMonitor, ExitPolicy,
+    SessionLifecycleHooks, SessionShutdownConfig, SingleTaskSessionRequest,
 };
 use grove_types::{
     AgentActivity, BeadId, ClaudeSessionRecord, CoordinatorStopReason, EscalationTier, EventKind,
-    ExecutionContract, PromptId, RunId, SessionId,
+    ExecutionContract, FailureClass, PromptId, RunId, RunStatus, SessionId,
 };
 use std::{fs, io, os::unix::fs::PermissionsExt, sync::Mutex, time::Duration};
 use tempfile::tempdir;
@@ -347,5 +350,219 @@ fn persisted_session_records_live_idle_transition_in_run_state_and_event_log() -
         blocked_event.is_some(),
         "expected a durable Blocked activity event tagged stderr"
     );
+    Ok(())
+}
+
+#[test]
+fn run_metrics_aggregation_includes_checkpoints_and_events() -> TestResult {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+
+    db.connection().execute(
+        "INSERT INTO bead_cache(\
+            bead_id, title, description, priority, issue_type, status, assignee,\
+            labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', ?6, ?7)",
+        rusqlite::params![
+            "grove-metrics-test",
+            "Test metrics aggregation",
+            1,
+            "task",
+            "open",
+            serde_json::json!({"id": "grove-metrics-test"}).to_string(),
+            "2026-03-21T00:00:00Z"
+        ],
+    )?;
+
+    let started = db.record_run_started(RunStartInput {
+        run_id: RunId::new("run-metrics-test"),
+        bead_id: BeadId::new("grove-metrics-test"),
+        attempt_no: 1,
+        started_at: "2026-03-21T10:00:00Z".parse()?,
+        escalation_tier: EscalationTier::FirstAttempt,
+    })?;
+    assert_eq!(started.activity, Some(AgentActivity::Active));
+
+    db.record_run_finished(
+        &BeadId::new("grove-metrics-test"),
+        RunFinishInput {
+            run_id: RunId::new("run-metrics-test"),
+            status: RunStatus::Succeeded,
+            failure_class: None,
+            failure_detail: None,
+            ended_at: "2026-03-21T10:15:00Z".parse()?,
+            retry_after: None,
+            circuit_breaker_state: None,
+        },
+    )?;
+
+    let metrics = db.aggregate_run_metrics(&RunId::new("run-metrics-test"))?;
+    assert!(metrics.is_some(), "expected metrics for completed run");
+    let metrics = metrics.unwrap();
+
+    assert_eq!(metrics.run_id.as_str(), "run-metrics-test");
+    assert_eq!(
+        metrics.checkpoints_taken, 0,
+        "checkpoint_count from run record"
+    );
+
+    let report = db.generate_run_report(&RunId::new("run-metrics-test"))?;
+    assert!(report.is_some(), "expected run report");
+    let report = report.unwrap();
+
+    assert_eq!(report.bead_id.as_str(), "grove-metrics-test");
+    assert_eq!(report.status, RunStatus::Succeeded);
+    assert!(
+        report.event_count > 0,
+        "should have events from run lifecycle"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn failed_run_report_includes_failure_class_and_duration() -> TestResult {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+
+    db.connection().execute(
+        "INSERT INTO bead_cache(\
+            bead_id, title, description, priority, issue_type, status, assignee,\
+            labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', ?6, ?7)",
+        rusqlite::params![
+            "grove-failure-test",
+            "Test failure reporting",
+            1,
+            "task",
+            "open",
+            serde_json::json!({"id": "grove-failure-test"}).to_string(),
+            "2026-03-21T00:00:00Z"
+        ],
+    )?;
+
+    db.record_run_started(RunStartInput {
+        run_id: RunId::new("run-failure-test"),
+        bead_id: BeadId::new("grove-failure-test"),
+        attempt_no: 1,
+        started_at: "2026-03-21T10:00:00Z".parse()?,
+        escalation_tier: EscalationTier::FirstAttempt,
+    })?;
+
+    db.record_run_finished(
+        &BeadId::new("grove-failure-test"),
+        RunFinishInput {
+            run_id: RunId::new("run-failure-test"),
+            status: RunStatus::Failed,
+            failure_class: Some(FailureClass::Timeout),
+            failure_detail: Some("Session exceeded maximum timeout".to_owned()),
+            ended_at: "2026-03-21T10:05:00Z".parse()?,
+            retry_after: None,
+            circuit_breaker_state: None,
+        },
+    )?;
+
+    let report = db.generate_run_report(&RunId::new("run-failure-test"))?;
+    assert!(report.is_some(), "expected report for failed run");
+    let report = report.unwrap();
+
+    assert_eq!(report.status, RunStatus::Failed);
+    assert_eq!(
+        report.failure_class,
+        Some(FailureClass::Timeout),
+        "failure class should be captured in report"
+    );
+    assert!(
+        report.metrics.total_duration_secs > 0,
+        "should have duration"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn interrupted_run_reconciliation_marks_active_runs_failed() -> TestResult {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+
+    db.connection().execute(
+        "INSERT INTO bead_cache(\
+            bead_id, title, description, priority, issue_type, status, assignee,\
+            labels_json, parent_ids_json, dependency_ids_json, dependent_ids_json, raw_json, synced_at\
+         ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, NULL, '[]', '[]', '[]', '[]', ?6, ?7)",
+        rusqlite::params![
+            "grove-interrupt-test",
+            "Test interrupted run",
+            1,
+            "task",
+            "open",
+            serde_json::json!({"id": "grove-interrupt-test"}).to_string(),
+            "2026-03-21T00:00:00Z"
+        ],
+    )?;
+
+    let start_time = "2026-03-21T10:00:00Z".parse::<chrono::DateTime<Utc>>()?;
+    let now = "2026-03-21T10:30:00Z".parse::<chrono::DateTime<Utc>>()?;
+
+    db.connection().execute(
+        "INSERT INTO task_runs(\
+            id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+         ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, ?6, ?7, NULL, ?8, ?9, ?10)",
+        rusqlite::params![
+            "run-interrupt-test",
+            "grove-interrupt-test",
+            1,
+            "Active",
+            start_time.to_rfc3339(),
+            1,
+            0,
+            "Active",
+            start_time.to_rfc3339(),
+            "FirstAttempt"
+        ],
+    )?;
+
+    db.connection().execute(
+        "INSERT INTO bead_runtime(\
+            bead_id, grove_status, declared_paths_json, metadata_json, last_run_id, retry_after,\
+            last_failure_class, last_failure_detail, runtime_updated_at\
+         ) VALUES (?1, ?2, '[]', '{}', ?3, NULL, NULL, NULL, ?4)",
+        rusqlite::params![
+            "grove-interrupt-test",
+            "Running",
+            "run-interrupt-test",
+            now.to_rfc3339()
+        ],
+    )?;
+
+    let recovered = db.reconcile_interrupted_runs(&now)?;
+    assert_eq!(recovered.len(), 1, "should recover one interrupted run");
+    assert_eq!(
+        recovered[0].run.status,
+        RunStatus::Failed,
+        "interrupted run should be marked failed"
+    );
+    assert_eq!(
+        recovered[0].run.failure_class,
+        Some(FailureClass::Interrupted)
+    );
+
+    let events = db.list_events_for_run(&RunId::new("run-interrupt-test"))?;
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == EventKind::RecoveryActionTaken),
+        "recovery action should be logged"
+    );
+
     Ok(())
 }
