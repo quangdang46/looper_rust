@@ -63,6 +63,16 @@ mod tests {
     }
 
     #[test]
+    fn env_override_sets_shutdown_grace_period() -> TestResult {
+        let loaded = load_with_text(
+            "",
+            &HashMap::from([(String::from("GROVE_SCHEDULER__SHUTDOWN_GRACE_PERIOD_MS"), String::from("2500"))]),
+        )?;
+        assert_eq!(loaded.config.scheduler.shutdown_grace_period_ms, 2500);
+        Ok(())
+    }
+
+    #[test]
     fn load_minimal_toml() -> TestResult {
         let dir = tempdir()?;
         let workspace_root = utf8(dir.path())?;
@@ -94,6 +104,7 @@ env_passthrough = ["FOO"]
 [scheduler]
 max_parallel = 7
 poll_interval_ms = 500
+shutdown_grace_period_ms = 1500
 retry_max = 5
 retry_backoff_secs = 45
 critical_path_bonus = 30
@@ -144,6 +155,7 @@ persist_jsonl = false
         let loaded = load_from_path_with_env(&config_path, &HashMap::new())?;
         assert_eq!(loaded.config.runtime.claude_bin, "claude-custom");
         assert_eq!(loaded.config.scheduler.max_parallel, 7);
+        assert_eq!(loaded.config.scheduler.shutdown_grace_period_ms, 1500);
         assert_eq!(loaded.config.checkpoint.max_context_bytes, 32000);
         assert_eq!(loaded.config.memory.transcript_dir, ".grove/tlog");
         assert_eq!(loaded.config.logging.level, "debug");

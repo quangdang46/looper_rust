@@ -19,6 +19,7 @@ pub const QUERY_PURPOSE: &str =
 pub struct StatusSnapshot {
     pub workspace_root: String,
     pub leader: Option<LeaderLeaseView>,
+    pub last_coordinator_stop: Option<CoordinatorStopView>,
     pub beads: Vec<GroveBeadRecord>,
     pub running_beads: Vec<RunningBeadView>,
     pub ready_queue: Vec<ReadyQueueEntry>,
@@ -34,6 +35,7 @@ impl StatusSnapshot {
         WorkspaceStatusView {
             workspace_root: self.workspace_root,
             leader: self.leader,
+            last_coordinator_stop: self.last_coordinator_stop,
             bead_status_counts: count_beads_statuses(&self.beads),
             grove_status_counts: count_grove_statuses(&self.beads),
             running_beads: self.running_beads,
@@ -50,6 +52,7 @@ impl StatusSnapshot {
 pub struct WorkspaceStatusView {
     pub workspace_root: String,
     pub leader: Option<LeaderLeaseView>,
+    pub last_coordinator_stop: Option<CoordinatorStopView>,
     pub bead_status_counts: Vec<StatusCount>,
     pub grove_status_counts: Vec<StatusCount>,
     pub running_beads: Vec<RunningBeadView>,
@@ -72,6 +75,15 @@ pub struct LeaderLeaseView {
     pub acquired_at: Option<Timestamp>,
     pub heartbeat_at: Option<Timestamp>,
     pub expires_at: Option<Timestamp>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CoordinatorStopView {
+    pub reason: String,
+    pub created_at: Timestamp,
+    pub forced: bool,
+    pub running_session_count: Option<u64>,
+    pub leader_released: Option<bool>,
 }
 
 impl LeaderLeaseView {
@@ -388,6 +400,32 @@ pub fn load_status_snapshot<C: BrClient>(
     let dependency_map = dependency_snapshots_by_bead(&beads, db)?;
 
     let leader = db.active_leader_lease(&now)?;
+    let last_coordinator_stop = db
+        .latest_event_by_kind(grove_types::EventKind::CoordinatorStopped)?
+        .and_then(|event| {
+            Some(CoordinatorStopView {
+                reason: event
+                    .payload
+                    .get("stop_reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                created_at: event.created_at,
+                forced: event
+                    .payload
+                    .get("forced_termination")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+                running_session_count: event
+                    .payload
+                    .get("running_session_count")
+                    .and_then(|value| value.as_u64()),
+                leader_released: event
+                    .payload
+                    .get("leader_released")
+                    .and_then(|value| value.as_bool()),
+            })
+        });
     let running_beads = build_running_beads(&beads, db)?;
     let ready_queue = build_ready_queue(
         &beads,
@@ -411,6 +449,7 @@ pub fn load_status_snapshot<C: BrClient>(
     Ok(StatusSnapshot {
         workspace_root: workspace_root.to_owned(),
         leader: leader.map(LeaderLeaseView::from_record),
+        last_coordinator_stop,
         beads,
         running_beads,
         ready_queue,

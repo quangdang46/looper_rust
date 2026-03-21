@@ -81,6 +81,9 @@ pub fn apply_env_overrides(
             "GROVE_SCHEDULER__POLL_INTERVAL_MS" => {
                 config.scheduler.poll_interval_ms = parse_env(key, value)?
             }
+            "GROVE_SCHEDULER__SHUTDOWN_GRACE_PERIOD_MS" => {
+                config.scheduler.shutdown_grace_period_ms = parse_env(key, value)?
+            }
             "GROVE_SCHEDULER__RETRY_MAX" => config.scheduler.retry_max = parse_env(key, value)?,
             "GROVE_SCHEDULER__RETRY_BACKOFF_SECS" => {
                 config.scheduler.retry_backoff_secs = parse_env(key, value)?

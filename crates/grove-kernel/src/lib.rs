@@ -213,6 +213,32 @@ impl SessionLifecycleHooks for DbSessionLifecycleHooks<'_> {
         Ok(())
     }
 
+    fn on_shutdown_requested(&mut self, grace_period: Option<std::time::Duration>) -> anyhow::Result<()> {
+        self.db.write_event_log(
+            grove_types::EventKind::SessionTerminationRequested,
+            Some(&self.bead_id),
+            Some(&self.run_id),
+            Some(&self.session_id),
+            &serde_json::json!({
+                "grace_period_ms": grace_period.map(|duration| duration.as_millis() as u64),
+            }),
+            &chrono::Utc::now(),
+        )?;
+        Ok(())
+    }
+
+    fn on_shutdown_forced(&mut self) -> anyhow::Result<()> {
+        self.db.write_event_log(
+            grove_types::EventKind::SessionTerminationForced,
+            Some(&self.bead_id),
+            Some(&self.run_id),
+            Some(&self.session_id),
+            &serde_json::json!({"forced": true}),
+            &chrono::Utc::now(),
+        )?;
+        Ok(())
+    }
+
     fn on_session_finished(&mut self, result: &SingleTaskSessionResult) -> anyhow::Result<()> {
         self.db
             .record_session_finished(&self.bead_id, &result.outcome.session)?;
@@ -300,6 +326,7 @@ fn finalize_persisted_run(
     failure_detail_override: Option<String>,
 ) -> Result<grove_types::TaskRunRecord> {
     let ended_at = outcome.session.ended_at.unwrap_or_else(chrono::Utc::now);
+    let forced_kill = outcome.session.stop_reason == Some(grove_types::StopReason::Kill);
     let (status, failure_class, retry_after) = match outcome.session.status {
         SessionStatus::Checkpointed => (RunStatus::Checkpointed, None, None),
         SessionStatus::Completed => (RunStatus::Succeeded, None, None),
@@ -319,6 +346,9 @@ fn finalize_persisted_run(
             None,
         ),
         SessionStatus::Crashed => (RunStatus::Failed, Some(FailureClass::ClaudeCrashed), None),
+        SessionStatus::UnknownFailure if forced_kill => {
+            (RunStatus::Failed, Some(FailureClass::Interrupted), None)
+        }
         SessionStatus::UnknownFailure => (RunStatus::Failed, Some(FailureClass::Unknown), None),
         SessionStatus::Starting | SessionStatus::Running => {
             (RunStatus::Failed, Some(FailureClass::Unknown), None)
@@ -1470,6 +1500,7 @@ exit "${EXIT_CODE:-0}"
             archive_bundle: None,
             playbook_rules: Vec::new(),
             env: Vec::new(),
+            shutdown: grove_session::SessionShutdownConfig::default(),
         }
     }
 

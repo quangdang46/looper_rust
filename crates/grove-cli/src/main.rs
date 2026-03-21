@@ -221,27 +221,63 @@ fn handle_run() -> Result<()> {
         shutdown_signal,
     };
 
-    let outcome = run_dispatch_loop(
+    let dispatch_result = run_dispatch_loop(
         &mut db,
         &backend,
         &br,
         &loaded.config,
         &lease_config,
         &loop_config,
-    )?;
-
-    println!("Dispatch loop exited: {}", outcome.exit_reason);
-    println!("Stop reason: {}", outcome.stop_reason);
-    println!("Total runs dispatched: {}", outcome.dispatched_count);
-    println!("Total poll cycles: {}", outcome.poll_cycles);
+    );
 
     let release_at = chrono::Utc::now();
     let release_result =
         LeaderLeaseManager::release(&mut db, &lease_config.owner_label, release_at)
             .context("release leader lease after dispatch loop")?;
 
-    print_run_startup_report(&loaded, &release_result);
-    Ok(())
+    match dispatch_result {
+        Ok(outcome) => {
+            let _ = db.write_event_log(
+                grove_types::EventKind::CoordinatorStopped,
+                None,
+                None,
+                None,
+                &serde_json::json!({
+                    "exit_reason": outcome.exit_reason.to_string(),
+                    "stop_reason": outcome.stop_reason.as_str(),
+                    "forced_termination": outcome.stop_reason == grove_types::CoordinatorStopReason::Interrupted,
+                    "running_session_count": 0,
+                    "leader_released": release_result.is_some(),
+                }),
+                &chrono::Utc::now(),
+            );
+            println!("Dispatch loop exited: {}", outcome.exit_reason);
+            println!("Stop reason: {}", outcome.stop_reason);
+            println!("Total runs dispatched: {}", outcome.dispatched_count);
+            println!("Total poll cycles: {}", outcome.poll_cycles);
+            print_run_startup_report(&loaded, &release_result);
+            Ok(())
+        }
+        Err(error) => {
+            let _ = db.write_event_log(
+                grove_types::EventKind::CoordinatorStopped,
+                None,
+                None,
+                None,
+                &serde_json::json!({
+                    "exit_reason": "error",
+                    "stop_reason": grove_types::CoordinatorStopReason::InternalError.as_str(),
+                    "forced_termination": false,
+                    "running_session_count": 0,
+                    "leader_released": release_result.is_some(),
+                    "error": error.to_string(),
+                }),
+                &chrono::Utc::now(),
+            );
+            print_run_startup_report(&loaded, &release_result);
+            Err(error)
+        }
+    }
 }
 
 fn handle_log(bead_id: &BeadId) -> Result<()> {
@@ -525,6 +561,21 @@ fn print_status_view(
             }
         }
         None => println!("Leader: none"),
+    }
+    match &view.last_coordinator_stop {
+        Some(stop) => {
+            println!("Last coordinator stop: {} at {}", stop.reason, stop.created_at);
+            println!("Coordinator forced termination: {}", if stop.forced { "yes" } else { "no" });
+            println!(
+                "Coordinator leader released: {}",
+                display_option(stop.leader_released)
+            );
+            println!(
+                "Coordinator running sessions at stop: {}",
+                display_option(stop.running_session_count)
+            );
+        }
+        None => println!("Last coordinator stop: none"),
     }
 
     println!("\nBeads status counts:");

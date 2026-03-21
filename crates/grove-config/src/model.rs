@@ -42,6 +42,7 @@ impl Default for RuntimeConfig {
 pub struct SchedulerConfig {
     pub max_parallel: usize,
     pub poll_interval_ms: u64,
+    pub shutdown_grace_period_ms: u64,
     pub retry_max: u32,
     pub retry_backoff_secs: u64,
     pub critical_path_bonus: i32,
@@ -55,6 +56,7 @@ impl Default for SchedulerConfig {
         Self {
             max_parallel: 5,
             poll_interval_ms: 1000,
+            shutdown_grace_period_ms: 1000,
             retry_max: 3,
             retry_backoff_secs: 30,
             critical_path_bonus: 20,

@@ -6,11 +6,12 @@
 // 3. Crash Recovery (Reconciling interrupted runs)
 // 4. Mirror-pending Behavior
 
+use grove_db::Database;
 use grove_kernel::{
-    LeaderLeaseConfig, LeaderLeaseManager, ReservationManager, ShutdownSignal,
-    DispatchExitReason,
+    DispatchExitReason, LeaderLeaseConfig, LeaderLeaseManager, ReservationManager, ShutdownSignal,
 };
-use grove_types::{CoordinatorStopReason, BeadId};
+use grove_types::{CoordinatorStopReason, EventKind};
+use tempfile::tempdir;
 
 // NOTE: We rely on `grove_kernel` unit tests for extensive DB interactions,
 // but these acceptance suites map the behavioral promises of Phase 3.
@@ -48,7 +49,47 @@ fn empty_queue_maps_to_clean_stop_reason() {
 fn leader_contested_maps_to_uncle_fast_fail_reason() {
     let exit_reason = DispatchExitReason::LeaderContested;
     let stop_reason = exit_reason.to_stop_reason();
-    
+
     assert_eq!(stop_reason, CoordinatorStopReason::LeaderContested);
     assert!(!stop_reason.is_clean(), "Contested lease is not a clean expected exit.");
+}
+
+#[test]
+fn coordinator_shutdown_events_round_trip_in_db() {
+    let dir = tempdir().expect("tempdir");
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .expect("utf8 db path");
+    let mut db = Database::open(&db_path).expect("open db");
+    db.migrate().expect("migrate");
+
+    let now = chrono::Utc::now();
+    db.write_event_log(
+        EventKind::CoordinatorStopped,
+        None,
+        None,
+        None,
+        &serde_json::json!({
+            "stop_reason": CoordinatorStopReason::Interrupted.as_str(),
+            "forced_termination": true,
+            "running_session_count": 1,
+            "leader_released": true,
+        }),
+        &now,
+    )
+    .expect("write coordinator stop event");
+
+    let row: (String, String) = db
+        .connection()
+        .query_row(
+            "SELECT kind, payload_json FROM event_log ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read event row");
+
+    assert_eq!(row.0, "CoordinatorStopped");
+    let payload: serde_json::Value = serde_json::from_str(&row.1).expect("payload json");
+    assert_eq!(payload["stop_reason"], "interrupted");
+    assert_eq!(payload["forced_termination"], true);
+    assert_eq!(payload["leader_released"], true);
 }

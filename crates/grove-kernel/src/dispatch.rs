@@ -8,7 +8,9 @@ use grove_bv::BvClient;
 use grove_config::GroveConfig;
 use grove_db::Database;
 use camino::{Utf8Path, Utf8PathBuf};
-use grove_session::{ClaudeBackend, ContextMonitor, ExitPolicy, SingleTaskSessionRequest};
+use grove_session::{
+    ClaudeBackend, ContextMonitor, ExitPolicy, SessionShutdownConfig, SingleTaskSessionRequest,
+};
 use grove_types::{
     BeadId, CircuitState, CoordinatorStopReason, ExecutionContract, GroveBeadRecord,
     GroveBeadStatus, PromptId, ReservationMode, RunId, SessionId, Timestamp,
@@ -47,6 +49,11 @@ impl ShutdownSignal {
     #[must_use]
     pub fn is_triggered(&self) -> bool {
         self.flag.load(Ordering::SeqCst)
+    }
+
+    #[must_use]
+    pub fn shared_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.flag)
     }
 
     /// Register this signal with the ctrlc handler.
@@ -257,6 +264,7 @@ fn build_session_request(
         archive_bundle: None,
         playbook_rules: Vec::new(),
         env: Vec::new(),
+        shutdown: SessionShutdownConfig::default(),
     }
 }
 
@@ -559,6 +567,11 @@ pub fn run_dispatch_loop<B: ClaudeBackend, C: BrClient>(
             request = request.with_retry_context(failure_class, None);
         }
 
+        request.shutdown = SessionShutdownConfig {
+            signal: Some(loop_config.shutdown_signal.shared_flag()),
+            grace_period: Some(Duration::from_millis(config.scheduler.shutdown_grace_period_ms)),
+        };
+
         // Execute the session.
         eprintln!(
             "grove dispatch: dispatching {} (attempt {}) as run {}",
@@ -567,9 +580,39 @@ pub fn run_dispatch_loop<B: ClaudeBackend, C: BrClient>(
             run_id.as_str()
         );
 
+        if loop_config.shutdown_signal.is_triggered() {
+            let _ = db.write_event_log(
+                grove_types::EventKind::ShutdownRequested,
+                Some(&bead_id),
+                Some(&run_id),
+                Some(&session_id),
+                &serde_json::json!({
+                    "signal": "ctrlc",
+                    "grace_period_ms": config.scheduler.shutdown_grace_period_ms,
+                }),
+                &chrono::Utc::now(),
+            );
+        }
+
         match execute_persisted_single_task_session(db, backend, request, attempt_no) {
             Ok(outcome) => {
                 dispatched_count += 1;
+                if outcome.session.session.stop_reason == Some(grove_types::StopReason::Kill) {
+                    let _ = db.write_event_log(
+                        grove_types::EventKind::CoordinatorStopped,
+                        Some(&bead_id),
+                        Some(&run_id),
+                        Some(&session_id),
+                        &serde_json::json!({
+                            "exit_reason": "shutdown signal received",
+                            "stop_reason": grove_types::CoordinatorStopReason::Interrupted.as_str(),
+                            "forced_termination": true,
+                            "running_session_count": 1,
+                            "leader_released": false,
+                        }),
+                        &chrono::Utc::now(),
+                    );
+                }
                 eprintln!(
                     "grove dispatch: {} completed with status {:?}",
                     bead_id.as_str(),

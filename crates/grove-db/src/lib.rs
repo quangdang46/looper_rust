@@ -1279,6 +1279,18 @@ impl Database {
         Ok(recovered)
     }
 
+    pub fn write_event_log(
+        &mut self,
+        kind: EventKind,
+        bead_id: Option<&BeadId>,
+        run_id: Option<&RunId>,
+        session_id: Option<&SessionId>,
+        payload: &serde_json::Value,
+        created_at: &chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        self.with_tx(|tx| insert_event_log_tx(tx, kind, bead_id, run_id, session_id, payload, created_at))
+    }
+
     pub fn list_event_logs_for_bead(&self, bead_id: &BeadId) -> Result<Vec<EventLogRecord>> {
         let mut stmt = self
             .conn
@@ -1465,6 +1477,24 @@ impl Database {
 
         tx.commit().context("commit reset bead for retry transaction")?;
         Ok(())
+    }
+
+    pub fn latest_event_by_kind(&self, kind: EventKind) -> Result<Option<EventLogRecord>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at \
+                 FROM event_log \
+                 WHERE kind = ?1 \
+                 ORDER BY id DESC LIMIT 1",
+            )
+            .context("prepare latest event by kind query")?;
+
+        stmt.query_row([encode_event_kind(kind)], raw_event_log_row)
+            .optional()
+            .context("query latest event by kind")?
+            .map(raw_event_log_into_record)
+            .transpose()
     }
 
     pub fn list_events_for_run(&self, run_id: &RunId) -> Result<Vec<EventLogRecord>> {
@@ -2928,6 +2958,10 @@ fn encode_event_kind(kind: EventKind) -> &'static str {
         EventKind::LeaseAcquired => "LeaseAcquired",
         EventKind::LeaseHeartbeat => "LeaseHeartbeat",
         EventKind::LeaseReleased => "LeaseReleased",
+        EventKind::ShutdownRequested => "ShutdownRequested",
+        EventKind::SessionTerminationRequested => "SessionTerminationRequested",
+        EventKind::SessionTerminationForced => "SessionTerminationForced",
+        EventKind::CoordinatorStopped => "CoordinatorStopped",
         EventKind::ArchiveIngested => "ArchiveIngested",
         EventKind::PlaybookBulletAdded => "PlaybookBulletAdded",
         EventKind::PlaybookBulletPromoted => "PlaybookBulletPromoted",
@@ -2973,6 +3007,9 @@ fn session_failure_class(session: &ClaudeSessionRecord) -> Option<FailureClass> 
         SessionStatus::RateLimited => Some(FailureClass::RateLimit),
         SessionStatus::PermissionDenied => Some(FailureClass::PermissionDenied),
         SessionStatus::Crashed => Some(FailureClass::ClaudeCrashed),
+        SessionStatus::UnknownFailure if session.stop_reason == Some(StopReason::Kill) => {
+            Some(FailureClass::Interrupted)
+        }
         SessionStatus::UnknownFailure => Some(FailureClass::Unknown),
         SessionStatus::Starting
         | SessionStatus::Running
@@ -3307,6 +3344,10 @@ fn parse_event_kind(text: &str) -> Result<EventKind> {
         "leaseacquired" => Ok(EventKind::LeaseAcquired),
         "leaseheartbeat" => Ok(EventKind::LeaseHeartbeat),
         "leasereleased" => Ok(EventKind::LeaseReleased),
+        "shutdownrequested" => Ok(EventKind::ShutdownRequested),
+        "sessionterminationrequested" => Ok(EventKind::SessionTerminationRequested),
+        "sessionterminationforced" => Ok(EventKind::SessionTerminationForced),
+        "coordinatorstopped" => Ok(EventKind::CoordinatorStopped),
         "archiveingested" => Ok(EventKind::ArchiveIngested),
         "playbookbulletadded" => Ok(EventKind::PlaybookBulletAdded),
         "playbookbulletpromoted" => Ok(EventKind::PlaybookBulletPromoted),

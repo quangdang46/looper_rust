@@ -11,8 +11,33 @@ use grove_types::{
     ProtocolState, RunId, SessionId, SessionOutcome, SessionStatus, SessionTerminalClass,
     StopReason,
 };
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, RecvTimeoutError},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 use thiserror::Error;
+
+#[derive(Debug, Clone, Default)]
+pub struct SessionShutdownConfig {
+    pub signal: Option<Arc<AtomicBool>>,
+    pub grace_period: Option<Duration>,
+}
+
+impl SessionShutdownConfig {
+    #[must_use]
+    pub fn is_requested(&self) -> bool {
+        self.signal
+            .as_ref()
+            .is_some_and(|signal| signal.load(Ordering::SeqCst))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SingleTaskSessionRequest {
@@ -43,6 +68,7 @@ pub struct SingleTaskSessionRequest {
     pub archive_bundle: Option<grove_types::archive::RetrievalBundle>,
     pub playbook_rules: Vec<grove_types::playbook::PlaybookBulletRecord>,
     pub env: Vec<(String, String)>,
+    pub shutdown: SessionShutdownConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +80,14 @@ pub struct SingleTaskSessionResult {
 
 pub trait SessionLifecycleHooks {
     fn on_session_started(&mut self, _session: &ClaudeSessionRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_shutdown_requested(&mut self, _grace_period: Option<Duration>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn on_shutdown_forced(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
@@ -103,6 +137,8 @@ pub enum SingleTaskSessionRunnerError {
     ReadStderr(std::io::Error),
     #[error("failed to wait for Claude session: {0}")]
     Wait(std::io::Error),
+    #[error("failed to kill Claude session: {0}")]
+    Kill(std::io::Error),
     #[error("session lifecycle hook failed: {0}")]
     LifecycleHook(anyhow::Error),
 }
@@ -186,30 +222,92 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
             env: request.env.clone(),
         })?;
 
-        while let Some(line) = running.stdout.next() {
-            let line = line.map_err(SingleTaskSessionRunnerError::ReadStdout)?;
-            let ts = Utc::now();
-            transcript.append_stdout_line(line.clone(), ts)?;
-            match parser.parse_stdout_line(&line) {
-                ParserLineKind::Protocol(event) => transcript.append_protocol_event(event, ts)?,
-                ParserLineKind::PlainStdout(text) => stdout_lines.push(text),
-                ParserLineKind::PlainStderr(_) => {}
+        let (sender, receiver) = mpsc::channel();
+        let stdout_handle = spawn_stream_forwarder(running.stdout, sender.clone(), StreamSource::Stdout);
+        let stderr_handle = spawn_stream_forwarder(running.stderr, sender, StreamSource::Stderr);
+
+        let mut stdout_closed = false;
+        let mut stderr_closed = false;
+        let mut exit_status = None;
+        let mut forced_shutdown = false;
+        let mut kill_sent = false;
+        let mut grace_deadline = None;
+
+        while exit_status.is_none() || !stdout_closed || !stderr_closed {
+            match receiver.recv_timeout(Duration::from_millis(25)) {
+                Ok(StreamMessage::Line(StreamSource::Stdout, line)) => {
+                    let line = line.map_err(SingleTaskSessionRunnerError::ReadStdout)?;
+                    let ts = Utc::now();
+                    transcript.append_stdout_line(line.clone(), ts)?;
+                    match parser.parse_stdout_line(&line) {
+                        ParserLineKind::Protocol(event) => {
+                            transcript.append_protocol_event(event, ts)?;
+                        }
+                        ParserLineKind::PlainStdout(text) => stdout_lines.push(text),
+                        ParserLineKind::PlainStderr(_) => {}
+                    }
+                }
+                Ok(StreamMessage::Line(StreamSource::Stderr, line)) => {
+                    let line = line.map_err(SingleTaskSessionRunnerError::ReadStderr)?;
+                    let ts = Utc::now();
+                    transcript.append_stderr_line(line.clone(), ts)?;
+                    if let ParserLineKind::PlainStderr(text) = parser.parse_stderr_line(&line) {
+                        stderr_lines.push(text);
+                    }
+                }
+                Ok(StreamMessage::Closed(StreamSource::Stdout)) => stdout_closed = true,
+                Ok(StreamMessage::Closed(StreamSource::Stderr)) => stderr_closed = true,
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    stdout_closed = true;
+                    stderr_closed = true;
+                }
+            }
+
+            if exit_status.is_none() {
+                if request.shutdown.is_requested() && grace_deadline.is_none() {
+                    hooks
+                        .on_shutdown_requested(request.shutdown.grace_period)
+                        .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                    grace_deadline = Some(
+                        Instant::now() + request.shutdown.grace_period.unwrap_or(Duration::ZERO),
+                    );
+                }
+
+                if let Some(deadline) = grace_deadline {
+                    if !kill_sent && Instant::now() >= deadline {
+                        running
+                            .child
+                            .kill()
+                            .map_err(SingleTaskSessionRunnerError::Kill)?;
+                        hooks
+                            .on_shutdown_forced()
+                            .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                        kill_sent = true;
+                        forced_shutdown = true;
+                    }
+                }
+
+                if let Some(status) = running
+                    .child
+                    .try_wait()
+                    .map_err(SingleTaskSessionRunnerError::Wait)?
+                {
+                    exit_status = Some(status);
+                }
             }
         }
 
-        while let Some(line) = running.stderr.next() {
-            let line = line.map_err(SingleTaskSessionRunnerError::ReadStderr)?;
-            let ts = Utc::now();
-            transcript.append_stderr_line(line.clone(), ts)?;
-            if let ParserLineKind::PlainStderr(text) = parser.parse_stderr_line(&line) {
-                stderr_lines.push(text);
-            }
-        }
+        let _ = stdout_handle.join();
+        let _ = stderr_handle.join();
 
-        let status = running
-            .child
-            .wait()
-            .map_err(SingleTaskSessionRunnerError::Wait)?;
+        let status = match exit_status {
+            Some(status) => status,
+            None => running
+                .child
+                .wait()
+                .map_err(SingleTaskSessionRunnerError::Wait)?,
+        };
         let ended_at = Utc::now();
         transcript.append_session_ended(status.code(), ended_at)?;
 
@@ -232,6 +330,10 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
             false,
         );
 
+        if forced_shutdown {
+            terminal_class = SessionTerminalClass::UnknownFailure;
+        }
+
         // Run Verification before closing out Success.
         if terminal_class == SessionTerminalClass::Success {
             let mode = crate::verify::VerificationMode::infer(
@@ -253,7 +355,11 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
             run_id: request.run_id.clone(),
             external_session_id: None,
             ordinal_in_run: request.ordinal_in_run,
-            status: status_from_terminal_class(terminal_class),
+            status: if forced_shutdown {
+                SessionStatus::UnknownFailure
+            } else {
+                status_from_terminal_class(terminal_class)
+            },
             started_at,
             ended_at: Some(ended_at),
             prompt_id: Some(request.prompt_id.clone()),
@@ -262,7 +368,11 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
             estimated_input_tokens: materialized.estimated_input_tokens as i32,
             estimated_output_tokens: analysis.estimated_output_tokens as i32,
             exit_code: status.code(),
-            stop_reason: Some(stop_reason_from_terminal_class(terminal_class)),
+            stop_reason: Some(if forced_shutdown {
+                StopReason::Kill
+            } else {
+                stop_reason_from_terminal_class(terminal_class)
+            }),
             transcript_path: request.transcript_path.to_string(),
         };
 
@@ -305,6 +415,40 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
         .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
 
     Ok(result)
+}
+
+#[derive(Clone, Copy)]
+enum StreamSource {
+    Stdout,
+    Stderr,
+}
+
+enum StreamMessage {
+    Line(StreamSource, Result<String, std::io::Error>),
+    Closed(StreamSource),
+}
+
+fn spawn_stream_forwarder(
+    mut lines: impl Iterator<Item = Result<String, std::io::Error>> + Send + 'static,
+    sender: mpsc::Sender<StreamMessage>,
+    source: StreamSource,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in lines.by_ref() {
+            let message_source = match source {
+                StreamSource::Stdout => StreamSource::Stdout,
+                StreamSource::Stderr => StreamSource::Stderr,
+            };
+            if sender.send(StreamMessage::Line(message_source, line)).is_err() {
+                return;
+            }
+        }
+        let closed_source = match source {
+            StreamSource::Stdout => StreamSource::Stdout,
+            StreamSource::Stderr => StreamSource::Stderr,
+        };
+        let _ = sender.send(StreamMessage::Closed(closed_source));
+    })
 }
 
 fn resolve_under_working_dir(base: &Utf8Path, path: &Utf8Path) -> Utf8PathBuf {
@@ -398,7 +542,9 @@ fn terminal_class_from_error(error: &SingleTaskSessionRunnerError) -> SessionTer
         SingleTaskSessionRunnerError::ReadStdout(_)
         | SingleTaskSessionRunnerError::ReadStderr(_)
         | SingleTaskSessionRunnerError::Wait(_) => SessionTerminalClass::Crash,
-        SingleTaskSessionRunnerError::BackendStart(_) => SessionTerminalClass::UnknownFailure,
+        SingleTaskSessionRunnerError::BackendStart(_) | SingleTaskSessionRunnerError::Kill(_) => {
+            SessionTerminalClass::UnknownFailure
+        }
         SingleTaskSessionRunnerError::Transcript(_)
         | SingleTaskSessionRunnerError::PersistPromptManifest { .. }
         | SingleTaskSessionRunnerError::EncodePromptManifest { .. }
@@ -515,6 +661,7 @@ exit "${EXIT_CODE:-0}"
             archive_bundle: None,
             playbook_rules: vec![],
             env: Vec::new(),
+            shutdown: SessionShutdownConfig::default(),
         }
     }
 
