@@ -11,7 +11,7 @@ use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
 use grove_db::{Database, RecoveryCapsuleEvent};
 use grove_types::{
-    BeadId, CheckpointRecord, ClaudeSessionRecord, EventLogRecord, GroveBeadRecord,
+    BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, EventLogRecord, GroveBeadRecord,
     GroveBeadStatus, HandoffRecord, PlaybookBulletRecord, PromptManifest, RecoveryCapsule,
     RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord,
     Timestamp, DispatchDecisionRecord, PromptMaterializationRecord,
@@ -99,6 +99,21 @@ pub fn load_inspect_snapshot<C: BrClient>(
         }),
         None => None,
     };
+
+    let selected_playbook_bullets = latest_session
+        .as_ref()
+        .and_then(|session| session.prompt_provenance.as_ref())
+        .map(|prompt| {
+            prompt
+                .sections
+                .iter()
+                .filter(|section| section.kind == "playbook" && section.included)
+                .flat_map(|section| section.bullet_ids.iter())
+                .filter_map(|bullet_id| db.get_playbook_bullet(&BulletId::new(bullet_id.clone())).ok())
+                .flatten()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let latest_checkpoint = match (latest_run, db.latest_checkpoint_for_bead(bead_id)?) {
         (Some(run), Some(checkpoint))
             if run
@@ -154,7 +169,7 @@ pub fn load_inspect_snapshot<C: BrClient>(
         latest_handoff,
         mirror_actions,
         retrieval_bundle: None,
-        selected_playbook_bullets: Vec::new(),
+        selected_playbook_bullets,
         mirror_pending,
     }))
 }
@@ -1460,22 +1475,62 @@ mod tests {
                 retry_delta_summary: None,
                 retrieval_query: None,
                 retrieval_ranking_summary: Vec::new(),
-                sections: vec![grove_types::PromptManifestSection {
-                    ordinal: 1,
-                    kind: grove_types::PromptSegmentKind::Task,
-                    heading: "Task".to_owned(),
-                    included: true,
-                    estimated_tokens: 20,
-                    char_count: 80,
-                    trim_reason: None,
-                    provenance: grove_types::PromptSectionProvenance::default(),
-                    preview: "[TASK] fix inspect".to_owned(),
-                }],
+                sections: vec![
+                    grove_types::PromptManifestSection {
+                        ordinal: 1,
+                        kind: grove_types::PromptSegmentKind::Task,
+                        heading: "Task".to_owned(),
+                        included: true,
+                        estimated_tokens: 20,
+                        char_count: 80,
+                        trim_reason: None,
+                        provenance: grove_types::PromptSectionProvenance::default(),
+                        preview: "[TASK] fix inspect".to_owned(),
+                    },
+                    grove_types::PromptManifestSection {
+                        ordinal: 2,
+                        kind: grove_types::PromptSegmentKind::Playbook,
+                        heading: "Playbook workflow (Maturity: Established)".to_owned(),
+                        included: true,
+                        estimated_tokens: 12,
+                        char_count: 48,
+                        trim_reason: None,
+                        provenance: grove_types::PromptSectionProvenance {
+                            bullet_ids: vec![grove_types::BulletId::new("bullet-keep")],
+                            ..Default::default()
+                        },
+                        preview: "[WORKFLOW] prefer explicit markers".to_owned(),
+                    },
+                ],
             })?,
         )?;
         let db_path = workspace_root.join("grove.db");
         let mut db = Database::open(&db_path)?;
         db.migrate()?;
+        db.insert_playbook_bullet(&PlaybookBulletRecord {
+            id: grove_types::BulletId::new("bullet-keep"),
+            scope: grove_types::BulletScope::Workspace,
+            scope_key: None,
+            category: "workflow".to_owned(),
+            text: "Prefer explicit markers".to_owned(),
+            bullet_type: grove_types::BulletType::Rule,
+            state: grove_types::BulletState::Active,
+            maturity: grove_types::BulletMaturity::Established,
+            helpful_count: 4,
+            harmful_count: 0,
+            feedback_events: Vec::new(),
+            confidence_decay_half_life_days: 30,
+            pinned: false,
+            deprecated: false,
+            replaced_by: None,
+            deprecation_reason: None,
+            source_bead_ids: vec![BeadId::new("grove-child")],
+            source_run_ids: vec![RunId::new("run-child")],
+            tags: vec!["phase:6".to_owned()],
+            effective_score: Some(2.5),
+            created_at: parse_ts("2026-03-16T10:30:00Z")?,
+            updated_at: parse_ts("2026-03-16T10:45:00Z")?,
+        })?;
 
         db.connection().execute(
             "INSERT INTO bead_cache(\
@@ -1580,6 +1635,8 @@ mod tests {
                 .map(|prompt| prompt.sections[0].preview.as_str()),
             Some("[TASK] fix inspect")
         );
+        assert_eq!(snapshot.selected_playbook_bullets.len(), 1);
+        assert_eq!(snapshot.selected_playbook_bullets[0].id.as_str(), "bullet-keep");
         Ok(())
     }
 

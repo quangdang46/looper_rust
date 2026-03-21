@@ -7,9 +7,10 @@ use grove_types::{
     prompt::{PromptManifest, PromptManifestSection, PromptSegmentKind, PromptSectionProvenance},
 };
 use tempfile::TempDir;
-use grove_kernel::{diary, lesson_ingest, scoring};
+use grove_kernel::{diary, inspect_view, lesson_ingest, scoring};
 use grove_kernel::scoring::ScoringConfig;
 use std::fs;
+use grove_session::{PromptMaterializationInput, materialize_prompt};
 
 // 1. Outcome-derived feedback creates events
 #[test]
@@ -234,4 +235,96 @@ fn test_scoring_anti_pattern_inversion() {
     
     let text = &all_bullets[0].1;
     assert!(text.contains("AVOID: Always hardcode file paths"), "Should invert text string");
+}
+
+// 4. Explainable curation stays budget-aware
+#[test]
+fn test_phase6_curation_is_explainable_and_compact() {
+    let input = PromptMaterializationInput {
+        prompt_id: grove_types::PromptId::new("prompt-compact"),
+        bead_id: BeadId::new("grove-test"),
+        run_id: RunId::new("run-compact"),
+        created_at: Utc::now(),
+        contract: grove_types::ExecutionContract::SingleTask,
+        task_title: "Compact prompt".to_string(),
+        task_description: "Keep playbook injection bounded.".to_string(),
+        reservation_hints: vec![],
+        parent_handoffs: vec![],
+        checkpoint: None,
+        protocol_block: "[GROVE PROTOCOL]\nGROVE_EXIT: true".to_string(),
+        rescue_card: None,
+        token_budget: Some(35),
+        retry_delta_summary: None,
+        retrieval_query: None,
+        archive_bundle: None,
+        playbook_rules: vec![
+            PlaybookBulletRecord {
+                id: grove_types::BulletId::new("bullet-high"),
+                scope: BulletScope::Global,
+                scope_key: None,
+                category: "workflow".to_string(),
+                text: "High value guidance".to_string(),
+                bullet_type: BulletType::Rule,
+                state: BulletState::Active,
+                maturity: BulletMaturity::Established,
+                helpful_count: 10,
+                harmful_count: 0,
+                feedback_events: vec![],
+                confidence_decay_half_life_days: 30,
+                pinned: false,
+                deprecated: false,
+                replaced_by: None,
+                deprecation_reason: None,
+                source_bead_ids: vec![],
+                source_run_ids: vec![],
+                tags: vec![],
+                effective_score: Some(4.0),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+            PlaybookBulletRecord {
+                id: grove_types::BulletId::new("bullet-low"),
+                scope: BulletScope::Global,
+                scope_key: None,
+                category: "workflow".to_string(),
+                text: "Low value guidance that should be trimmed under pressure".to_string(),
+                bullet_type: BulletType::Rule,
+                state: BulletState::Active,
+                maturity: BulletMaturity::Candidate,
+                helpful_count: 1,
+                harmful_count: 0,
+                feedback_events: vec![],
+                confidence_decay_half_life_days: 30,
+                pinned: false,
+                deprecated: false,
+                replaced_by: None,
+                deprecation_reason: None,
+                source_bead_ids: vec![],
+                source_run_ids: vec![],
+                tags: vec![],
+                effective_score: Some(0.5),
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+            },
+        ],
+    };
+    let materialized = materialize_prompt(input);
+
+    let playbook_sections: Vec<_> = materialized
+        .manifest
+        .sections
+        .iter()
+        .filter(|section| section.kind == PromptSegmentKind::Playbook)
+        .collect();
+    assert_eq!(playbook_sections.len(), 2, "both playbook bullets should be represented in the manifest");
+
+    let trimmed_playbook = playbook_sections
+        .iter()
+        .filter(|section| section.trim_reason == Some(grove_types::PromptTrimReason::LowerPriorityPlaybookBullet))
+        .count();
+    assert!(trimmed_playbook >= 1, "low-priority playbook bullets should trim under pressure");
+    assert!(
+        playbook_sections.iter().all(|section| !section.provenance.bullet_ids.is_empty()),
+        "playbook sections should remain explainable via bullet provenance even when trimmed"
+    );
 }
