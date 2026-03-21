@@ -10,12 +10,12 @@
 // 4. Status/inspect correctness against authoritative br state
 // 5. BV augments information rather than replacing br as source of truth
 
-use grove_br::{BeadCacheStore, BrClient, BrDependencySnapshot, BrIssueSummary, sync_bead_cache};
-use grove_config::{GroveConfig, GrovePaths, validate_config};
-use grove_db::{Database, reservation_patterns_overlap};
+use grove_br::{sync_bead_cache, BeadCacheStore, BrClient, BrDependencySnapshot, BrIssueSummary};
+use grove_config::{validate_config, GroveConfig, GrovePaths};
+use grove_db::{reservation_patterns_overlap, Database};
 use grove_kernel::{
-    DispatchEligibilityContext, LocalSuppressionReason, dispatch_suppression_label,
-    evaluate_dispatch_eligibility, validate_dependency_snapshot,
+    dispatch_suppression_label, evaluate_dispatch_eligibility, validate_dependency_snapshot,
+    DispatchEligibilityContext, LocalSuppressionReason,
 };
 use grove_types::{
     BeadId, BeadPriority, BeadRef, CircuitState, GroveBeadRecord, GroveBeadStatus,
@@ -90,7 +90,7 @@ fn init_creates_database_with_migrations() -> TestResult {
     let applied_migrations = db.applied_migrations()?;
     assert_eq!(
         applied_migrations.len(),
-        9,
+        11,
         "should apply all current migrations"
     );
     assert_eq!(applied_migrations[0].version, 1);
@@ -114,6 +114,13 @@ fn init_creates_database_with_migrations() -> TestResult {
     assert_eq!(applied_migrations[7].name, "0008_archive_watermarks.sql");
     assert_eq!(applied_migrations[8].version, 9);
     assert_eq!(applied_migrations[8].name, "0009_playbook.sql");
+    assert_eq!(applied_migrations[9].version, 10);
+    assert_eq!(applied_migrations[9].name, "0010_activity_state.sql");
+    assert_eq!(applied_migrations[10].version, 11);
+    assert_eq!(
+        applied_migrations[10].name,
+        "0011_circuit_breaker_state.sql"
+    );
 
     // Verify tables exist by attempting to query them
     let conn = db.connection();
@@ -367,12 +374,10 @@ fn epic_issue_type_is_not_dispatchable() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. })));
 
     Ok(())
 }
@@ -386,12 +391,10 @@ fn tracking_issue_type_is_not_dispatchable() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::NonExecutableIssueType { .. })));
 
     Ok(())
 }
@@ -419,12 +422,10 @@ fn dispatch_no_label_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::SuppressedByLabel { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::SuppressedByLabel { .. })));
 
     Ok(())
 }
@@ -456,12 +457,10 @@ fn running_status_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::ActiveRun { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::ActiveRun { .. })));
 
     Ok(())
 }
@@ -475,12 +474,10 @@ fn checkpointed_status_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::CheckpointPendingResume { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::CheckpointPendingResume { .. })));
 
     Ok(())
 }
@@ -494,12 +491,10 @@ fn succeeded_status_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::AlreadySucceeded))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::AlreadySucceeded)));
 
     Ok(())
 }
@@ -513,12 +508,10 @@ fn failed_status_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::FailedAwaitingManualRetry))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::FailedAwaitingManualRetry)));
 
     Ok(())
 }
@@ -577,12 +570,10 @@ fn circuit_open_suppresses_all_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::CircuitOpen))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::CircuitOpen)));
 
     Ok(())
 }
@@ -604,12 +595,10 @@ fn reservation_conflict_suppresses_dispatch() -> TestResult {
 
     assert!(eligibility.ready_in_br);
     assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::ReservationConflict { .. }))
-    );
+    assert!(eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::ReservationConflict { .. })));
 
     Ok(())
 }
@@ -629,21 +618,17 @@ fn retry_backoff_only_suppresses_while_pending() -> TestResult {
 
     // Blocked bead should not be dispatchable
     assert!(!blocked_eligibility.dispatchable_in_grove);
-    assert!(
-        blocked_eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::RetryBackoffPending { .. }))
-    );
+    assert!(blocked_eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::RetryBackoffPending { .. })));
 
     // Expired retry bead should be dispatchable
     assert!(expired_eligibility.dispatchable_in_grove);
-    assert!(
-        !expired_eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::RetryBackoffPending { .. }))
-    );
+    assert!(!expired_eligibility
+        .local_suppression_reasons
+        .iter()
+        .any(|r| matches!(r, LocalSuppressionReason::RetryBackoffPending { .. })));
 
     Ok(())
 }
@@ -859,7 +844,9 @@ fn status_json_emits_machine_readable_operator_surface() -> TestResult {
     );
     let stdout = String::from_utf8(output.stdout)?;
     let payload: serde_json::Value = serde_json::from_str(&stdout)?;
-    let workspace_root = payload["workspace_root"].as_str().expect("workspace_root string");
+    let workspace_root = payload["workspace_root"]
+        .as_str()
+        .expect("workspace_root string");
     assert!(workspace_root.starts_with(harness.workspace_root.as_str()));
     assert!(payload["db_path"].as_str().is_some());
     assert!(payload["triage_error"].is_null());
