@@ -1,4 +1,5 @@
 mod defaults;
+mod init_template;
 mod loader;
 mod model;
 mod paths;
@@ -9,6 +10,7 @@ pub use defaults::{
     DEFAULT_GROVE_DIR_NAME, DEFAULT_LOGS_DIR_NAME, DEFAULT_PROMPTS_DIR_NAME, DEFAULT_TMP_DIR_NAME,
     DEFAULT_TRANSCRIPT_DIR,
 };
+pub use init_template::DEFAULT_INIT_GROVE_TOML;
 pub use loader::{
     LoadedConfig, RequiredTooling, ToolCapability, apply_env_overrides, build_claude_environment,
     detect_required_tooling, load_from_path, load_from_path_with_env, load_from_workspace,
@@ -53,6 +55,14 @@ mod tests {
     use tempfile::tempdir;
 
     type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn default_init_grove_toml_parses_to_default_config() -> TestResult {
+        let parsed: GroveConfig =
+            toml::from_str(DEFAULT_INIT_GROVE_TOML).map_err(|e| IoError::other(e.to_string()))?;
+        assert_eq!(parsed, GroveConfig::default());
+        Ok(())
+    }
 
     #[test]
     fn defaults_are_valid() -> TestResult {

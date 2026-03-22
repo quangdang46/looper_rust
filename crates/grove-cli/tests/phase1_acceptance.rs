@@ -13,7 +13,7 @@
 // 5. BV augments information rather than replacing br as source of truth
 
 use grove_br::{BeadCacheStore, BrClient, BrDependencySnapshot, BrIssueSummary, sync_bead_cache};
-use grove_config::{GroveConfig, GrovePaths, validate_config};
+use grove_config::{DEFAULT_INIT_GROVE_TOML, GroveConfig, GrovePaths, validate_config};
 use grove_db::{Database, reservation_patterns_overlap};
 use grove_kernel::{
     DispatchEligibilityContext, LocalSuppressionReason, dispatch_suppression_label,
@@ -1374,10 +1374,7 @@ impl CliHarness {
         let bin_dir = workspace_root.join("test-bin");
         fs::create_dir_all(&bin_dir)?;
 
-        fs::write(
-            workspace_root.join("grove.toml"),
-            toml::to_string_pretty(&GroveConfig::default())?,
-        )?;
+        fs::write(workspace_root.join("grove.toml"), DEFAULT_INIT_GROVE_TOML)?;
 
         write_executable(&bin_dir.join("claude"), CLAUDE_STUB)?;
         write_executable(&bin_dir.join("br"), BR_STUB)?;

@@ -4,7 +4,7 @@ use clap::{ArgAction, Parser, Subcommand};
 use grove_br::{BrClient, BrIssueDetail, CliBrClient, sync_bead_cache};
 use grove_bv::{BvClient, BvTriageOutput, CliBvClient};
 use grove_config::{
-    GroveConfig, GrovePaths, LoadedConfig, RequiredTooling, ToolCapability,
+    DEFAULT_INIT_GROVE_TOML, GrovePaths, LoadedConfig, RequiredTooling, ToolCapability,
     detect_required_tooling, load_from_workspace,
 };
 use grove_db::Database;
@@ -731,8 +731,7 @@ fn current_workspace_root() -> Result<Utf8PathBuf> {
 }
 
 fn write_default_config(path: &Utf8PathBuf) -> Result<()> {
-    let text =
-        toml::to_string_pretty(&GroveConfig::default()).context("serialize default config")?;
+    let text = DEFAULT_INIT_GROVE_TOML.trim_end();
     fs::write(path, format!("{text}\n"))
         .with_context(|| format!("write default config to {path}"))?;
     Ok(())
