@@ -348,6 +348,44 @@ fn one_task_success_path_persists_prompt_and_transcript_artifacts() -> TestResul
 }
 
 #[test]
+fn explicit_exit_with_protocol_evidence_succeeds_without_phrase_threshold() -> TestResult {
+    let dir = tempdir()?;
+    let workspace_dir = dir.path().join("workspace");
+    fs::create_dir_all(&workspace_dir)?;
+    let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+        .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+
+    let script_path = dir.path().join("fake-claude");
+    write_fake_claude_script(&script_path)?;
+    let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+    let mut request = sample_request(workspace_dir);
+    request.env = vec![
+        (
+            "STDOUT_SCRIPT".to_owned(),
+            concat!(
+                "still finishing verification\n",
+                "GROVE_RESULT: completed with protocol evidence\n",
+                "GROVE_ARTIFACTS: [\"src/lib.rs\"]\n",
+                "GROVE_DECISIONS: kept implementation minimal\n",
+                "GROVE_EXIT: true\n"
+            )
+            .to_owned(),
+        ),
+        ("STDERR_SCRIPT".to_owned(), String::new()),
+        ("EXIT_CODE".to_owned(), "0".to_owned()),
+    ];
+
+    let result = execute_single_task_session(&backend, request)?;
+
+    assert_eq!(result.outcome.terminal_class, SessionTerminalClass::Success);
+    assert_eq!(result.outcome.session.status, SessionStatus::Completed);
+    assert!(result.outcome.analysis.has_explicit_exit_true);
+    assert_eq!(result.outcome.analysis.completion_indicators, 0);
+    Ok(())
+}
+
+#[test]
 fn success_requires_explicit_exit_and_indicator_threshold() -> TestResult {
     let dir = tempdir()?;
     let workspace_dir = dir.path().join("workspace");

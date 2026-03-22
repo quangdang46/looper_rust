@@ -29,15 +29,16 @@ impl ExitPolicy {
             return ExitDecision::Continue;
         }
 
-        if self.require_explicit_exit {
-            if analysis.has_explicit_exit_true
-                && analysis.completion_indicators >= self.completion_indicator_threshold
-            {
-                ExitDecision::Success
-            } else {
-                ExitDecision::Continue
-            }
-        } else if analysis.completion_indicators >= self.completion_indicator_threshold {
+        if analysis.has_explicit_exit_true
+            && (analysis.completion_indicators >= self.completion_indicator_threshold
+                || !analysis.artifacts_mentioned.is_empty()
+                || !analysis.lessons.is_empty()
+                || !analysis.decisions.is_empty())
+        {
+            return ExitDecision::Success;
+        }
+
+        if !self.require_explicit_exit && analysis.completion_indicators >= self.completion_indicator_threshold {
             ExitDecision::Success
         } else {
             ExitDecision::Continue
@@ -90,6 +91,34 @@ mod tests {
         assert_eq!(
             ExitPolicy::default().evaluate(&analysis),
             ExitDecision::Continue
+        );
+    }
+
+    #[test]
+    fn explicit_exit_true_with_artifacts_succeeds() {
+        let analysis = IterationAnalysis {
+            has_explicit_exit_true: true,
+            artifacts_mentioned: vec!["src/lib.rs".to_owned()],
+            ..IterationAnalysis::default()
+        };
+
+        assert_eq!(
+            ExitPolicy::default().evaluate(&analysis),
+            ExitDecision::Success
+        );
+    }
+
+    #[test]
+    fn explicit_exit_true_with_decisions_succeeds() {
+        let analysis = IterationAnalysis {
+            has_explicit_exit_true: true,
+            decisions: vec!["kept implementation minimal".to_owned()],
+            ..IterationAnalysis::default()
+        };
+
+        assert_eq!(
+            ExitPolicy::default().evaluate(&analysis),
+            ExitDecision::Success
         );
     }
 
