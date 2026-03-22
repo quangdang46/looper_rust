@@ -20,7 +20,9 @@ mod archive;
 mod ops;
 mod playbook;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Transaction, params};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
+};
 use serde::Serialize;
 use serde_json::Value;
 
@@ -168,7 +170,7 @@ const PRAGMAS: &[&str] = &[
     "PRAGMA foreign_keys = ON;",
     "PRAGMA synchronous = NORMAL;",
     "PRAGMA temp_store = MEMORY;",
-    "PRAGMA busy_timeout = 60000;", // 30 seconds to handle concurrent worker writes
+    "PRAGMA busy_timeout = 60000;", // 60 seconds to handle concurrent worker writes
 ];
 
 const MIGRATION_MANIFEST: &[Migration<'_>] = &[
@@ -412,7 +414,7 @@ impl Database {
     }
 
     pub fn with_tx<T>(&mut self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let tx = self.conn.transaction().context("begin transaction")?;
+        let tx = begin_immediate_tx(&mut self.conn, "begin transaction")?;
         let value = f(&tx)?;
         tx.commit().context("commit transaction")?;
         Ok(value)
@@ -565,7 +567,7 @@ impl Database {
     pub fn record_run_started(&mut self, input: RunStartInput) -> Result<TaskRunRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin run start transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         tx.execute(
@@ -627,7 +629,7 @@ impl Database {
     ) -> Result<ClaudeSessionRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin session start transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &session.run_id)?;
@@ -695,7 +697,7 @@ impl Database {
     ) -> Result<ClaudeSessionRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin session finish transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &session.run_id)?;
@@ -781,7 +783,7 @@ impl Database {
     ) -> Result<CheckpointRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin checkpoint save transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
@@ -853,7 +855,7 @@ impl Database {
     ) -> Result<TaskRunRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin run finish transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
@@ -989,7 +991,7 @@ impl Database {
     pub fn write_handoff(&mut self, input: HandoffWriteInput) -> Result<HandoffRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin handoff write transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
@@ -1094,7 +1096,7 @@ impl Database {
     ) -> Result<Option<LeaderLeaseRecord>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin leader lease acquire transaction")?;
         if let Some(run_id) = input.run_id.as_ref() {
             ensure_run_exists(&tx, run_id)?;
@@ -1153,7 +1155,7 @@ impl Database {
     ) -> Result<Option<LeaderLeaseRecord>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin leader lease heartbeat transaction")?;
         let updated = tx
             .execute(
@@ -1201,7 +1203,7 @@ impl Database {
     ) -> Result<Option<LeaderLeaseRecord>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin leader lease release transaction")?;
         let lease = active_leader_lease_tx(&tx, released_at)?;
         let Some(lease) = lease else {
@@ -1245,7 +1247,7 @@ impl Database {
     ) -> Result<Vec<InterruptedRunRecovery>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin interrupted run reconciliation transaction")?;
         let active_runs = list_runs_by_status_tx(&tx, RunStatus::Active)?;
         let mut recovered = Vec::new();
@@ -1441,7 +1443,7 @@ impl Database {
     ) -> Result<RecoveryCapsuleEvent> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin recovery capsule write transaction")?;
         ensure_bead_exists(&tx, &input.bead_id)?;
         ensure_run_exists(&tx, &input.run_id)?;
@@ -1574,7 +1576,7 @@ impl Database {
     ) -> Result<()> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin reset bead for retry transaction")?;
 
         tx.execute(
@@ -1819,7 +1821,7 @@ impl Database {
     ) -> Result<ReservationAcquireOutcome> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin reservation acquire transaction")?;
         ensure_bead_exists(&tx, bead_id)?;
         if let Some(run_id) = run_id {
@@ -1948,7 +1950,7 @@ impl Database {
     ) -> Result<Vec<ReservationRecord>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin reservation expiry transaction")?;
         let expired = list_expired_unreleased_reservations_tx(&tx, now)?;
         for record in &expired {
@@ -1983,7 +1985,7 @@ impl Database {
     ) -> Result<Vec<RecoveredReservation>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin reservation recovery transaction")?;
         let active = list_active_reservations_tx(&tx, now)?;
         let stale = active
@@ -2046,7 +2048,7 @@ impl Database {
     ) -> Result<Vec<ReservationRecord>> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin reservation release transaction")?;
         let matching = list_releasable_reservations_tx(&tx, bead_id, run_id, path_patterns)?;
         for record in &matching {
@@ -2083,7 +2085,7 @@ impl Database {
     ) -> Result<MirrorOutboxRecord> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin enqueue mirror outbox transaction")?;
         let id = format!("mirror-{}-{}", bead_id.as_str(), run_id.as_str());
         let now = now_timestamp_string();
@@ -2202,7 +2204,7 @@ impl Database {
     pub fn record_mirror_success(&mut self, id: &str, run_id: &RunId) -> Result<()> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin record mirror success transaction")?;
         let now = now_timestamp_string();
         let bead_id: Option<String> = tx
@@ -2252,7 +2254,7 @@ impl Database {
     ) -> Result<()> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .context("begin record mirror failure transaction")?;
         let now = now_timestamp_string();
         let retry_after_str = retry_after.map(timestamp_string);
@@ -2377,7 +2379,7 @@ impl Database {
     fn apply_migration(&mut self, migration: Migration<'_>) -> Result<()> {
         let tx = self
             .conn
-            .transaction()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .with_context(|| format!("begin migration {} transaction", migration.name))?;
         tx.execute_batch(migration.sql)
             .with_context(|| format!("execute migration {}", migration.name))?;
@@ -2577,6 +2579,14 @@ fn apply_pragmas(conn: &Connection) -> Result<()> {
             .with_context(|| format!("apply SQLite pragma {pragma}"))?;
     }
     Ok(())
+}
+
+fn begin_immediate_tx<'conn>(
+    conn: &'conn mut Connection,
+    context: &'static str,
+) -> Result<Transaction<'conn>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
+        .context(context)
 }
 
 fn ensure_migration_table(conn: &Connection) -> Result<()> {

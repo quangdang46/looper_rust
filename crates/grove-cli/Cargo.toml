@@ -17,6 +17,7 @@ anyhow.workspace = true
 camino.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 clap.workspace = true
+crossterm = "0.29"
 grove-br = { path = "../grove-br" }
 grove-bv = { path = "../grove-bv" }
 grove-config = { path = "../grove-config" }
@@ -24,6 +25,7 @@ grove-db = { path = "../grove-db" }
 grove-kernel = { path = "../grove-kernel" }
 grove-session = { path = "../grove-session" }
 grove-types = { path = "../grove-types" }
+ratatui = "0.29"
 serde_json.workspace = true
 
 [dev-dependencies]

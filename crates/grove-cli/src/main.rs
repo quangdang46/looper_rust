@@ -1,6 +1,11 @@
 use anyhow::{Context, Result, anyhow, bail};
 use camino::Utf8PathBuf;
 use clap::{ArgAction, Parser, Subcommand};
+use crossterm::{
+    event::{self, Event as CEvent, KeyCode},
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
 use grove_br::{BrClient, BrIssueDetail, CliBrClient, sync_bead_cache};
 use grove_bv::{BvClient, BvTriageOutput, CliBvClient};
 use grove_config::{
@@ -9,13 +14,25 @@ use grove_config::{
 };
 use grove_db::Database;
 use grove_kernel::{
-    BeadInspectView, DispatchLoopConfig, LeaderLeaseConfig, LeaderLeaseManager, ShutdownSignal,
-    StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
+    BeadInspectView, DispatchLoopConfig, DispatchLoopOutcome, LeaderLeaseConfig, LeaderLeaseManager,
+    ShutdownSignal, StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
     load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop,
 };
-use grove_types::{BeadId, BeadPriority, GroveBeadStatus, LeaderLeaseRecord, RunReport};
+use grove_session::replay_transcript;
+use grove_types::{
+    BeadId, BeadPriority, GroveBeadRecord, GroveBeadStatus, LeaderLeaseRecord, ProtocolEvent,
+    RunReport, TranscriptEvent,
+};
+use ratatui::{
+    Frame, Terminal,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap},
+};
 use serde_json::json;
-use std::{cmp, env, fs};
+use std::{cmp, env, fs, io, io::IsTerminal, sync::mpsc, thread, time::Duration};
 
 #[derive(Parser)]
 #[command(name = "grove")]
@@ -34,7 +51,10 @@ enum Command {
     Inspect { bead_id: String },
     Log { bead_id: String },
     Retry { bead_id: String },
-    Run,
+    Run {
+        #[arg(long, action = ArgAction::SetTrue)]
+        live: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -46,7 +66,7 @@ fn main() -> Result<()> {
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
         Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id), cli.json),
         Some(Command::Retry { bead_id }) => handle_retry(&BeadId::new(bead_id), cli.json),
-        Some(Command::Run) => run_json_command("run", cli.json, || handle_run(cli.json)),
+        Some(Command::Run { live }) => run_json_command("run", cli.json, || handle_run(cli.json, live)),
         None => {
             if cli.json {
                 println!(
@@ -329,7 +349,11 @@ fn handle_inspect(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_run(json_mode: bool) -> Result<()> {
+fn handle_run(json_mode: bool, live: bool) -> Result<()> {
+    if json_mode && live {
+        bail!("`grove run --live` does not support --json");
+    }
+
     let (loaded, mut db, br) = open_runtime()?;
     let owner_label = format!("{}:{}", loaded.paths.workspace_root(), std::process::id());
     // Use 5x poll interval for lease TTL to give main thread enough time
@@ -346,7 +370,7 @@ fn handle_run(json_mode: bool) -> Result<()> {
         .map_err(|error| anyhow!(error.to_string()))?;
 
     run_startup_checks(&mut db, &lease_config, startup)?;
-    if !json_mode {
+    if !json_mode && !live {
         println!("Startup recovery checks complete. Beginning dispatch loop.");
     }
 
@@ -365,14 +389,18 @@ fn handle_run(json_mode: bool) -> Result<()> {
         db_path: loaded.paths.db_path().to_owned(),
     };
 
-    let dispatch_result = run_dispatch_loop(
-        &mut db,
-        &backend,
-        &br,
-        &loaded.config,
-        &lease_config,
-        &loop_config,
-    );
+    let dispatch_result = if live {
+        run_dispatch_loop_with_live_ui(&loaded, &br, &lease_config, &loop_config)?
+    } else {
+        run_dispatch_loop(
+            &mut db,
+            &backend,
+            &br,
+            &loaded.config,
+            &lease_config,
+            &loop_config,
+        )
+    };
 
     let release_at = chrono::Utc::now();
     let release_result =
@@ -690,6 +718,404 @@ fn run_startup_checks(
         .ok_or_else(|| anyhow!("leader lease heartbeat failed after acquisition"))?;
     print_startup_recovery_report(&startup.leader, &startup.recovery);
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveTab {
+    Status,
+    Live,
+}
+
+#[derive(Debug, Clone)]
+struct LiveSessionSummary {
+    bead_id: BeadId,
+    title: String,
+    run_id: Option<String>,
+    session_id: Option<String>,
+    transcript_path: Option<String>,
+    started_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct LiveAuditState {
+    workspace_root: String,
+    leader: Option<String>,
+    running: Vec<LiveSessionSummary>,
+    selected: usize,
+    tab: LiveTab,
+    status_list_lines: Vec<String>,
+    event_lines: Vec<String>,
+    transcript_lines: Vec<String>,
+}
+
+impl LiveAuditState {
+    fn new(workspace_root: String) -> Self {
+        Self {
+            workspace_root,
+            leader: None,
+            running: Vec::new(),
+            selected: 0,
+            tab: LiveTab::Status,
+            status_list_lines: vec!["Waiting for activity...".to_owned()],
+            event_lines: vec!["Waiting for activity...".to_owned()],
+            transcript_lines: vec!["Waiting for session output...".to_owned()],
+        }
+    }
+
+    fn refresh(&mut self, loaded: &LoadedConfig, _br: &CliBrClient) -> Result<()> {
+        let db = Database::open(loaded.paths.db_path())
+            .with_context(|| format!("open database at {}", loaded.paths.db_path()))?;
+        let bead_records = db.list_bead_records()?;
+
+        self.leader = db
+            .active_leader_lease(&chrono::Utc::now())?
+            .map(|leader| leader.owner_label);
+
+        let ready_count = bead_records
+            .iter()
+            .filter(|bead| bead.grove_status == GroveBeadStatus::Ready)
+            .count();
+        let checkpointed_count = bead_records
+            .iter()
+            .filter(|bead| bead.grove_status == GroveBeadStatus::Checkpointed)
+            .count();
+        let failed = bead_records
+            .iter()
+            .filter(|bead| matches!(bead.grove_status, GroveBeadStatus::Failed | GroveBeadStatus::WaitingToRetry))
+            .collect::<Vec<_>>();
+
+        self.running = bead_records
+            .iter()
+            .filter(|bead| bead.grove_status == GroveBeadStatus::Running)
+            .map(|bead| {
+                let latest_session = bead
+                    .last_run_id
+                    .as_ref()
+                    .and_then(|run_id| db.latest_session_for_run(run_id).ok().flatten());
+                LiveSessionSummary {
+                    bead_id: bead.bead.id.clone(),
+                    title: bead.bead.title.clone(),
+                    run_id: bead.last_run_id.as_ref().map(ToString::to_string),
+                    session_id: latest_session.as_ref().map(|session| session.id.to_string()),
+                    transcript_path: latest_session.as_ref().map(|session| session.transcript_path.clone()),
+                    started_at: latest_session.as_ref().map(|session| session.started_at.to_rfc3339()),
+                }
+            })
+            .collect();
+
+        self.status_list_lines = minimal_status_list_lines(&bead_records, &failed);
+        self.event_lines = vec![
+            format!("Running: {}", self.running.len()),
+            format!("Ready: {ready_count}"),
+            format!("Checkpointed: {checkpointed_count}"),
+            format!("Failed: {}", failed.len()),
+        ];
+
+        if self.running.is_empty() {
+            self.selected = 0;
+            self.transcript_lines = vec![
+                "No running sessions.".to_owned(),
+                "Use Status to review ready and failed beads.".to_owned(),
+            ];
+            return Ok(());
+        }
+
+        if self.selected >= self.running.len() {
+            self.selected = 0;
+        }
+
+        let selected = &self.running[self.selected];
+        self.transcript_lines = selected
+            .transcript_path
+            .as_deref()
+            .map(read_live_transcript_tail)
+            .transpose()?
+            .unwrap_or_else(|| vec!["Transcript not available yet.".to_owned()]);
+        Ok(())
+    }
+}
+
+fn minimal_status_list_lines(beads: &[GroveBeadRecord], failed: &[&GroveBeadRecord]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    let running = beads
+        .iter()
+        .filter(|bead| bead.grove_status == GroveBeadStatus::Running)
+        .collect::<Vec<_>>();
+    let ready = beads
+        .iter()
+        .filter(|bead| bead.grove_status == GroveBeadStatus::Ready)
+        .collect::<Vec<_>>();
+
+    if !running.is_empty() {
+        lines.push("Running".to_owned());
+        for bead in running.iter().take(8) {
+            lines.push(format!(
+                "{} [{}] {}",
+                bead.bead.id,
+                format_priority(bead.bead.priority),
+                bead.bead.title
+            ));
+        }
+    }
+
+    if !ready.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Ready".to_owned());
+        for bead in ready.iter().take(8) {
+            lines.push(format!(
+                "{} [{}] {}",
+                bead.bead.id,
+                format_priority(bead.bead.priority),
+                bead.bead.title
+            ));
+        }
+    }
+
+    if !failed.is_empty() {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push("Failed".to_owned());
+        for bead in failed.iter().take(8) {
+            lines.push(format!(
+                "{} [{}] {}",
+                bead.bead.id,
+                format_priority(bead.bead.priority),
+                bead.bead.title
+            ));
+        }
+    }
+
+    if lines.is_empty() {
+        lines.push("No running, ready, or failed beads.".to_owned());
+    }
+
+    lines
+}
+
+fn read_live_transcript_tail(path: &str) -> Result<Vec<String>> {
+    let transcript_path = std::path::Path::new(path);
+    if !transcript_path.exists() {
+        return Ok(vec!["Transcript not available yet.".to_owned()]);
+    }
+
+    let replay = replay_transcript(path)?;
+    let mut lines = replay
+        .events
+        .into_iter()
+        .filter_map(|event| match event {
+            TranscriptEvent::StdoutLine { line, .. } => Some(format!("OUT  {line}")),
+            TranscriptEvent::StderrLine { line, .. } => Some(format!("ERR  {line}")),
+            TranscriptEvent::ParsedProtocol { event, .. } => Some(format!(
+                "PROTO {}",
+                match event {
+                    ProtocolEvent::Result { summary } => format!("result: {summary}"),
+                    ProtocolEvent::Artifacts { items } => format!("artifacts: {}", items.join(", ")),
+                    ProtocolEvent::Lessons { items } => format!("lessons: {}", items.join(", ")),
+                    ProtocolEvent::Decisions { items } => format!("decisions: {}", items.join(", ")),
+                    ProtocolEvent::Warnings { items } => format!("warnings: {}", items.join(", ")),
+                    ProtocolEvent::Exit { value } => format!("exit: {value}"),
+                    ProtocolEvent::Checkpoint { payload } => format!("checkpoint: {} -> {}", payload.progress, payload.next_step),
+                }
+            )),
+            TranscriptEvent::SessionStarted { session_id, .. } => {
+                Some(format!("SESSION started {}", session_id.as_str()))
+            }
+            TranscriptEvent::SessionEnded { exit_code, .. } => {
+                Some(format!("SESSION ended {:?}", exit_code))
+            }
+        })
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        lines.push("Transcript is empty.".to_owned());
+    }
+    let start = lines.len().saturating_sub(40);
+    Ok(lines[start..].to_vec())
+}
+
+fn run_dispatch_loop_with_live_ui(
+    loaded: &LoadedConfig,
+    br: &CliBrClient,
+    lease_config: &LeaderLeaseConfig,
+    loop_config: &DispatchLoopConfig,
+) -> Result<Result<DispatchLoopOutcome>> {
+    let backend = grove_session::CliClaudeBackend::new(loaded.config.runtime.claude_bin.clone());
+    let mut worker_db = Database::open(loaded.paths.db_path())
+        .with_context(|| format!("open database at {}", loaded.paths.db_path()))?;
+    let br_for_thread = br.clone();
+    let config = loaded.config.clone();
+    let lease_config = lease_config.clone();
+    let loop_config = loop_config.clone();
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        let result = run_dispatch_loop(
+            &mut worker_db,
+            &backend,
+            &br_for_thread,
+            &config,
+            &lease_config,
+            &loop_config,
+        );
+        let _ = tx.send(result);
+    });
+
+    if !io::stdout().is_terminal() {
+        return rx.recv().context("receive dispatch result from worker thread");
+    }
+
+    let mut live_hidden = false;
+    let mut terminal = enter_live_terminal()?;
+    let mut state = LiveAuditState::new(loaded.paths.workspace_root().to_string());
+
+    loop {
+        if let Ok(result) = rx.try_recv() {
+            if !live_hidden {
+                leave_live_terminal(&mut terminal)?;
+            }
+            return Ok(result);
+        }
+
+        if !live_hidden {
+            state.refresh(loaded, br)?;
+            terminal.draw(|frame| draw_live_audit(frame, &state))?;
+            if event::poll(Duration::from_millis(150))?
+                && let CEvent::Key(key) = event::read()?
+            {
+                match key.code {
+                    KeyCode::Char('q') => {
+                        leave_live_terminal(&mut terminal)?;
+                        live_hidden = true;
+                    }
+                    KeyCode::Tab => {
+                        state.tab = match state.tab {
+                            LiveTab::Status => LiveTab::Live,
+                            LiveTab::Live => LiveTab::Status,
+                        };
+                    }
+                    KeyCode::Right => state.tab = LiveTab::Live,
+                    KeyCode::Left => state.tab = LiveTab::Status,
+                    KeyCode::Down => {
+                        if !state.running.is_empty() {
+                            state.selected = (state.selected + 1).min(state.running.len() - 1);
+                        }
+                    }
+                    KeyCode::Up => {
+                        if state.selected > 0 {
+                            state.selected -= 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        } else {
+            thread::sleep(Duration::from_millis(150));
+        }
+    }
+}
+
+fn enter_live_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    enable_raw_mode().context("enable raw mode for live audit")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
+    let backend = CrosstermBackend::new(stdout);
+    Terminal::new(backend).context("create live audit terminal")
+}
+
+fn leave_live_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    disable_raw_mode().context("disable raw mode for live audit")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leave alternate screen")?;
+    terminal.show_cursor().context("restore terminal cursor")
+}
+
+fn draw_live_audit(frame: &mut Frame<'_>, state: &LiveAuditState) {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(8),
+        ])
+        .split(frame.area());
+
+    let leader = state.leader.as_deref().unwrap_or("none");
+    let header = Paragraph::new(vec![Line::from(vec![
+        Span::styled("grove --live", Style::default().add_modifier(Modifier::BOLD)),
+        Span::raw(format!("  workspace={}  leader={leader}", state.workspace_root)),
+    ])])
+    .block(Block::default().borders(Borders::ALL).title("Live Audit"));
+    frame.render_widget(header, layout[0]);
+
+    let tabs = Tabs::new(vec!["Status", "Live Session"])
+        .select(match state.tab {
+            LiveTab::Status => 0,
+            LiveTab::Live => 1,
+        })
+        .block(Block::default().borders(Borders::ALL).title("Tabs"));
+    frame.render_widget(tabs, layout[1]);
+
+    match state.tab {
+        LiveTab::Status => draw_status_tab(frame, layout[2], state),
+        LiveTab::Live => draw_live_tab(frame, layout[2], state),
+    }
+}
+
+fn draw_status_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(area);
+
+    let items = state
+        .status_list_lines
+        .iter()
+        .map(|line| ListItem::new(line.clone()))
+        .collect::<Vec<_>>();
+    let running = List::new(items).block(Block::default().borders(Borders::ALL).title("Beads"));
+    frame.render_widget(running, chunks[0]);
+
+    let summary = Paragraph::new(state.event_lines.join("\n"))
+        .block(Block::default().borders(Borders::ALL).title("Status"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(summary, chunks[1]);
+}
+
+fn draw_live_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(7), Constraint::Min(8)])
+        .split(area);
+
+    let details = state
+        .running
+        .get(state.selected)
+        .map(|session| {
+            vec![
+                Line::from(format!("bead: {}", session.bead_id)),
+                Line::from(format!("title: {}", session.title)),
+                Line::from(format!("run: {}", session.run_id.as_deref().unwrap_or("-"))),
+                Line::from(format!("session: {}", session.session_id.as_deref().unwrap_or("-"))),
+                Line::from(format!("started: {}", session.started_at.as_deref().unwrap_or("-"))),
+            ]
+        })
+        .unwrap_or_else(|| {
+            vec![
+                Line::from("No running session selected."),
+                Line::from("Switch back to Status to review ready/failed beads."),
+                Line::from("This tab will show live Claude output once a session starts."),
+            ]
+        });
+    let details = Paragraph::new(details)
+        .block(Block::default().borders(Borders::ALL).title("Current Session"));
+    frame.render_widget(details, chunks[0]);
+
+    let transcript = Paragraph::new(state.transcript_lines.join("\n"))
+        .block(Block::default().borders(Borders::ALL).title("Live Content"))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(transcript, chunks[1]);
 }
 
 fn open_runtime() -> Result<(LoadedConfig, Database, CliBrClient)> {

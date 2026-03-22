@@ -319,6 +319,8 @@ fn apply_reaction_side_effects(
         );
     }
 
+    let mut terminal_run_persisted = false;
+
     for record in reaction_eval.records {
         let _ = db.write_event_log(
             grove_types::EventKind::ReactionInvoked,
@@ -401,6 +403,7 @@ fn apply_reaction_side_effects(
                             .and_then(|record| record.circuit_breaker_state.clone()),
                     },
                 );
+                terminal_run_persisted = true;
             }
             grove_types::ReactionAction::ForceCheckpoint
             | grove_types::ReactionAction::EnqueueMirrorRetry
@@ -423,8 +426,40 @@ fn apply_reaction_side_effects(
                         created_at: now,
                     });
                 }
+                let _ = db.record_run_finished(
+                    &ctx.bead_id,
+                    grove_db::RunFinishInput {
+                        run_id: ctx.run_id.clone(),
+                        status: grove_types::RunStatus::Failed,
+                        failure_class,
+                        failure_detail: failure_detail.clone(),
+                        ended_at: now,
+                        retry_after: None,
+                        circuit_breaker_state: bead_record
+                            .as_ref()
+                            .and_then(|record| record.circuit_breaker_state.clone()),
+                    },
+                );
+                terminal_run_persisted = true;
             }
         }
+    }
+
+    if outcome.is_none() && !terminal_run_persisted {
+        let _ = db.record_run_finished(
+            &ctx.bead_id,
+            grove_db::RunFinishInput {
+                run_id: ctx.run_id.clone(),
+                status: grove_types::RunStatus::Failed,
+                failure_class,
+                failure_detail,
+                ended_at: now,
+                retry_after: None,
+                circuit_breaker_state: bead_record
+                    .as_ref()
+                    .and_then(|record| record.circuit_breaker_state.clone()),
+            },
+        );
     }
 }
 
@@ -1169,7 +1204,7 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                         worker_session_id,
                         worker_checkpoint_root.into_std_path_buf(),
                     )
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| format!("{error:#}"))
                 })();
 
                 let _ = worker_tx.send(CompletedWorker {
@@ -1773,6 +1808,62 @@ mod tests {
             .filter(|event| event.kind == grove_types::EventKind::ReactionInvoked)
             .count();
         assert_eq!(reaction_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_reaction_side_effects_marks_failed_without_outcome_when_no_backoff_rule_matches() -> TestResult {
+        let dir = tempdir()?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+
+        let bead = bead_summary("grove-no-backoff", BeadPriority::P1)?;
+        db.upsert_bead_cache(&bead)?;
+        db.set_grove_status(&bead.id, GroveBeadStatus::Running)?;
+
+        let run_id = RunId::new("run-grove-no-backoff-1");
+        db.record_run_started(grove_db::RunStartInput {
+            escalation_tier: grove_types::EscalationTier::FirstAttempt,
+            bead_id: bead.id.clone(),
+            run_id: run_id.clone(),
+            attempt_no: 1,
+            started_at: chrono::Utc::now(),
+        })?;
+
+        let ctx = DispatchedWorkerContext {
+            bead_id: bead.id.clone(),
+            run_id: run_id.clone(),
+            session_id: SessionId::new("ses-grove-no-backoff-1"),
+        };
+        apply_reaction_side_effects(
+            &mut db,
+            &GroveConfig::default(),
+            &ctx,
+            None,
+            Some("session lifecycle hook failed"),
+            false,
+        );
+
+        let run = db
+            .list_task_runs_for_bead(&bead.id)?
+            .into_iter()
+            .find(|run| run.id == run_id)
+            .ok_or_else(|| std::io::Error::other("expected task run"))?;
+        assert_eq!(run.status, grove_types::RunStatus::Failed);
+        assert_eq!(run.failure_class, Some(grove_types::FailureClass::Unknown));
+        assert!(
+            run.failure_detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("session lifecycle hook failed"))
+        );
+
+        let bead_record = db
+            .get_bead_record(&bead.id)?
+            .ok_or_else(|| std::io::Error::other("expected bead record"))?;
+        assert_eq!(bead_record.grove_status, GroveBeadStatus::Failed);
+        assert_eq!(bead_record.last_run_id.as_ref(), Some(&run_id));
         Ok(())
     }
 
