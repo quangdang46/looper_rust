@@ -93,9 +93,7 @@ impl ClaudeBackend for CliClaudeBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ClaudeBackend, CliClaudeBackend, DEFAULT_MODEL_OMIT_FLAG, StartSessionRequest,
-    };
+    use super::{ClaudeBackend, CliClaudeBackend, DEFAULT_MODEL_OMIT_FLAG, StartSessionRequest};
     use camino::Utf8PathBuf;
     use std::{error::Error, fs, time::Duration};
     use tempfile::tempdir;
