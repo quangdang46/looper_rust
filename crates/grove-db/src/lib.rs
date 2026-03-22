@@ -5169,7 +5169,7 @@ mod tests {
         db.migrate()?;
         insert_bead_cache_row(&db, "grove-failure-test", "Failure test bead")?;
 
-        let started = db.record_run_started(RunStartInput {
+        let _started = db.record_run_started(RunStartInput {
             run_id: RunId::new("run-failure-test"),
             bead_id: BeadId::new("grove-failure-test"),
             attempt_no: 1,
