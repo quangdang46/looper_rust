@@ -548,11 +548,10 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
                 "  [{:?}]{} at {}",
                 event.kind, session_label, event.created_at
             );
-            if event.payload != serde_json::Value::Null {
-                if let Ok(pretty) = serde_json::to_string(&event.payload) {
+            if event.payload != serde_json::Value::Null
+                && let Ok(pretty) = serde_json::to_string(&event.payload) {
                     println!("    {pretty}");
                 }
-            }
         }
     }
 

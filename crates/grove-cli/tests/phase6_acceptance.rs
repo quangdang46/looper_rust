@@ -1,10 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use assert_cmd::Command;
 use chrono::Utc;
 use grove_db::Database;
 use grove_kernel::scoring::ScoringConfig;
-use grove_kernel::{diary, inspect_view, lesson_ingest, scoring};
+use grove_kernel::{diary, lesson_ingest, scoring};
 use grove_session::{materialize_prompt, PromptMaterializationInput};
 use grove_types::{
     playbook::{BulletMaturity, BulletScope, BulletState, BulletType, PlaybookBulletRecord},
@@ -187,7 +186,7 @@ fn test_scoring_anti_pattern_inversion() {
     let run_id = RunId::new("run-1");
 
     let bullet_id = grove_types::BulletId::new("blt-fail");
-    let mut bullet = PlaybookBulletRecord {
+    let bullet = PlaybookBulletRecord {
         id: bullet_id.clone(),
         scope: BulletScope::Global,
         scope_key: None,

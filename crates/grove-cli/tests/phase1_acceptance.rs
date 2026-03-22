@@ -973,7 +973,7 @@ fn bv_augments_br_does_not_replace_authority() -> TestResult {
 
     // Validate that:
     // 1. br.ready() is the source of truth for readiness
-    assert_eq!(ready_in_br, true, "bead with no blockers is ready in br");
+    assert!(ready_in_br, "bead with no blockers is ready in br");
 
     // 2. BV provides additional context (score, reason) not present in br
     assert!(bv_score > 0.0, "BV provides scoring information");

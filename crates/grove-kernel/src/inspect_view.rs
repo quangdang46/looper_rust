@@ -16,7 +16,7 @@ use grove_types::{
     BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, DispatchDecisionRecord,
     EventLogRecord, GroveBeadRecord, GroveBeadStatus, HandoffRecord, PlaybookBulletRecord,
     PromptManifest, PromptMaterializationRecord, RecoveryCapsule, RecoveryCapsuleOutcome,
-    RelevantSnippet, RetrievalBundle, RunId, SessionOutcome, TaskRunRecord, Timestamp,
+    RelevantSnippet, RetrievalBundle, RunId, RunReport, SessionOutcome, TaskRunRecord, Timestamp,
 };
 use serde::Serialize;
 use std::fs;
@@ -162,6 +162,10 @@ pub fn load_inspect_snapshot<C: BrClient>(
         .and_then(|session| session.prompt_provenance.as_ref())
         .and_then(retrieval_bundle_from_prompt_provenance);
 
+    let run_report = latest_run
+        .as_ref()
+        .and_then(|run| db.generate_run_report(&run.id).ok().flatten());
+
     Ok(Some(InspectSnapshot {
         bead,
         dependencies: dependency_snapshot
@@ -186,6 +190,7 @@ pub fn load_inspect_snapshot<C: BrClient>(
         retrieval_bundle,
         selected_playbook_bullets,
         mirror_pending,
+        run_report,
     }))
 }
 
@@ -386,6 +391,7 @@ pub struct InspectSnapshot {
     pub retrieval_bundle: Option<RetrievalBundle>,
     pub selected_playbook_bullets: Vec<PlaybookBulletRecord>,
     pub mirror_pending: Option<MirrorPendingView>,
+    pub run_report: Option<RunReport>,
 }
 
 impl InspectSnapshot {
@@ -418,6 +424,7 @@ impl InspectSnapshot {
             retrieval_summary,
             playbook_bullets,
             mirror_pending: self.mirror_pending,
+            run_report: self.run_report,
         }
     }
 }
@@ -440,6 +447,7 @@ pub struct BeadInspectView {
     pub retrieval_summary: Option<RetrievalSummaryView>,
     pub playbook_bullets: Vec<PlaybookBulletView>,
     pub mirror_pending: Option<MirrorPendingView>,
+    pub run_report: Option<RunReport>,
 }
 
 #[derive(Debug, Clone, Serialize)]
