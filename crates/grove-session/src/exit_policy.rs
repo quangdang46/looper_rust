@@ -46,7 +46,6 @@ impl ExitPolicy {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use grove_types::IterationAnalysis;

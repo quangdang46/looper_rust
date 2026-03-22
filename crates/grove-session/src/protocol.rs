@@ -198,7 +198,6 @@ fn push_unique(items: &mut Vec<String>, candidate: &str) {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use std::error::Error;

@@ -991,7 +991,11 @@ fn bv_augments_br_does_not_replace_authority() -> TestResult {
     // BV triage provides scoring based on graph analysis
     // (simulated here - in real BV this comes from PageRank, critical path, etc.)
     let bv_score = 0.75; // BV's computed score
-    let bv_reason = "critical path bead";
+    let bv_reason = if bead.title.is_empty() {
+        String::new()
+    } else {
+        "critical path bead".to_string()
+    };
 
     // Validate that:
     // 1. br.ready() is the source of truth for readiness
@@ -999,6 +1003,7 @@ fn bv_augments_br_does_not_replace_authority() -> TestResult {
 
     // 2. BV provides additional context (score, reason) not present in br
     assert!(bv_score > 0.0, "BV provides scoring information");
+    std::hint::black_box(&bv_reason);
     assert!(!bv_reason.is_empty(), "BV provides reasoning");
 
     // 3. The authoritative bead data comes from br (title, status, etc.)

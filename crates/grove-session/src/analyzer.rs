@@ -273,7 +273,6 @@ fn has_rate_limit_warning(analysis: &IterationAnalysis) -> bool {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use crate::ExitPolicy;

@@ -81,9 +81,11 @@ fn sample_request(workspace_dir: Utf8PathBuf) -> SingleTaskSessionRequest {
     }
 }
 
+type ActivityChange = (AgentActivity, Option<String>, DateTime<Utc>);
+
 #[derive(Default)]
 struct ActivityRecordingHooks {
-    changes: Mutex<Vec<(AgentActivity, Option<String>, DateTime<Utc>)>>,
+    changes: Mutex<Vec<ActivityChange>>,
     started: Mutex<Vec<ClaudeSessionRecord>>,
 }
 

@@ -369,7 +369,6 @@ fn estimate_tokens(text: &str) -> u32 {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::{CheckpointPromptInput, PromptMaterializationInput, materialize_prompt};
     use grove_types::{

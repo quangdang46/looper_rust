@@ -724,7 +724,6 @@ fn stop_reason_from_terminal_class(terminal_class: SessionTerminalClass) -> Stop
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use crate::{CliClaudeBackend, replay_transcript};

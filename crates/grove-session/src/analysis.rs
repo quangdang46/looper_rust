@@ -229,7 +229,6 @@ fn normalize_line(line: &str) -> String {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use grove_types::{CheckpointPayload, ProtocolEvent};

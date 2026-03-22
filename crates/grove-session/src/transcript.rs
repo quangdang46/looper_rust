@@ -379,7 +379,6 @@ pub fn replay_transcript(path: impl AsRef<Path>) -> Result<TranscriptReplay, Tra
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
     use grove_types::{CheckpointPayload, ProtocolEvent};

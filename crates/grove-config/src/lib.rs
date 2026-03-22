@@ -111,8 +111,7 @@ mod tests {
                 String::from(r#"[{ trigger = "NoProgress", action = { RetryWithMutation = { strategy = "NotARealStrategy" } }, enabled = true, max_attempts = 1 }]"#),
             )]),
         )
-        .err()
-        .expect("expected validation error");
+        .expect_err("expected validation error");
         assert!(
             matches!(err, ConfigError::Validation { field, .. } if field == "GROVE_REACTIONS__RULES")
         );

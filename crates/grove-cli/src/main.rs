@@ -1542,14 +1542,3 @@ fn read_transcript_tail(path: &str, tail_lines: usize) -> Result<Option<Vec<Stri
     let start = lines.len().saturating_sub(tail_lines);
     Ok(Some(lines[start..].to_vec()))
 }
-
-fn command_name(command: &Command) -> &'static str {
-    match command {
-        Command::Init => "init",
-        Command::Status => "status",
-        Command::Inspect { .. } => "inspect",
-        Command::Log { .. } => "log",
-        Command::Retry { .. } => "retry",
-        Command::Run => "run",
-    }
-}

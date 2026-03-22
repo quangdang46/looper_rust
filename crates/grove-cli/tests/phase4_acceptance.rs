@@ -17,10 +17,6 @@ use grove_types::{
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-fn setup_db() -> TestResult {
-    Ok(())
-}
-
 fn open_test_db() -> Result<Database, Box<dyn std::error::Error>> {
     let dir = tempfile::tempdir()?;
     let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))

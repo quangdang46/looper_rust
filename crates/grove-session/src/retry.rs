@@ -166,7 +166,6 @@ fn compact_excerpt(text: &str) -> String {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::plan_retry_mutation;
     use grove_types::{

@@ -93,7 +93,6 @@ fn merge_unique(target: &mut Vec<String>, incoming: &[String]) {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 

@@ -88,7 +88,6 @@ impl ClaudeBackend for CliClaudeBackend {
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::{ClaudeBackend, CliClaudeBackend, StartSessionRequest};
     use camino::Utf8PathBuf;
