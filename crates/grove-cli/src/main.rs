@@ -13,7 +13,7 @@ use grove_kernel::{
     StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
     load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop,
 };
-use grove_types::{BeadId, BeadPriority, GroveBeadStatus, LeaderLeaseRecord};
+use grove_types::{BeadId, BeadPriority, GroveBeadStatus, LeaderLeaseRecord, RunReport};
 use serde_json::json;
 use std::{cmp, env, fs};
 
@@ -1403,6 +1403,14 @@ fn print_inspect_report(
                 }
                 None => println!("- none"),
             }
+
+            println!("\nRun report:");
+            match view.run_report.as_ref() {
+                Some(report) => {
+                    print_run_report(report);
+                }
+                None => println!("- none"),
+            }
         }
         None => {
             println!("\nNo local Grove runtime record is available for this bead yet.");
@@ -1493,6 +1501,34 @@ where
     match value {
         Some(value) => value.to_string(),
         None => "-".to_owned(),
+    }
+}
+
+fn print_run_report(report: &RunReport) {
+    println!("- run: {}", report.run_id);
+    println!("- bead: {}", report.bead_id);
+    println!("- status: {:?}", report.status);
+    if let Some(failure_class) = &report.failure_class {
+        println!("- failure class: {:?}", failure_class);
+    }
+    let m = &report.metrics;
+    println!(
+        "- duration: {}s",
+        m.total_duration_secs
+    );
+    println!("- checkpoints: {}", m.checkpoints_taken);
+    println!("- retries: {}", m.retries_attempted);
+    println!("- rescue injections: {}", m.rescue_injections);
+    println!("- reactions invoked: {}", m.reactions_invoked);
+    println!("- max escalation tier: {}", m.max_escalation_tier);
+    if let Some(reason) = &m.termination_reason {
+        println!("- termination reason: {}", reason);
+    }
+    println!("- events: {}", report.event_count);
+    println!("- first event: {}", display_option(report.first_event_at));
+    println!("- last event: {}", display_option(report.last_event_at));
+    if report.recovery_capsule.is_some() {
+        println!("- recovery capsule: present");
     }
 }
 
