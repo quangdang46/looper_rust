@@ -1144,7 +1144,7 @@ fn run_dispatch_loop_with_live_ui(
     }
 
     let mut live_hidden = false;
-    let mut terminal = enter_live_terminal()?;
+    let mut terminal = Some(enter_live_terminal()?);
     let mut state = LiveAuditState::new(loaded.paths.workspace_root().to_string());
     let mut completed: Option<Result<DispatchLoopOutcome>> = None;
 
@@ -1158,40 +1158,72 @@ fn run_dispatch_loop_with_live_ui(
 
         if !live_hidden {
             state.refresh(loaded, br)?;
-            terminal.draw(|frame| draw_live_audit(frame, &state))?;
+            let draw_result = terminal
+                .as_mut()
+                .context("live audit terminal missing while UI is visible")?
+                .draw(|frame| draw_live_audit(frame, &state));
+            if let Err(error) = draw_result {
+                let detail = error.to_string();
+                hide_live_ui(&mut terminal, "draw_error", Some(&detail));
+                eprintln!(
+                    "grove: live UI hid after a terminal draw error; dispatch is still running in the background ({detail})"
+                );
+                live_hidden = true;
+            }
         }
 
         if !live_hidden {
-            if event::poll(Duration::from_millis(150))?
-                && let CEvent::Key(key) = event::read()?
-            {
-                match key.code {
-                    KeyCode::Char('q') => {
-                        leave_live_terminal(&mut terminal)?;
-                        if let Some(result) = completed.take() {
-                            return Ok(result);
+            match event::poll(Duration::from_millis(150)) {
+                Ok(true) => match event::read() {
+                    Ok(CEvent::Key(key)) => match key.code {
+                        KeyCode::Char('q') => {
+                            hide_live_ui(&mut terminal, "user_hidden", None);
+                            eprintln!(
+                                "grove: live UI hidden; dispatch is still running in the background"
+                            );
+                            if let Some(result) = completed.take() {
+                                return Ok(result);
+                            }
+                            live_hidden = true;
                         }
+                        KeyCode::Tab => {
+                            state.tab = match state.tab {
+                                LiveTab::Status => LiveTab::Live,
+                                LiveTab::Live => LiveTab::Status,
+                            };
+                        }
+                        KeyCode::Right => state.tab = LiveTab::Live,
+                        KeyCode::Left => state.tab = LiveTab::Status,
+                        KeyCode::Down => {
+                            if !state.running.is_empty() {
+                                state.selected = (state.selected + 1).min(state.running.len() - 1);
+                            }
+                        }
+                        KeyCode::Up => {
+                            if state.selected > 0 {
+                                state.selected -= 1;
+                            }
+                        }
+                        _ => {}
+                    },
+                    Ok(_) => {}
+                    Err(error) => {
+                        let detail = error.to_string();
+                        hide_live_ui(&mut terminal, "read_error", Some(&detail));
+                        eprintln!(
+                            "grove: live UI hid after a terminal input error; dispatch is still running in the background ({detail})"
+                        );
                         live_hidden = true;
                     }
-                    KeyCode::Tab => {
-                        state.tab = match state.tab {
-                            LiveTab::Status => LiveTab::Live,
-                            LiveTab::Live => LiveTab::Status,
-                        };
-                    }
-                    KeyCode::Right => state.tab = LiveTab::Live,
-                    KeyCode::Left => state.tab = LiveTab::Status,
-                    KeyCode::Down => {
-                        if !state.running.is_empty() {
-                            state.selected = (state.selected + 1).min(state.running.len() - 1);
-                        }
-                    }
-                    KeyCode::Up => {
-                        if state.selected > 0 {
-                            state.selected -= 1;
-                        }
-                    }
-                    _ => {}
+                },
+                Ok(false) => {}
+                Err(error) => {
+                    let detail = error.to_string();
+                    hide_live_ui(&mut terminal, "poll_error", Some(&detail));
+                    eprintln!(
+                        "grove: live UI hid after a terminal input error; dispatch is still running in the background ({detail})"
+                    );
+                    live_hidden = true;
                 }
             }
         } else {
@@ -1215,6 +1247,34 @@ fn leave_live_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
     disable_raw_mode().context("disable raw mode for live audit")?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leave alternate screen")?;
     terminal.show_cursor().context("restore terminal cursor")
+}
+
+fn hide_live_ui(
+    terminal: &mut Option<Terminal<CrosstermBackend<io::Stdout>>>,
+    reason: &str,
+    detail: Option<&str>,
+) {
+    if let Some(mut terminal) = terminal.take() {
+        if let Err(error) = leave_live_terminal(&mut terminal) {
+            trace_runtime_event(
+                "coordinator.live_ui_hide_error",
+                serde_json::json!({
+                    "reason": reason,
+                    "detail": detail,
+                    "cleanup_error": error.to_string(),
+                }),
+            );
+            return;
+        }
+    }
+
+    trace_runtime_event(
+        "coordinator.live_ui_hidden",
+        serde_json::json!({
+            "reason": reason,
+            "detail": detail,
+        }),
+    );
 }
 
 fn draw_live_audit(frame: &mut Frame<'_>, state: &LiveAuditState) {
