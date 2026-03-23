@@ -945,7 +945,15 @@ fn read_live_transcript_tail(path: &str) -> Result<Vec<String>> {
         return Ok(vec!["Transcript not available yet.".to_owned()]);
     }
 
-    let replay = replay_transcript(path)?;
+    let replay = match replay_transcript(path) {
+        Ok(replay) => replay,
+        Err(_) => {
+            return Ok(vec![
+                "Transcript is still being written...".to_owned(),
+                "Retrying on next refresh.".to_owned(),
+            ])
+        }
+    };
     let mut lines = replay
         .events
         .into_iter()
@@ -1206,6 +1214,40 @@ fn write_default_config(path: &Utf8PathBuf) -> Result<()> {
     fs::write(path, format!("{text}\n"))
         .with_context(|| format!("write default config to {path}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use std::error::Error;
+    use tempfile::tempdir;
+
+    type TestResult = Result<(), Box<dyn Error>>;
+
+    #[test]
+    fn live_transcript_tail_tolerates_partial_jsonl_writes() -> TestResult {
+        let dir = tempdir()?;
+        let path = dir.path().join("partial.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                "{\"ts\":\"2026-03-23T00:00:00Z\",\"kind\":\"session_started\",\"session_id\":\"ses-1\"}\n",
+                "{\"ts\":\"2026-03-23T00:00:01Z\",\"kind\":\"stdout\",\"line\":"
+            ),
+        )?;
+
+        let lines = read_live_transcript_tail(path.to_str().unwrap())?;
+        assert_eq!(
+            lines,
+            vec![
+                "Transcript is still being written...".to_owned(),
+                "Retrying on next refresh.".to_owned(),
+            ]
+        );
+        Ok(())
+    }
 }
 
 fn ensure_workspace_layout(paths: &GrovePaths) -> Result<()> {
