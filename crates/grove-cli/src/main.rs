@@ -14,10 +14,10 @@ use grove_config::{
 };
 use grove_db::Database;
 use grove_kernel::{
-    BeadInspectView, DispatchLoopConfig, DispatchLoopOutcome, LeaderLeaseConfig, LeaderLeaseManager,
-    ShutdownSignal, StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
-    init_trace_logging, load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop,
-    trace_runtime_event,
+    BeadInspectView, DispatchExitReason, DispatchLoopConfig, DispatchLoopOutcome,
+    LeaderLeaseConfig, LeaderLeaseManager, ShutdownSignal, StartupRecoveryReport,
+    WorkspaceStatusView, acquire_startup_coordinator, init_trace_logging,
+    load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop, trace_runtime_event,
 };
 use grove_session::replay_transcript;
 use grove_types::{
@@ -480,6 +480,9 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
                 println!("Stop reason: {}", outcome.stop_reason);
                 println!("Total runs dispatched: {}", outcome.dispatched_count);
                 println!("Total poll cycles: {}", outcome.poll_cycles);
+                if outcome.exit_reason == DispatchExitReason::QueueEmpty {
+                    println!("No dispatchable work remained. Check `grove status` for suppressed or failed-awaiting-retry beads.");
+                }
                 print_run_startup_report(&loaded, &release_result);
             }
             Ok(())
@@ -1021,13 +1024,14 @@ fn run_dispatch_loop_with_live_ui(
     let mut live_hidden = false;
     let mut terminal = enter_live_terminal()?;
     let mut state = LiveAuditState::new(loaded.paths.workspace_root().to_string());
+    let mut completed: Option<Result<DispatchLoopOutcome>> = None;
 
     loop {
-        if let Ok(result) = rx.try_recv() {
-            if !live_hidden {
-                leave_live_terminal(&mut terminal)?;
+        if completed.is_none() && let Ok(result) = rx.try_recv() {
+            completed = Some(result);
+            if live_hidden {
+                return Ok(completed.expect("completed result must exist"));
             }
-            return Ok(result);
         }
 
         if !live_hidden {
@@ -1039,6 +1043,9 @@ fn run_dispatch_loop_with_live_ui(
                 match key.code {
                     KeyCode::Char('q') => {
                         leave_live_terminal(&mut terminal)?;
+                        if let Some(result) = completed.take() {
+                            return Ok(result);
+                        }
                         live_hidden = true;
                     }
                     KeyCode::Tab => {
@@ -1063,6 +1070,9 @@ fn run_dispatch_loop_with_live_ui(
                 }
             }
         } else {
+            if let Some(result) = completed.take() {
+                return Ok(result);
+            }
             thread::sleep(Duration::from_millis(150));
         }
     }
