@@ -1143,7 +1143,7 @@ fn build_live_content_lines(db: &Database, session: &LiveSessionSummary) -> Resu
             if !lines.is_empty() {
                 lines.push(String::new());
             }
-            lines.push("---- Recent run events ----".to_owned());
+            lines.push("---- Recent actions ----".to_owned());
             for event in events.into_iter().rev().take(12).rev() {
                 lines.push(format!(
                     "{} | {}",
@@ -1460,7 +1460,7 @@ fn draw_status_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
 fn draw_live_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(10), Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([Constraint::Length(10), Constraint::Min(8)])
         .split(area);
 
     let details = state
@@ -1501,11 +1501,6 @@ fn draw_live_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
         .scroll((state.live_scroll, 0))
         .wrap(Wrap { trim: false });
     frame.render_widget(transcript, chunks[1]);
-
-    let actions = Paragraph::new(state.action_lines.join("\n"))
-        .block(Block::default().borders(Borders::ALL).title("Recent Actions"))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(actions, chunks[2]);
 }
 
 fn open_runtime() -> Result<(LoadedConfig, Database, CliBrClient)> {
