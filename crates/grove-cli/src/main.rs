@@ -127,9 +127,8 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
     if !existing_artifacts.is_empty() {
         if !force {
             bail!(
-                "Grove is already initialized in {}. Existing managed artifacts: {}. Re-run `grove init --force` to reset Grove-managed state.",
+                "Grove is already initialized in {}.\n\nNothing was changed.\nIf you want a clean local Grove state, run:\n  grove init --force\n\nThis resets Grove-managed runtime state only and keeps grove.toml.",
                 workspace_root,
-                existing_artifacts.join(", ")
             );
         }
         reset_managed_init_state(&paths)?;
@@ -396,11 +395,11 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
         }),
     );
     let owner_label = format!("{}:{}", loaded.paths.workspace_root(), std::process::id());
-    // Use 5x poll interval for lease TTL to give main thread enough time
-    // to heartbeat even when workers are doing concurrent DB operations
-    let lease_ttl = chrono::Duration::milliseconds(
+    // Keep the leader lease comfortably above a single scheduler cycle so
+    // normal DB / scoring / br work cannot self-expire the coordinator.
+    let lease_ttl = chrono::Duration::seconds(30).max(chrono::Duration::milliseconds(
         cmp::max(1, loaded.config.scheduler.poll_interval_ms as i64) * 5,
-    );
+    ));
     let lease_config = LeaderLeaseConfig {
         owner_label,
         lease_ttl,

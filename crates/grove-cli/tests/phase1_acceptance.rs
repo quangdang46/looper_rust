@@ -466,20 +466,15 @@ fn running_status_suppresses_dispatch() -> TestResult {
 }
 
 #[test]
-fn checkpointed_status_suppresses_dispatch() -> TestResult {
+fn checkpointed_status_is_dispatchable_for_resume() -> TestResult {
     let bead = sample_bead_record(GroveBeadStatus::Checkpointed, "task", &[]);
 
     let context = sample_context(true, CircuitState::Closed, vec![]);
     let eligibility = evaluate_dispatch_eligibility(&bead, &context);
 
     assert!(eligibility.ready_in_br);
-    assert!(!eligibility.dispatchable_in_grove);
-    assert!(
-        eligibility
-            .local_suppression_reasons
-            .iter()
-            .any(|r| matches!(r, LocalSuppressionReason::CheckpointPendingResume { .. }))
-    );
+    assert!(eligibility.dispatchable_in_grove);
+    assert!(eligibility.local_suppression_reasons.is_empty());
 
     Ok(())
 }
@@ -770,6 +765,7 @@ fn init_refuses_when_workspace_is_already_initialized() -> TestResult {
 
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("Grove is already initialized"));
+    assert!(stderr.contains("Nothing was changed."));
     assert!(stderr.contains("grove init --force"));
     Ok(())
 }
