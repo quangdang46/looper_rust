@@ -978,6 +978,10 @@ fn priority_why(priority: BeadPriority) -> String {
 
 fn recovery_hint(bead: &GroveBeadRecord, config: &GroveConfig) -> Option<String> {
     match bead.grove_status {
+        GroveBeadStatus::Checkpointed => Some(
+            "checkpointed work is resumable and will be picked up by the next dispatch cycle"
+                .to_owned(),
+        ),
         GroveBeadStatus::WaitingToRetry => bead.retry_after.map(|retry_after| {
             format!(
                 "automatic retry available after {retry_after} (retry max {})",

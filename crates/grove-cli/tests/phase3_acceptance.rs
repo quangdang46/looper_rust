@@ -532,7 +532,7 @@ fn failed_run_report_includes_failure_class_and_duration() -> TestResult {
 }
 
 #[test]
-fn interrupted_run_reconciliation_marks_active_runs_failed() -> TestResult {
+fn interrupted_run_reconciliation_marks_active_runs_retryable() -> TestResult {
     let dir = tempdir()?;
     let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
         .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
@@ -593,8 +593,8 @@ fn interrupted_run_reconciliation_marks_active_runs_failed() -> TestResult {
     assert_eq!(recovered.len(), 1, "should recover one interrupted run");
     assert_eq!(
         recovered[0].run.status,
-        RunStatus::Failed,
-        "interrupted run should be marked failed"
+        RunStatus::WaitingToRetry,
+        "interrupted run without checkpoint should be marked retryable"
     );
     assert_eq!(
         recovered[0].run.failure_class,

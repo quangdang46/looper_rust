@@ -1510,11 +1510,8 @@ mod tests {
         assert_eq!(snapshot.mirror_actions[0].action, "failed");
         assert!(snapshot.latest_dispatch.is_some());
         assert!(snapshot.latest_dispatch.as_ref().is_some_and(|dispatch| {
-            dispatch
-                .dispatch
-                .local_suppression_reasons
-                .iter()
-                .any(|reason| reason.code == "checkpoint_pending_resume")
+            dispatch.dispatch.dispatchable_in_grove
+                && dispatch.dispatch.local_suppression_reasons.is_empty()
         }));
         assert!(snapshot.mirror_pending.is_some());
         assert!(snapshot.retrieval_bundle.is_none());

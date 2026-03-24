@@ -1255,11 +1255,16 @@ impl Database {
         for run in active_runs {
             let failure_detail =
                 "startup reconciliation marked previously active run as interrupted";
+            let recovered_status = if run.last_checkpoint_id.is_some() {
+                RunStatus::Checkpointed
+            } else {
+                RunStatus::WaitingToRetry
+            };
             tx.execute(
                 "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
                 params![
                     run.id.as_str(),
-                    encode_run_status(RunStatus::Failed),
+                    encode_run_status(recovered_status),
                     encode_failure_class(FailureClass::Interrupted),
                     failure_detail,
                     timestamp_string(now),
@@ -1267,13 +1272,18 @@ impl Database {
             )
             .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
 
+            let recovered_bead_status = if run.last_checkpoint_id.is_some() {
+                GroveBeadStatus::Checkpointed
+            } else {
+                GroveBeadStatus::WaitingToRetry
+            };
             upsert_bead_runtime_tx(
                 &tx,
                 &run.bead_id,
-                Some(GroveBeadStatus::Failed),
+                Some(recovered_bead_status),
                 None,
                 Some(Some(run.id.clone())),
-                Some(None),
+                Some(Some(*now)),
                 Some(Some(FailureClass::Interrupted)),
                 Some(Some(failure_detail.to_owned())),
                 None,

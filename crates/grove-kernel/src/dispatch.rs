@@ -10,7 +10,8 @@ use grove_br::BrClient;
 use grove_config::{GroveConfig, DEFAULT_CHECKPOINTS_DIR_NAME, DEFAULT_GROVE_DIR_NAME};
 use grove_db::Database;
 use grove_session::{
-    ClaudeBackend, ContextMonitor, ExitPolicy, SessionShutdownConfig, SingleTaskSessionRequest,
+    CheckpointPromptInput, ClaudeBackend, ContextMonitor, ExitPolicy, SessionShutdownConfig,
+    SingleTaskSessionRequest,
 };
 use grove_types::{
     BeadId, CoordinatorStopReason, EscalationTier, ExecutionContract, GroveBeadRecord,
@@ -162,6 +163,132 @@ struct CompletedWorker {
 
 struct InFlightWorker {
     handle: JoinHandle<()>,
+}
+
+fn handle_completed_worker<C: BrClient>(
+    db: &mut Database,
+    br: &C,
+    config: &GroveConfig,
+    inflight_workers: &mut HashMap<BeadId, InFlightWorker>,
+    completed: CompletedWorker,
+) {
+    let CompletedWorker { ctx, result } = completed;
+    if let Some(worker) = inflight_workers.remove(&ctx.bead_id) {
+        let _ = worker.handle.join();
+    }
+
+    match result {
+        Ok(outcome) => {
+            apply_reaction_side_effects(db, config, &ctx, Some(&outcome), None, false);
+            if outcome.session.session.stop_reason == Some(grove_types::StopReason::Kill) {
+                let _ = db.write_event_log(
+                    grove_types::EventKind::CoordinatorStopped,
+                    Some(&ctx.bead_id),
+                    Some(&ctx.run_id),
+                    Some(&ctx.session_id),
+                    &serde_json::json!({
+                        "exit_reason": "shutdown signal received",
+                        "stop_reason": grove_types::CoordinatorStopReason::Interrupted.as_str(),
+                        "forced_termination": true,
+                        "running_session_count": inflight_workers.len(),
+                        "leader_released": false,
+                    }),
+                    &chrono::Utc::now(),
+                );
+            }
+            eprintln!(
+                "grove dispatch: {} completed with status {:?}",
+                ctx.bead_id.as_str(),
+                outcome.run.status
+            );
+
+            if config.reservations.enabled {
+                let _ = ReservationManager::release_for_run(
+                    db,
+                    &ctx.bead_id,
+                    &ctx.run_id,
+                    chrono::Utc::now(),
+                );
+            }
+
+            if outcome.run.status == grove_types::RunStatus::Succeeded
+                && let Some(handoff) = outcome.handoff.as_ref()
+            {
+                match br.mirror_handoff(&ctx.bead_id, handoff, true) {
+                    Ok(()) => {
+                        eprintln!(
+                            "grove dispatch: mirrored {} to br",
+                            ctx.bead_id.as_str()
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "grove dispatch: mirror failed for {}: {error}",
+                            ctx.bead_id.as_str()
+                        );
+                        let _ = db.enqueue_mirror_outbox(
+                            &ctx.bead_id,
+                            &ctx.run_id,
+                            handoff,
+                            true,
+                        );
+                        apply_reaction_side_effects(
+                            db,
+                            config,
+                            &ctx,
+                            Some(&outcome),
+                            Some(&error.to_string()),
+                            true,
+                        );
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            apply_reaction_side_effects(db, config, &ctx, None, Some(&error), false);
+            eprintln!("grove dispatch: {} failed: {error}", ctx.bead_id.as_str());
+            if config.reservations.enabled {
+                let _ = ReservationManager::release_for_run(
+                    db,
+                    &ctx.bead_id,
+                    &ctx.run_id,
+                    chrono::Utc::now(),
+                );
+            }
+        }
+    }
+
+    if let Err(error) = grove_br::sync_bead_cache(br, db) {
+        eprintln!("grove dispatch: bead cache sync failed: {error}");
+    }
+}
+
+fn drain_inflight_workers<C: BrClient>(
+    db: &mut Database,
+    br: &C,
+    config: &GroveConfig,
+    inflight_workers: &mut HashMap<BeadId, InFlightWorker>,
+    completed_rx: &mpsc::Receiver<CompletedWorker>,
+    poll_sleep: Duration,
+    drain_deadline: Option<std::time::Instant>,
+) {
+    while !inflight_workers.is_empty() {
+        let remaining = drain_deadline
+            .map(|deadline| deadline.saturating_duration_since(std::time::Instant::now()));
+        let recv_timeout = remaining.map_or(poll_sleep, |remaining| remaining.min(poll_sleep));
+
+        match completed_rx.recv_timeout(recv_timeout) {
+            Ok(completed) => {
+                handle_completed_worker(db, br, config, inflight_workers, completed);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if drain_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
 }
 
 fn consecutive_failures_from_history(
@@ -695,95 +822,7 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
         poll_cycles += 1;
 
         while let Ok(completed) = completed_rx.try_recv() {
-            let CompletedWorker { ctx, result } = completed;
-            if let Some(worker) = inflight_workers.remove(&ctx.bead_id) {
-                let _ = worker.handle.join();
-            }
-
-            match result {
-                Ok(outcome) => {
-                    apply_reaction_side_effects(db, &config, &ctx, Some(&outcome), None, false);
-                    if outcome.session.session.stop_reason == Some(grove_types::StopReason::Kill) {
-                        let _ = db.write_event_log(
-                            grove_types::EventKind::CoordinatorStopped,
-                            Some(&ctx.bead_id),
-                            Some(&ctx.run_id),
-                            Some(&ctx.session_id),
-                            &serde_json::json!({
-                                "exit_reason": "shutdown signal received",
-                                "stop_reason": grove_types::CoordinatorStopReason::Interrupted.as_str(),
-                                "forced_termination": true,
-                                "running_session_count": inflight_workers.len(),
-                                "leader_released": false,
-                            }),
-                            &chrono::Utc::now(),
-                        );
-                    }
-                    eprintln!(
-                        "grove dispatch: {} completed with status {:?}",
-                        ctx.bead_id.as_str(),
-                        outcome.run.status
-                    );
-
-                    if config.reservations.enabled {
-                        let _ = ReservationManager::release_for_run(
-                            db,
-                            &ctx.bead_id,
-                            &ctx.run_id,
-                            chrono::Utc::now(),
-                        );
-                    }
-
-                    if outcome.run.status == grove_types::RunStatus::Succeeded
-                        && let Some(handoff) = outcome.handoff.as_ref()
-                    {
-                        match br.mirror_handoff(&ctx.bead_id, handoff, true) {
-                            Ok(()) => {
-                                eprintln!(
-                                    "grove dispatch: mirrored {} to br",
-                                    ctx.bead_id.as_str()
-                                );
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "grove dispatch: mirror failed for {}: {error}",
-                                    ctx.bead_id.as_str()
-                                );
-                                let _ = db.enqueue_mirror_outbox(
-                                    &ctx.bead_id,
-                                    &ctx.run_id,
-                                    handoff,
-                                    true,
-                                );
-                                apply_reaction_side_effects(
-                                    db,
-                                    &config,
-                                    &ctx,
-                                    Some(&outcome),
-                                    Some(&error.to_string()),
-                                    true,
-                                );
-                            }
-                        }
-                    }
-                }
-                Err(error) => {
-                    apply_reaction_side_effects(db, &config, &ctx, None, Some(&error), false);
-                    eprintln!("grove dispatch: {} failed: {error}", ctx.bead_id.as_str());
-                    if config.reservations.enabled {
-                        let _ = ReservationManager::release_for_run(
-                            db,
-                            &ctx.bead_id,
-                            &ctx.run_id,
-                            chrono::Utc::now(),
-                        );
-                    }
-                }
-            }
-
-            if let Err(error) = grove_br::sync_bead_cache(br, db) {
-                eprintln!("grove dispatch: bead cache sync failed: {error}");
-            }
+            handle_completed_worker(db, br, &config, &mut inflight_workers, completed);
         }
 
         if loop_config.shutdown_signal.is_triggered() {
@@ -816,118 +855,15 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
         if let Some(max_runs) = loop_config.max_total_runs
             && dispatched_count >= max_runs
         {
-            // Wait for all inflight workers to complete before returning
-            while !inflight_workers.is_empty() {
-                if let Ok(completed) = completed_rx.recv_timeout(poll_sleep) {
-                    let CompletedWorker { ctx, result } = completed;
-                    if let Some(worker) = inflight_workers.remove(&ctx.bead_id) {
-                        let _ = worker.handle.join();
-                    }
-
-                    match result {
-                        Ok(outcome) => {
-                            apply_reaction_side_effects(
-                                db,
-                                &config,
-                                &ctx,
-                                Some(&outcome),
-                                None,
-                                false,
-                            );
-                            if outcome.session.session.stop_reason
-                                == Some(grove_types::StopReason::Kill)
-                            {
-                                let _ = db.write_event_log(
-                                    grove_types::EventKind::CoordinatorStopped,
-                                    Some(&ctx.bead_id),
-                                    Some(&ctx.run_id),
-                                    Some(&ctx.session_id),
-                                    &serde_json::json!({
-                                        "exit_reason": "shutdown signal received",
-                                        "stop_reason":
-                                            grove_types::CoordinatorStopReason::Interrupted
-                                                .as_str(),
-                                        "forced_termination": true,
-                                        "running_session_count": inflight_workers.len(),
-                                        "leader_released": false,
-                                    }),
-                                    &chrono::Utc::now(),
-                                );
-                            }
-                            eprintln!(
-                                "grove dispatch: {} completed with status {:?}",
-                                ctx.bead_id.as_str(),
-                                outcome.run.status
-                            );
-
-                            if config.reservations.enabled {
-                                let _ = ReservationManager::release_for_run(
-                                    db,
-                                    &ctx.bead_id,
-                                    &ctx.run_id,
-                                    chrono::Utc::now(),
-                                );
-                            }
-
-                            if outcome.run.status == grove_types::RunStatus::Succeeded
-                                && let Some(handoff) = outcome.handoff.as_ref()
-                            {
-                                match br.mirror_handoff(&ctx.bead_id, handoff, true) {
-                                    Ok(()) => {
-                                        eprintln!(
-                                            "grove dispatch: mirrored {} to br",
-                                            ctx.bead_id.as_str()
-                                        );
-                                    }
-                                    Err(error) => {
-                                        eprintln!(
-                                            "grove dispatch: mirror failed for {}: {error}",
-                                            ctx.bead_id.as_str()
-                                        );
-                                        let _ = db.enqueue_mirror_outbox(
-                                            &ctx.bead_id,
-                                            &ctx.run_id,
-                                            handoff,
-                                            true,
-                                        );
-                                        apply_reaction_side_effects(
-                                            db,
-                                            &config,
-                                            &ctx,
-                                            Some(&outcome),
-                                            Some(&error.to_string()),
-                                            true,
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => {
-                            apply_reaction_side_effects(
-                                db,
-                                &config,
-                                &ctx,
-                                None,
-                                Some(&error),
-                                false,
-                            );
-                            eprintln!("grove dispatch: {} failed: {error}", ctx.bead_id.as_str());
-                            if config.reservations.enabled {
-                                let _ = ReservationManager::release_for_run(
-                                    db,
-                                    &ctx.bead_id,
-                                    &ctx.run_id,
-                                    chrono::Utc::now(),
-                                );
-                            }
-                        }
-                    }
-
-                    if let Err(error) = grove_br::sync_bead_cache(br, db) {
-                        eprintln!("grove dispatch: bead cache sync failed: {error}");
-                    }
-                }
-            }
+            drain_inflight_workers(
+                db,
+                br,
+                &config,
+                &mut inflight_workers,
+                &completed_rx,
+                poll_sleep,
+                None,
+            );
             let exit_reason = DispatchExitReason::MaxRunsReached;
             return Ok(DispatchLoopOutcome {
                 dispatched_count,
@@ -941,6 +877,18 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
         match LeaderLeaseManager::heartbeat(db, lease_config, now)? {
             Some(_) => {}
             None => {
+                if !loop_config.shutdown_signal.is_triggered() {
+                    loop_config.shutdown_signal.trigger();
+                }
+                drain_inflight_workers(
+                    db,
+                    br,
+                    &config,
+                    &mut inflight_workers,
+                    &completed_rx,
+                    poll_sleep,
+                    None,
+                );
                 let exit_reason = DispatchExitReason::LeaderContested;
                 return Ok(DispatchLoopOutcome {
                     dispatched_count,
@@ -1119,6 +1067,33 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
                 });
                 active_rules.truncate(5);
                 request.playbook_rules = active_rules;
+            }
+
+            if bead.grove_status == GroveBeadStatus::Checkpointed
+                && let Ok(Some(checkpoint)) = db.latest_checkpoint_for_bead(&bead_id)
+                && bead
+                    .last_run_id
+                    .as_ref()
+                    .is_some_and(|last_run_id| checkpoint.run_id == *last_run_id)
+            {
+                request.contract = ExecutionContract::Resume;
+                let open_questions = checkpoint
+                    .payload
+                    .get("open_questions")
+                    .and_then(|value| value.as_array())
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                request.checkpoint = Some(CheckpointPromptInput {
+                    checkpoint_id: checkpoint.id.clone(),
+                    progress: checkpoint.progress.clone(),
+                    next_step: checkpoint.next_step.clone(),
+                    open_questions,
+                });
             }
 
             if let Some(failure_class) = bead.last_failure_class {
@@ -1497,6 +1472,74 @@ mod tests {
         let result =
             select_best_candidate_excluding(&beads, &ready_ids, &excluded_ids, &config, now);
         assert_eq!(result.map(|b| b.bead.id.as_str()), Some("grove-p1"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatch_loop_drains_inflight_workers_when_leader_lease_is_lost() -> TestResult {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(workspace_dir.join(".grove"))?;
+        let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+            .map_err(|_| std::io::Error::other("workspace dir must be valid UTF-8"))?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;
+
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        db.upsert_bead_cache(&bead_summary("grove-a", BeadPriority::P0)?)?;
+        db.set_grove_status(&BeadId::new("grove-a"), GroveBeadStatus::Ready)?;
+
+        let script_path = dir.path().join("sleepy-claude");
+        fs::write(
+            &script_path,
+            "#!/bin/sh\nsleep 0.1\nprintf 'GROVE_RESULT: ok\\nGROVE_ARTIFACTS: [\"src/lib.rs\"]\\nGROVE_EXIT: true\\nall tasks complete\\nimplementation complete\\n'\n",
+        )?;
+        let mut permissions = fs::metadata(&script_path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&script_path, permissions)?;
+
+        let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+        let br = TestBrClient {
+            ready: vec![bead_summary("grove-a", BeadPriority::P0)?],
+            open: vec![bead_summary("grove-a", BeadPriority::P0)?],
+            fail_mirror: false,
+        };
+        let mut config = GroveConfig::default();
+        config.scheduler.max_parallel = 1;
+        config.scheduler.poll_interval_ms = 10;
+        let lease_config = LeaderLeaseConfig {
+            owner_label: "test-owner".to_owned(),
+            lease_ttl: chrono::Duration::milliseconds(20),
+        };
+        let now = chrono::Utc::now();
+        let _ = LeaderLeaseManager::acquire(&mut db, &lease_config, None, now)?;
+        let loop_config = DispatchLoopConfig {
+            max_total_runs: None,
+            max_poll_cycles: Some(100),
+            working_dir: workspace_dir,
+            shutdown_signal: ShutdownSignal::new(),
+            db_path,
+        };
+
+        let shutdown_signal = loop_config.shutdown_signal.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            shutdown_signal.trigger();
+        });
+
+        let outcome =
+            run_dispatch_loop(&mut db, &backend, &br, &config, &lease_config, &loop_config)?;
+        assert_eq!(outcome.exit_reason, DispatchExitReason::ShutdownRequested);
+
+        let runs = db.list_task_runs_for_bead(&BeadId::new("grove-a"))?;
+        assert_eq!(runs.len(), 1, "expected one persisted run");
+        assert_ne!(runs[0].status, grove_types::RunStatus::Active);
         Ok(())
     }
 

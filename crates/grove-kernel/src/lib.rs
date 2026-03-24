@@ -590,7 +590,7 @@ fn finalize_persisted_run(
         ),
         SessionStatus::Crashed => (RunStatus::Failed, Some(FailureClass::ClaudeCrashed), None),
         SessionStatus::UnknownFailure if forced_kill => {
-            (RunStatus::Failed, Some(FailureClass::Interrupted), None)
+            (RunStatus::WaitingToRetry, Some(FailureClass::Interrupted), Some(ended_at))
         }
         SessionStatus::UnknownFailure => (RunStatus::Failed, Some(FailureClass::Unknown), None),
         SessionStatus::Starting | SessionStatus::Running => {
@@ -1224,11 +1224,7 @@ fn collect_local_suppressions(
         GroveBeadStatus::Running => reasons.push(LocalSuppressionReason::ActiveRun {
             run_id: bead.last_run_id.clone(),
         }),
-        GroveBeadStatus::Checkpointed => {
-            reasons.push(LocalSuppressionReason::CheckpointPendingResume {
-                run_id: bead.last_run_id.clone(),
-            });
-        }
+        GroveBeadStatus::Checkpointed => {}
         GroveBeadStatus::WaitingToRetry => {
             if bead.retry_after.is_none()
                 || bead
@@ -1325,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpointed_status_suppresses_dispatch() -> TestResult {
+    fn checkpointed_status_is_dispatchable_for_resume() -> TestResult {
         let bead = sample_bead(
             GroveBeadStatus::Checkpointed,
             "task",
@@ -1337,8 +1333,8 @@ mod tests {
 
         let eligibility = evaluate_dispatch_eligibility(&bead, &context);
 
-        assert!(!eligibility.dispatchable_in_grove);
-        assert!(suppression_codes(&eligibility).contains(&"checkpoint_pending_resume"));
+        assert!(eligibility.dispatchable_in_grove);
+        assert!(!eligibility.has_local_suppressions());
         Ok(())
     }
 
@@ -1602,7 +1598,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_reconciliation_marks_active_runs_failed_and_releases_stale_reservations()
+    fn startup_reconciliation_marks_active_runs_retryable_and_releases_stale_reservations()
     -> TestResult {
         let dir = tempfile::tempdir()?;
         let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
@@ -1630,7 +1626,7 @@ mod tests {
 
         assert_eq!(report.interrupted_runs.len(), 1);
         assert_eq!(report.interrupted_runs[0].bead_id.as_str(), "grove-recover");
-        assert_eq!(report.interrupted_runs[0].run.status, RunStatus::Failed);
+        assert_eq!(report.interrupted_runs[0].run.status, RunStatus::WaitingToRetry);
         assert_eq!(
             report.interrupted_runs[0].run.failure_class,
             Some(FailureClass::Interrupted)
@@ -1645,7 +1641,7 @@ mod tests {
         let bead = db
             .get_bead_record(&BeadId::new("grove-recover"))?
             .expect("runtime bead should exist");
-        assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
         assert_eq!(bead.last_failure_class, Some(FailureClass::Interrupted));
         assert!(db.list_active_reservations_at(&now)?.is_empty());
         Ok(())
@@ -2084,6 +2080,60 @@ exit "${EXIT_CODE:-0}"
                 .as_deref()
                 .is_some_and(|detail| detail.contains("failed to persist checkpoint file"))
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_runner_records_forced_kill_as_waiting_to_retry() -> TestResult {
+        use std::{fs, io, sync::{Arc, atomic::AtomicBool}};
+        use tempfile::tempdir;
+
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(&workspace_dir)?;
+        let workspace_dir = camino::Utf8PathBuf::from_path_buf(workspace_dir)
+            .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-life", "Lifecycle bead")?;
+
+        let script_path = dir.path().join("fake-claude");
+        fs::write(&script_path, "#!/bin/sh\nsleep 1\n")?;
+        let mut permissions = fs::metadata(&script_path)?.permissions();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            permissions.set_mode(0o755);
+        }
+        fs::set_permissions(&script_path, permissions)?;
+        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+        let shutdown = Arc::new(AtomicBool::new(true));
+        let mut request = sample_session_request(workspace_dir);
+        request.shutdown = grove_session::SessionShutdownConfig {
+            signal: Some(shutdown),
+            grace_period: Some(std::time::Duration::from_millis(0)),
+        };
+
+        let persisted = execute_persisted_single_task_session(
+            &mut db,
+            &backend,
+            request,
+            1,
+            &GroveConfig::default(),
+        )?;
+
+        assert_eq!(persisted.run.status, RunStatus::WaitingToRetry);
+        assert_eq!(persisted.run.failure_class, Some(FailureClass::Interrupted));
+        let bead = db
+            .get_bead_record(&BeadId::new("grove-life"))?
+            .expect("bead runtime should persist");
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
+        assert_eq!(bead.last_failure_class, Some(FailureClass::Interrupted));
         Ok(())
     }
 
