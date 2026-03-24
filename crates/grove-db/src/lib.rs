@@ -964,7 +964,8 @@ impl Database {
             };
             if session.status != SessionStatus::UnknownFailure
                 || session.stop_reason != Some(StopReason::Unknown)
-                || !transcript_contains_plan_approval_detour(&session.transcript_path)
+                || !(session.exit_code.is_none()
+                    || transcript_suggests_retryable_unknown_failure(&session.transcript_path))
             {
                 continue;
             }
@@ -3215,17 +3216,32 @@ fn normalize_transcript_line(line: &str) -> String {
         .join(" ")
 }
 
-fn transcript_contains_plan_approval_detour(transcript_path: &str) -> bool {
+fn transcript_suggests_retryable_unknown_failure(transcript_path: &str) -> bool {
     let Ok(content) = fs::read_to_string(transcript_path) else {
         return false;
     };
 
-    content.lines().any(|line| {
+    let mut saw_activity_payload = false;
+    let mut saw_plan_detour = false;
+
+    for line in content.lines() {
+        if line.contains("\"kind\":\"stdout\"")
+            || line.contains("\"kind\":\"stderr\"")
+            || line.contains("\"kind\":\"protocol\"")
+        {
+            saw_activity_payload = true;
+        }
+
         let normalized = normalize_transcript_line(line);
-        normalized.contains("requested approval")
+        if normalized.contains("requested approval")
             || normalized.contains("plan file")
             || normalized.contains("plan mode")
-    })
+        {
+            saw_plan_detour = true;
+        }
+    }
+
+    saw_plan_detour || !saw_activity_payload
 }
 
 
@@ -4545,6 +4561,90 @@ mod tests {
 
         let bead = db
             .get_bead_record(&BeadId::new("grove-stale"))?
+            .unwrap();
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
+        assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_stale_unknown_empty_transcript_runs_marks_them_retryable() -> Result<()> {
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(workspace_dir.join(".grove/transcripts/grove-empty"))?;
+        let transcript_path = workspace_dir.join(".grove/transcripts/grove-empty/ses-empty.jsonl");
+        fs::write(
+            &transcript_path,
+            concat!(
+                "{\"ts\":\"2026-03-16T11:00:00Z\",\"kind\":\"session_started\",\"session_id\":\"ses-empty\"}\n",
+                "{\"ts\":\"2026-03-16T11:02:00Z\",\"kind\":\"session_ended\"}\n"
+            ),
+        )?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-empty", "Empty transcript bead")?;
+        db.connection().execute(
+            "INSERT INTO task_runs(\
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13)",
+            rusqlite::params![
+                "run-empty",
+                "grove-empty",
+                1,
+                "Failed",
+                "Unknown",
+                "session ended with Unknown",
+                "2026-03-16T11:00:00Z",
+                "2026-03-16T11:02:00Z",
+                1,
+                0,
+                "Exited",
+                "2026-03-16T11:02:00Z",
+                "FirstAttempt",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO bead_runtime(\
+                bead_id, grove_status, declared_paths_json, metadata_json, last_run_id, retry_after,\
+                last_failure_class, last_failure_detail, runtime_updated_at\
+             ) VALUES (?1, ?2, '[]', '{}', ?3, NULL, ?4, ?5, ?6)",
+            rusqlite::params![
+                "grove-empty",
+                "Failed",
+                "run-empty",
+                "Unknown",
+                "session ended with Unknown",
+                "2026-03-16T11:02:00Z",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO claude_sessions(\
+                id, run_id, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path\
+             ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, NULL, NULL, 0, 0, 0, NULL, ?7, ?8)",
+            rusqlite::params![
+                "ses-empty",
+                "run-empty",
+                1,
+                "UnknownFailure",
+                "2026-03-16T11:00:00Z",
+                "2026-03-16T11:02:00Z",
+                "Unknown",
+                transcript_path.to_string_lossy(),
+            ],
+        )?;
+
+        let recovered = db.reconcile_interrupted_runs(&"2026-03-16T12:05:00Z".parse()?)?;
+        let recovered = recovered
+            .into_iter()
+            .find(|entry| entry.run.id == RunId::new("run-empty"))
+            .expect("empty transcript run should be recovered");
+        assert_eq!(recovered.run.status, RunStatus::WaitingToRetry);
+        assert_eq!(recovered.run.failure_class, Some(FailureClass::NoProgress));
+
+        let bead = db
+            .get_bead_record(&BeadId::new("grove-empty"))?
             .unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
         assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
