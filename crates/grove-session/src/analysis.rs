@@ -26,7 +26,7 @@ const PERMISSION_DENIAL_PATTERNS: [&str; 8] = [
 
 const RATE_LIMIT_PATTERNS: [&str; 4] = ["rate limit", "rate-limit", "ratelimit", "rate limited"];
 
-const ERROR_PATTERNS: [&str; 10] = [
+const ERROR_PATTERNS: [&str; 12] = [
     "error",
     "failed",
     "exception",
@@ -37,6 +37,8 @@ const ERROR_PATTERNS: [&str; 10] = [
     "rate limited",
     "tool rejected",
     "rejected by user",
+    "requested approval",
+    "plan file",
 ];
 
 #[derive(Debug, Clone, Copy)]

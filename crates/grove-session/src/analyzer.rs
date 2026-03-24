@@ -541,6 +541,21 @@ mod tests {
     }
 
     #[test]
+    fn plan_approval_style_output_stays_unknown_failure() {
+        let analysis = analyze_session_outcome(base_context(
+            &ProtocolState::default(),
+            &["Implemented the plan file and requested approval.".to_owned()],
+            &[],
+        ));
+
+        assert_eq!(analysis.probable_progress, ProgressSignal::None);
+        assert_eq!(
+            classify_session_outcome(&analysis, Some(0), false),
+            SessionTerminalClass::UnknownFailure
+        );
+    }
+
+    #[test]
     fn no_progress_threshold_opens_breaker() {
         let now: Timestamp = "2026-03-17T08:00:00Z".parse().expect("timestamp");
         let analysis = IterationAnalysis::default();

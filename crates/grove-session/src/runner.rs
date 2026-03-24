@@ -684,6 +684,7 @@ fn default_protocol_block() -> String {
         "Emit GROVE_RESULT, GROVE_ARTIFACTS, GROVE_LESSONS, GROVE_DECISIONS, GROVE_WARNINGS, and GROVE_EXIT markers on stdout when appropriate.",
         "Emit GROVE_CHECKPOINT with structured JSON before rotating on context pressure.",
         "Use GROVE_EXIT: false while work is still in progress.",
+        "Do not use EnterPlanMode, ExitPlanMode, or AskUserQuestion during Grove task execution.",
     ]
     .join("\n")
 }

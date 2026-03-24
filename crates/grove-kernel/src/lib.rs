@@ -25,8 +25,8 @@ use grove_session::{
 };
 use grove_types::{
     AgentActivity, BeadId, CheckpointId, CircuitState, FailureClass, GroveBeadRecord,
-    GroveBeadStatus, ReservationConflict, ReservationMode, ReservationRecord, RunId, RunStatus,
-    SessionStatus, Timestamp,
+    GroveBeadStatus, ProgressSignal, ReservationConflict, ReservationMode, ReservationRecord,
+    RunId, RunStatus, SessionStatus, Timestamp,
 };
 use std::{
     collections::BTreeMap,
@@ -561,6 +561,29 @@ fn read_trace_log_lines(workspace_dir: &camino::Utf8Path) -> Result<Vec<serde_js
         .map_err(Into::into)
 }
 
+fn normalize_runtime_line(line: &str) -> String {
+    line.split_whitespace()
+        .map(|part| part.to_ascii_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn has_plan_approval_detour(lines: &[String]) -> bool {
+    lines.iter().any(|line| {
+        let normalized = normalize_runtime_line(line);
+        normalized.contains("requested approval")
+            || normalized.contains("plan file")
+            || normalized.contains("plan mode")
+    })
+}
+
+fn unknown_failure_should_retry(outcome: &grove_types::SessionOutcome) -> bool {
+    outcome.analysis.repeated_error_fingerprint.is_some()
+        || !matches!(outcome.analysis.probable_progress, ProgressSignal::None)
+        || has_plan_approval_detour(&outcome.stdout_tail)
+        || has_plan_approval_detour(&outcome.stderr_tail)
+}
+
 fn finalize_persisted_run(
     db: &mut Database,
     bead_id: &BeadId,
@@ -591,6 +614,9 @@ fn finalize_persisted_run(
         SessionStatus::Crashed => (RunStatus::Failed, Some(FailureClass::ClaudeCrashed), None),
         SessionStatus::UnknownFailure if forced_kill => {
             (RunStatus::WaitingToRetry, Some(FailureClass::Interrupted), Some(ended_at))
+        }
+        SessionStatus::UnknownFailure if unknown_failure_should_retry(outcome) => {
+            (RunStatus::WaitingToRetry, Some(FailureClass::NoProgress), Some(ended_at))
         }
         SessionStatus::UnknownFailure => (RunStatus::Failed, Some(FailureClass::Unknown), None),
         SessionStatus::Starting | SessionStatus::Running => {
@@ -1263,6 +1289,7 @@ mod tests {
     use super::*;
     use grove_types::{
         BeadId, BeadPriority, BeadRef, CircuitBreakerState, CircuitState, RunId, RunStatus,
+        StopReason,
     };
     use std::error::Error;
 
@@ -2080,6 +2107,58 @@ exit "${EXIT_CODE:-0}"
                 .as_deref()
                 .is_some_and(|detail| detail.contains("failed to persist checkpoint file"))
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_runner_records_unknown_failure_with_progress_as_waiting_to_retry() -> TestResult {
+        use std::{fs, io};
+        use tempfile::tempdir;
+
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(&workspace_dir)?;
+        let workspace_dir = camino::Utf8PathBuf::from_path_buf(workspace_dir)
+            .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-life", "Lifecycle bead")?;
+
+        let script_path = dir.path().join("fake-claude");
+        write_fake_claude_script(&script_path)?;
+        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+        let mut request = sample_session_request(workspace_dir);
+        request.env = vec![
+            (
+                "STDOUT_SCRIPT".to_owned(),
+                "Implemented the plan file and requested approval.\n".to_owned(),
+            ),
+            ("STDERR_SCRIPT".to_owned(), String::new()),
+            ("EXIT_CODE".to_owned(), "0".to_owned()),
+        ];
+
+        let persisted = execute_persisted_single_task_session(
+            &mut db,
+            &backend,
+            request,
+            1,
+            &GroveConfig::default(),
+        )?;
+
+        assert_eq!(persisted.run.status, RunStatus::WaitingToRetry);
+        assert_eq!(persisted.run.failure_class, Some(FailureClass::NoProgress));
+        assert_eq!(persisted.session.session.status, SessionStatus::UnknownFailure);
+        assert_eq!(persisted.session.session.stop_reason, Some(StopReason::Unknown));
+        let bead = db
+            .get_bead_record(&BeadId::new("grove-life"))?
+            .expect("bead runtime should persist");
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
+        assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
         Ok(())
     }
 

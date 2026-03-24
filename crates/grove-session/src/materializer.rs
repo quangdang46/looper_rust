@@ -266,10 +266,10 @@ fn build_contract_section(contract: ExecutionContract) -> PromptSegment {
             "[EXECUTION CONTRACT]\nResume from the latest checkpoint and continue the in-progress task without redoing completed work."
         }
         ExecutionContract::RetryRescue => {
-            "[EXECUTION CONTRACT]\nRetry the task with a changed approach that avoids repeating the previous failure mode."
+            "[EXECUTION CONTRACT]\nRetry the task with a changed approach that avoids repeating the previous failure mode. Stay fully autonomous: do not enter plan mode, do not ask for approval, and do not stop at a proposed plan. If the work cannot be finished in this attempt, emit GROVE_CHECKPOINT plus GROVE_EXIT: false instead."
         }
         ExecutionContract::SingleTask => {
-            "[EXECUTION CONTRACT]\nComplete this single Grove task end-to-end and stop when the protocol indicates completion."
+            "[EXECUTION CONTRACT]\nComplete this single Grove task end-to-end without entering plan mode or asking for approval. If the work cannot be finished in this attempt, emit GROVE_CHECKPOINT plus GROVE_EXIT: false instead of stopping after a plan."
         }
     };
 
@@ -436,6 +436,7 @@ mod tests {
     #[test]
     fn materializer_changes_contract_framing() {
         let implement = materialize_prompt(sample_input(ExecutionContract::Implement));
+        let single = materialize_prompt(sample_input(ExecutionContract::SingleTask));
         let retry = materialize_prompt(sample_input(ExecutionContract::RetryRescue));
 
         assert!(
@@ -444,9 +445,29 @@ mod tests {
                 .contains("Implement the requested change directly")
         );
         assert!(
+            single
+                .rendered_prompt
+                .contains("without entering plan mode or asking for approval")
+        );
+        assert!(
+            single
+                .rendered_prompt
+                .contains("emit GROVE_CHECKPOINT plus GROVE_EXIT: false")
+        );
+        assert!(
             retry
                 .rendered_prompt
                 .contains("Retry the task with a changed approach")
+        );
+        assert!(
+            retry
+                .rendered_prompt
+                .contains("do not enter plan mode, do not ask for approval")
+        );
+        assert!(
+            retry
+                .rendered_prompt
+                .contains("emit GROVE_CHECKPOINT plus GROVE_EXIT: false")
         );
     }
 

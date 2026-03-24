@@ -46,61 +46,9 @@ Grove didn't appear from nothing. The exit gate and circuit breaker come from [F
 
 ## Workflow
 
-```
-You                         br / bv                        grove                          Claude
- │                            │                              │                              │
- ├─ br init                   │                              │                              │
- ├─ br create "schema"  ──────▶ issues.jsonl                  │                              │
- ├─ br create "auth"    ──────▶ issues.jsonl                  │                              │
- ├─ br dep add auth schema ───▶ dependency recorded          │                              │
- │                            │                              │                              │
- ├─ grove init          ─────────────────────────────────────▶ .grove/grove.db created       │
- ├─ grove run           ─────────────────────────────────────▶ orchestrator starts           │
- │                            │                              │                              │
- │  ┌─────────────────── coordinator loop ──────────────────────────────────────────┐       │
- │  │                         │                              │                      │       │
- │  │  sync ──────────────────▶ br ready --json              │                      │       │
- │  │                         ◀── [bd-e9b1d4]                │                      │       │
- │  │                         │                              │                      │       │
- │  │  score ─────────────────▶ bv --robot-triage    ────────▶ rank by priority     │       │
- │  │                         ◀── critical path, PageRank    │  + bv bonuses        │       │
- │  │                                                        │  + reservation check │       │
- │  │                                                        │                      │       │
- │  │  dispatch ─────────────────────────────────────────────▶ build prompt         │       │
- │  │                                                        │  (task + handoffs    │       │
- │  │                                                        │   + archive snippets │       │
- │  │                                                        │   + playbook rules)  │       │
- │  │                                                        │                      │       │
- │  │                                                        ├── claude -p "..."  ──▶ works │
- │  │                                                        │                      ◀── stdout
- │  │                                                        │                      │       │
- │  │                                                        │  parse protocol:     │       │
- │  │                                                        │   GROVE_RESULT       │       │
- │  │                                                        │   GROVE_ARTIFACTS    │       │
- │  │                                                        │   GROVE_LESSONS      │       │
- │  │                                                        │   GROVE_EXIT: true   │       │
- │  │                                                        │                      │       │
- │  │  on success:                                           │                      │       │
- │  │   persist handoff ─────────────────────────────────────▶ grove.db             │       │
- │  │   index transcript ────────────────────────────────────▶ FTS5 archive         │       │
- │  │   extract lessons ─────────────────────────────────────▶ playbook             │       │
- │  │   mirror ──────────────▶ br close bd-e9b1d4            │                      │       │
- │  │                         │                              │                      │       │
- │  │  on context pressure:                                  │                      │       │
- │  │   GROVE_CHECKPOINT ────────────────────────────────────▶ persist checkpoint   │       │
- │  │   spawn new session ───────────────────────────────────▶ claude -p "resume…" ─▶ works │
- │  │                                                        │                      │       │
- │  │  on stuck loop:                                        │                      │       │
- │  │   circuit breaker OPEN ────────────────────────────────▶ cooldown 30min       │       │
- │  │   half-open test   ────────────────────────────────────▶ retry one iteration  │       │
- │  │                                                        │                      │       │
- │  │  next tick: br ready returns newly unblocked children  │                      │       │
- │  │  repeat until all beads done                           │                      │       │
- │  └───────────────────────────────────────────────────────────────────────────────┘       │
- │                            │                              │                              │
- ◀── grove status shows results (succeeded / failed / mirror-pending)                │                              │
- │                            │                              │                              │
-```
+![Grove workflow overview](assets/workflow.png)
+
+*End-to-end Grove workflow from bead creation to mirrored completion.*
 
 ---
 
@@ -116,7 +64,7 @@ grove run
   ├─ sync br ready --json
   │     → [bd-e9b1d4, bd-7f3a2c]  (no blockers, both ready)
   │
-  ├─ score candidates (priority + critical path + bv insights)
+  ├─ score candidates (priority + critical path + bv triage insights)
   │
   ├─ dispatch top-scoring beads (up to max_parallel)
   │     session A: claude -p "<task + parent handoffs + archive snippets + playbook rules>"
@@ -126,7 +74,7 @@ grove run
   │     → persist handoff
   │     → index transcript into grove's native archive
   │     → extract lessons into playbook
-  │     → mirror to br (close + comment)
+  │     → mirror to br (`br comment add` + `br close`)
   │     → child bead C (depends on A) becomes ready
   │     → next tick: grove dispatches C
   │
@@ -266,6 +214,9 @@ grove init
 # Start orchestrator (the main command)
 grove run
 
+# Start orchestrator with the live terminal UI
+grove run --live
+
 # Check status — leader lease, ready queue, running beads, checkpoints, failures, mirror-pending state
 grove status
 
@@ -320,19 +271,24 @@ claude_bin = "claude"
 default_model = "default"   # omit --model; use a concrete name (e.g. "sonnet") to force --model
 workspace_root = "."
 timeout_minutes = 60
+env_passthrough = []         # optional env vars forwarded to Claude sessions
 
 [scheduler]
 max_parallel = 5              # parallel sessions, bounded by reservation safety
 poll_interval_ms = 1000
+shutdown_grace_period_ms = 1000
 retry_max = 3
 retry_backoff_secs = 30
 critical_path_bonus = 20
+ready_age_bonus_per_min = 1
+retry_penalty = 10
 reservation_conflict_penalty = 1000
 
 [checkpoint]
 warn_pct = 0.70               # context pressure warning
 rotate_pct = 0.82             # trigger checkpoint rotation
 hard_stop_pct = 0.90          # emergency kill threshold
+max_context_bytes = 16000
 
 [exit_policy]
 completion_indicator_threshold = 2
@@ -346,14 +302,20 @@ permission_denial_threshold = 2
 cooldown_minutes = 30
 
 [memory]
+db_path = ".grove/grove.db"
+transcript_dir = ".grove/transcripts"
 enable_playbook = true
 archive_top_k = 5
 max_prompt_snippets = 3
 max_prompt_bullets = 12
+semantic_enabled = false
 
 [reservations]
 enabled = true
 default_ttl_minutes = 60
+
+# [reactions]
+# rules = []                  # optional; omit this section to keep Grove's built-in defaults
 
 [safety]
 scan_transcripts = true
@@ -364,6 +326,8 @@ level = "info"
 persist_jsonl = true
 ```
 
+`grove init` writes a smaller default `grove.toml`; omitted keys keep their built-in defaults. The full schema above reflects the current config model.
+
 ---
 
 ## Project Structure
@@ -373,23 +337,22 @@ my-project/
 ├── .beads/                    # br-owned task graph
 │   └── issues.jsonl
 ├── .grove/                    # grove-owned runtime state
-│   ├── grove.db               # SQLite — authoritative runtime state
-│   ├── config.snapshot.json
-│   ├── lock/
-│   │   └── leader.lock        # single-coordinator enforcement
-│   ├── transcripts/
+│   ├── grove.db               # SQLite — authoritative runtime state by default
+│   ├── transcripts/           # default transcript store (configurable)
 │   │   └── <bead-id>/
 │   │       └── <session-id>.jsonl
+│   ├── prompts/               # rendered prompts / manifests for dispatched sessions
 │   ├── checkpoints/
 │   │   └── <bead-id>/
 │   │       └── <checkpoint-id>.json
 │   ├── artifacts/
 │   │   └── <bead-id>/
 │   ├── logs/
-│   │   └── orchestrator.jsonl
 │   └── tmp/
 └── grove.toml
 ```
+
+Some paths are configurable via `grove.toml`, especially `memory.db_path` and `memory.transcript_dir`.
 
 ---
 
@@ -399,9 +362,9 @@ All required. `grove init` validates them up front and exits clearly if any are 
 
 | Tool                | Purpose                                                           |
 | ------------------- | ----------------------------------------------------------------- |
-| `claude` CLI        | Execute Claude coding sessions                                    |
-| `br` (beads_rust)   | Source of truth for bead state, dependencies, and close/update sync |
-| `bv` (beads_viewer) | Graph-aware triage and planning insight                            |
+| `claude` CLI        | Execute Claude coding sessions                                      |
+| `br` (beads_rust)   | Source of truth for bead state, dependencies, comments, and close sync |
+| `bv` (beads_viewer) | Graph-aware triage and planning insight (`--robot-triage` and related robot views) |
 
 That's it. No external memory or search tool is required. Grove owns archive ingest, FTS5 retrieval, handoffs, checkpoints, recovery capsules, and playbook memory natively.
 

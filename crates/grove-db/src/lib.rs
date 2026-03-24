@@ -948,6 +948,96 @@ impl Database {
         raw.map(raw_session_into_record).transpose()
     }
 
+    fn find_stale_unknown_retryable_runs(&self) -> Result<Vec<(TaskRunRecord, ClaudeSessionRecord)>> {
+        let mut results = Vec::new();
+        for bead in self.list_bead_records()? {
+            if bead.grove_status != GroveBeadStatus::Failed
+                || bead.last_failure_class != Some(FailureClass::Unknown)
+            {
+                continue;
+            }
+            let Some(run_id) = bead.last_run_id.clone() else {
+                continue;
+            };
+            let Some(session) = self.latest_session_for_run(&run_id)? else {
+                continue;
+            };
+            if session.status != SessionStatus::UnknownFailure
+                || session.stop_reason != Some(StopReason::Unknown)
+                || !transcript_contains_plan_approval_detour(&session.transcript_path)
+            {
+                continue;
+            }
+            let Some(run) = self
+                .list_task_runs_for_bead(&bead.bead.id)?
+                .into_iter()
+                .find(|run| run.id == run_id)
+            else {
+                continue;
+            };
+            results.push((run, session));
+        }
+        Ok(results)
+    }
+
+    fn recover_stale_unknown_retryable_run(
+        &mut self,
+        stale: &(TaskRunRecord, ClaudeSessionRecord),
+        now: &chrono::DateTime<Utc>,
+    ) -> Result<InterruptedRunRecovery> {
+        let (run, _session) = stale;
+        let failure_detail =
+            "startup reconciliation reclassified a stale plan-approval detour as retryable";
+        let updated_run = self.record_run_finished(
+            &run.bead_id,
+            RunFinishInput {
+                run_id: run.id.clone(),
+                status: RunStatus::WaitingToRetry,
+                failure_class: Some(FailureClass::NoProgress),
+                failure_detail: Some(failure_detail.to_owned()),
+                ended_at: *now,
+                retry_after: Some(*now),
+                circuit_breaker_state: None,
+            },
+        )?;
+        self.write_event_log(
+            EventKind::RecoveryActionTaken,
+            Some(&run.bead_id),
+            Some(&run.id),
+            None,
+            &serde_json::json!({
+                "action": "recover_stale_unknown_retryable_run",
+                "previous_status": encode_run_status(run.status),
+                "previous_failure_class": run.failure_class.map(encode_failure_class),
+                "failure_class": encode_failure_class(FailureClass::NoProgress),
+            }),
+            now,
+        )?;
+        let recovery_capsule = RecoveryCapsule::from_parts(
+            RecoveryCapsuleOutcome::Failed,
+            Some(FailureClass::NoProgress),
+            Some(failure_detail),
+            None,
+            None,
+            Some("retry_rescue"),
+            Some("Changed retry framing: treat the stale plan-approval detour as unfinished work and continue autonomously."),
+            &[],
+        );
+        if let Some(capsule) = recovery_capsule.clone() {
+            let _ = self.write_recovery_capsule(RecoveryCapsuleWriteInput {
+                bead_id: run.bead_id.clone(),
+                run_id: run.id.clone(),
+                capsule,
+                created_at: *now,
+            })?;
+        }
+        Ok(InterruptedRunRecovery {
+            run: updated_run,
+            bead_id: run.bead_id.clone(),
+            recovery_capsule,
+        })
+    }
+
     pub fn latest_checkpoint_for_bead(&self, bead_id: &BeadId) -> Result<Option<CheckpointRecord>> {
         let mut stmt = self
             .conn
@@ -1245,104 +1335,114 @@ impl Database {
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<InterruptedRunRecovery>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin interrupted run reconciliation transaction")?;
-        let active_runs = list_runs_by_status_tx(&tx, RunStatus::Active)?;
         let mut recovered = Vec::new();
 
-        for run in active_runs {
-            let failure_detail =
-                "startup reconciliation marked previously active run as interrupted";
-            let recovered_status = if run.last_checkpoint_id.is_some() {
-                RunStatus::Checkpointed
-            } else {
-                RunStatus::WaitingToRetry
-            };
-            tx.execute(
-                "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
-                params![
-                    run.id.as_str(),
-                    encode_run_status(recovered_status),
-                    encode_failure_class(FailureClass::Interrupted),
-                    failure_detail,
-                    timestamp_string(now),
-                ],
-            )
-            .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
+        {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)
+                .context("begin interrupted run reconciliation transaction")?;
+            let active_runs = list_runs_by_status_tx(&tx, RunStatus::Active)?;
 
-            let recovered_bead_status = if run.last_checkpoint_id.is_some() {
-                GroveBeadStatus::Checkpointed
-            } else {
-                GroveBeadStatus::WaitingToRetry
-            };
-            upsert_bead_runtime_tx(
-                &tx,
-                &run.bead_id,
-                Some(recovered_bead_status),
-                None,
-                Some(Some(run.id.clone())),
-                Some(Some(*now)),
-                Some(Some(FailureClass::Interrupted)),
-                Some(Some(failure_detail.to_owned())),
-                None,
-                now,
-            )?;
+            for run in active_runs {
+                let failure_detail =
+                    "startup reconciliation marked previously active run as interrupted";
+                let recovered_status = if run.last_checkpoint_id.is_some() {
+                    RunStatus::Checkpointed
+                } else {
+                    RunStatus::WaitingToRetry
+                };
+                tx.execute(
+                    "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
+                    params![
+                        run.id.as_str(),
+                        encode_run_status(recovered_status),
+                        encode_failure_class(FailureClass::Interrupted),
+                        failure_detail,
+                        timestamp_string(now),
+                    ],
+                )
+                .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
 
-            insert_event_log_tx(
-                &tx,
-                EventKind::RecoveryActionTaken,
-                Some(&run.bead_id),
-                Some(&run.id),
-                None,
-                &serde_json::json!({
-                    "action": "interrupt_active_run",
-                    "previous_status": encode_run_status(RunStatus::Active),
-                    "failure_class": encode_failure_class(FailureClass::Interrupted),
-                }),
-                now,
-            )?;
+                let recovered_bead_status = if run.last_checkpoint_id.is_some() {
+                    GroveBeadStatus::Checkpointed
+                } else {
+                    GroveBeadStatus::WaitingToRetry
+                };
+                upsert_bead_runtime_tx(
+                    &tx,
+                    &run.bead_id,
+                    Some(recovered_bead_status),
+                    None,
+                    Some(Some(run.id.clone())),
+                    Some(Some(*now)),
+                    Some(Some(FailureClass::Interrupted)),
+                    Some(Some(failure_detail.to_owned())),
+                    None,
+                    now,
+                )?;
 
-            let recovery_capsule = RecoveryCapsule::from_parts(
-                RecoveryCapsuleOutcome::Interrupted,
-                Some(FailureClass::Interrupted),
-                Some(failure_detail),
-                None,
-                None,
-                None,
-                None,
-                &[],
-            );
-            if let Some(capsule) = recovery_capsule.as_ref() {
                 insert_event_log_tx(
                     &tx,
-                    EventKind::RecoveryCapsuleCreated,
+                    EventKind::RecoveryActionTaken,
                     Some(&run.bead_id),
                     Some(&run.id),
                     None,
-                    &serde_json::to_value(capsule)
-                        .context("serialize interrupted recovery capsule")?,
+                    &serde_json::json!({
+                        "action": "interrupt_active_run",
+                        "previous_status": encode_run_status(RunStatus::Active),
+                        "failure_class": encode_failure_class(FailureClass::Interrupted),
+                    }),
                     now,
                 )?;
+
+                let recovery_capsule = RecoveryCapsule::from_parts(
+                    RecoveryCapsuleOutcome::Interrupted,
+                    Some(FailureClass::Interrupted),
+                    Some(failure_detail),
+                    None,
+                    None,
+                    None,
+                    None,
+                    &[],
+                );
+                if let Some(capsule) = recovery_capsule.as_ref() {
+                    insert_event_log_tx(
+                        &tx,
+                        EventKind::RecoveryCapsuleCreated,
+                        Some(&run.bead_id),
+                        Some(&run.id),
+                        None,
+                        &serde_json::to_value(capsule)
+                            .context("serialize interrupted recovery capsule")?,
+                        now,
+                    )?;
+                }
+
+                let raw = tx.query_row(
+                    "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
+                     FROM task_runs WHERE id = ?1",
+                    [run.id.as_str()],
+                    raw_task_run_row,
+                )
+                .with_context(|| format!("query interrupted run {}", run.id.as_str()))?;
+                recovered.push(InterruptedRunRecovery {
+                    run: raw_task_run_into_record(raw)?,
+                    bead_id: run.bead_id.clone(),
+                    recovery_capsule,
+                });
             }
 
-            let raw = tx.query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
-                 FROM task_runs WHERE id = ?1",
-                [run.id.as_str()],
-                raw_task_run_row,
-            )
-            .with_context(|| format!("query interrupted run {}", run.id.as_str()))?;
-            recovered.push(InterruptedRunRecovery {
-                run: raw_task_run_into_record(raw)?,
-                bead_id: run.bead_id.clone(),
-                recovery_capsule,
-            });
+            tx.commit()
+                .context("commit interrupted run reconciliation transaction")?;
         }
 
-        tx.commit()
-            .context("commit interrupted run reconciliation transaction")?;
+        let stale_unknown_runs = self.find_stale_unknown_retryable_runs()?;
+        for stale in stale_unknown_runs {
+            let recovered_run = self.recover_stale_unknown_retryable_run(&stale, now)?;
+            recovered.push(recovered_run);
+        }
+
         Ok(recovered)
     }
 
@@ -3108,6 +3208,27 @@ fn list_runs_by_status_tx(tx: &Transaction<'_>, status: RunStatus) -> Result<Vec
         .collect()
 }
 
+fn normalize_transcript_line(line: &str) -> String {
+    line.split_whitespace()
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn transcript_contains_plan_approval_detour(transcript_path: &str) -> bool {
+    let Ok(content) = fs::read_to_string(transcript_path) else {
+        return false;
+    };
+
+    content.lines().any(|line| {
+        let normalized = normalize_transcript_line(line);
+        normalized.contains("requested approval")
+            || normalized.contains("plan file")
+            || normalized.contains("plan mode")
+    })
+}
+
+
 fn list_expired_unreleased_reservations_tx(
     tx: &Transaction<'_>,
     now: &chrono::DateTime<Utc>,
@@ -3820,6 +3941,7 @@ mod tests {
     use anyhow::Result;
     use camino::Utf8PathBuf;
     use chrono::Utc;
+    use std::fs;
     use grove_br::{
         BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError, BrIssueDetail,
         BrIssueSummary, BrVersion, sync_bead_cache,
@@ -4304,7 +4426,7 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_interrupted_runs_marks_active_runs_failed() -> Result<()> {
+    fn reconcile_interrupted_runs_marks_active_runs_retryable() -> Result<()> {
         let dir = tempdir()?;
         let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
             .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
@@ -4316,7 +4438,7 @@ mod tests {
         let recovered = db.reconcile_interrupted_runs(&"2026-03-16T12:05:00Z".parse()?)?;
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].bead_id.as_str(), "grove-interrupted");
-        assert_eq!(recovered[0].run.status, RunStatus::Failed);
+        assert_eq!(recovered[0].run.status, RunStatus::WaitingToRetry);
         assert_eq!(
             recovered[0].run.failure_class,
             Some(FailureClass::Interrupted)
@@ -4332,7 +4454,7 @@ mod tests {
         let bead = db
             .get_bead_record(&BeadId::new("grove-interrupted"))?
             .unwrap();
-        assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
         assert_eq!(bead.last_failure_class, Some(FailureClass::Interrupted));
 
         let capsule = db
@@ -4340,6 +4462,92 @@ mod tests {
             .unwrap();
         assert_eq!(capsule.capsule.outcome, RecoveryCapsuleOutcome::Interrupted);
         assert!(capsule.capsule.summary.contains("persisted durable state"));
+        Ok(())
+    }
+
+    #[test]
+    fn reconcile_stale_unknown_plan_approval_runs_marks_them_retryable() -> Result<()> {
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(workspace_dir.join(".grove/transcripts/grove-stale"))?;
+        let transcript_path = workspace_dir.join(".grove/transcripts/grove-stale/ses-stale.jsonl");
+        fs::write(
+            &transcript_path,
+            concat!(
+                "{\"ts\":\"2026-03-16T11:00:00Z\",\"kind\":\"session_started\",\"session_id\":\"ses-stale\"}\n",
+                "{\"ts\":\"2026-03-16T11:01:00Z\",\"kind\":\"stdout\",\"line\":\"Implemented the plan file and requested approval.\"}\n",
+                "{\"ts\":\"2026-03-16T11:02:00Z\",\"kind\":\"session_ended\",\"exit_code\":0}\n"
+            ),
+        )?;
+        let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-stale", "Stale plan bead")?;
+        db.connection().execute(
+            "INSERT INTO task_runs(\
+                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13)",
+            rusqlite::params![
+                "run-stale",
+                "grove-stale",
+                1,
+                "Failed",
+                "Unknown",
+                "session ended with Unknown",
+                "2026-03-16T11:00:00Z",
+                "2026-03-16T11:02:00Z",
+                1,
+                0,
+                "Exited",
+                "2026-03-16T11:02:00Z",
+                "FirstAttempt",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO bead_runtime(\
+                bead_id, grove_status, declared_paths_json, metadata_json, last_run_id, retry_after,\
+                last_failure_class, last_failure_detail, runtime_updated_at\
+             ) VALUES (?1, ?2, '[]', '{}', ?3, NULL, ?4, ?5, ?6)",
+            rusqlite::params![
+                "grove-stale",
+                "Failed",
+                "run-stale",
+                "Unknown",
+                "session ended with Unknown",
+                "2026-03-16T11:02:00Z",
+            ],
+        )?;
+        db.connection().execute(
+            "INSERT INTO claude_sessions(\
+                id, run_id, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path\
+             ) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, NULL, NULL, 0, 0, 0, ?7, ?8, ?9)",
+            rusqlite::params![
+                "ses-stale",
+                "run-stale",
+                1,
+                "UnknownFailure",
+                "2026-03-16T11:00:00Z",
+                "2026-03-16T11:02:00Z",
+                0,
+                "Unknown",
+                transcript_path.to_string_lossy(),
+            ],
+        )?;
+
+        let recovered = db.reconcile_interrupted_runs(&"2026-03-16T12:05:00Z".parse()?)?;
+        let recovered = recovered
+            .into_iter()
+            .find(|entry| entry.run.id == RunId::new("run-stale"))
+            .expect("stale run should be recovered");
+        assert_eq!(recovered.run.status, RunStatus::WaitingToRetry);
+        assert_eq!(recovered.run.failure_class, Some(FailureClass::NoProgress));
+
+        let bead = db
+            .get_bead_record(&BeadId::new("grove-stale"))?
+            .unwrap();
+        assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
+        assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
         Ok(())
     }
 
