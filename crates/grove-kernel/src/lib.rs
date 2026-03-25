@@ -196,7 +196,6 @@ pub fn execute_persisted_single_task_session_after_run_started<B: ClaudeBackend>
     session_id: grove_types::SessionId,
     checkpoint_root: PathBuf,
 ) -> Result<PersistedTaskRunOutcome> {
-
     let mut hooks = DbSessionLifecycleHooks::new(
         db,
         bead_id.clone(),
@@ -633,12 +632,16 @@ fn finalize_persisted_run(
             None,
         ),
         SessionStatus::Crashed => (RunStatus::Failed, Some(FailureClass::ClaudeCrashed), None),
-        SessionStatus::UnknownFailure if forced_kill => {
-            (RunStatus::WaitingToRetry, Some(FailureClass::Interrupted), Some(ended_at))
-        }
-        SessionStatus::UnknownFailure if unknown_failure_should_retry(outcome) => {
-            (RunStatus::WaitingToRetry, Some(FailureClass::NoProgress), Some(ended_at))
-        }
+        SessionStatus::UnknownFailure if forced_kill => (
+            RunStatus::WaitingToRetry,
+            Some(FailureClass::Interrupted),
+            Some(ended_at),
+        ),
+        SessionStatus::UnknownFailure if unknown_failure_should_retry(outcome) => (
+            RunStatus::WaitingToRetry,
+            Some(FailureClass::NoProgress),
+            Some(ended_at),
+        ),
         SessionStatus::UnknownFailure => (RunStatus::Failed, Some(FailureClass::Unknown), None),
         SessionStatus::Starting | SessionStatus::Running => {
             (RunStatus::Failed, Some(FailureClass::Unknown), None)
@@ -742,7 +745,8 @@ fn persist_fallback_checkpoint(
     failure_class: Option<FailureClass>,
     failure_detail: Option<&str>,
 ) -> Result<Option<grove_types::CheckpointRecord>> {
-    let Some(payload) = synthetic_checkpoint_payload_from_outcome(outcome, failure_class, failure_detail)
+    let Some(payload) =
+        synthetic_checkpoint_payload_from_outcome(outcome, failure_class, failure_detail)
     else {
         return Ok(None);
     };
@@ -1751,7 +1755,10 @@ mod tests {
 
         assert_eq!(report.interrupted_runs.len(), 1);
         assert_eq!(report.interrupted_runs[0].bead_id.as_str(), "grove-recover");
-        assert_eq!(report.interrupted_runs[0].run.status, RunStatus::WaitingToRetry);
+        assert_eq!(
+            report.interrupted_runs[0].run.status,
+            RunStatus::WaitingToRetry
+        );
         assert_eq!(
             report.interrupted_runs[0].run.failure_class,
             Some(FailureClass::Interrupted)
@@ -2037,7 +2044,11 @@ exit "${EXIT_CODE:-0}"
         let lines = read_trace_log_lines(&workspace_dir)?;
         assert!(lines.iter().any(|line| line["event"] == "session.started"));
         assert!(lines.iter().any(|line| line["event"] == "session.finished"));
-        assert!(lines.iter().any(|line| line["event"] == "session.run_result"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line["event"] == "session.run_result")
+        );
         Ok(())
     }
 
@@ -2211,7 +2222,8 @@ exit "${EXIT_CODE:-0}"
 
     #[cfg(unix)]
     #[test]
-    fn persisted_runner_writes_fallback_checkpoint_for_crashed_run_without_protocol_checkpoint() -> TestResult {
+    fn persisted_runner_writes_fallback_checkpoint_for_crashed_run_without_protocol_checkpoint()
+    -> TestResult {
         use std::{fs, io};
         use tempfile::tempdir;
 
@@ -2229,14 +2241,16 @@ exit "${EXIT_CODE:-0}"
 
         let script_path = dir.path().join("fake-claude-crash");
         write_fake_claude_script(&script_path)?;
-        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+        let backend =
+            grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
 
         let mut request = sample_session_request(workspace_dir.clone());
         request.env = vec![
             ("STDOUT_SCRIPT".to_owned(), "starting work\n".to_owned()),
             (
                 "STDERR_SCRIPT".to_owned(),
-                "API Error: 400 The image data you provided does not represent a valid image\n".to_owned(),
+                "API Error: 400 The image data you provided does not represent a valid image\n"
+                    .to_owned(),
             ),
             ("EXIT_CODE".to_owned(), "1".to_owned()),
         ];
@@ -2250,17 +2264,32 @@ exit "${EXIT_CODE:-0}"
         )?;
 
         assert_eq!(persisted.run.status, RunStatus::Failed);
-        assert_eq!(persisted.run.failure_class, Some(FailureClass::ClaudeCrashed));
+        assert_eq!(
+            persisted.run.failure_class,
+            Some(FailureClass::ClaudeCrashed)
+        );
         let checkpoint = persisted
             .checkpoint
             .expect("fallback checkpoint should be written for crash without GROVE_CHECKPOINT");
         assert!(checkpoint.id.as_str().contains("fallback"));
-        assert!(checkpoint.progress.contains("Synthetic fallback checkpoint"));
-        assert!(checkpoint.next_step.contains("Resume from the transcript tail"));
-        let checkpoint_path = workspace_dir
-            .as_std_path()
-            .join(format!(".grove/checkpoints/grove-life/{}.json", checkpoint.id.as_str()));
-        assert!(checkpoint_path.exists(), "fallback checkpoint file should be written");
+        assert!(
+            checkpoint
+                .progress
+                .contains("Synthetic fallback checkpoint")
+        );
+        assert!(
+            checkpoint
+                .next_step
+                .contains("Resume from the transcript tail")
+        );
+        let checkpoint_path = workspace_dir.as_std_path().join(format!(
+            ".grove/checkpoints/grove-life/{}.json",
+            checkpoint.id.as_str()
+        ));
+        assert!(
+            checkpoint_path.exists(),
+            "fallback checkpoint file should be written"
+        );
         Ok(())
     }
 
@@ -2284,7 +2313,8 @@ exit "${EXIT_CODE:-0}"
 
         let script_path = dir.path().join("fake-claude");
         write_fake_claude_script(&script_path)?;
-        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+        let backend =
+            grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
 
         let mut request = sample_session_request(workspace_dir);
         request.env = vec![
@@ -2306,8 +2336,14 @@ exit "${EXIT_CODE:-0}"
 
         assert_eq!(persisted.run.status, RunStatus::WaitingToRetry);
         assert_eq!(persisted.run.failure_class, Some(FailureClass::NoProgress));
-        assert_eq!(persisted.session.session.status, SessionStatus::UnknownFailure);
-        assert_eq!(persisted.session.session.stop_reason, Some(StopReason::Unknown));
+        assert_eq!(
+            persisted.session.session.status,
+            SessionStatus::UnknownFailure
+        );
+        assert_eq!(
+            persisted.session.session.stop_reason,
+            Some(StopReason::Unknown)
+        );
         let bead = db
             .get_bead_record(&BeadId::new("grove-life"))?
             .expect("bead runtime should persist");
@@ -2343,7 +2379,8 @@ exit "${EXIT_CODE:-0}"
             permissions.set_mode(0o755);
         }
         fs::set_permissions(&script_path, permissions)?;
-        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+        let backend =
+            grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
 
         let request = sample_session_request(workspace_dir);
         let persisted = execute_persisted_single_task_session(
@@ -2356,7 +2393,10 @@ exit "${EXIT_CODE:-0}"
 
         assert_eq!(persisted.run.status, RunStatus::WaitingToRetry);
         assert_eq!(persisted.run.failure_class, Some(FailureClass::NoProgress));
-        assert_eq!(persisted.session.session.status, SessionStatus::UnknownFailure);
+        assert_eq!(
+            persisted.session.session.status,
+            SessionStatus::UnknownFailure
+        );
         assert_eq!(persisted.session.session.exit_code, None);
         let bead = db
             .get_bead_record(&BeadId::new("grove-life"))?
@@ -2369,7 +2409,10 @@ exit "${EXIT_CODE:-0}"
     #[cfg(unix)]
     #[test]
     fn persisted_runner_records_forced_kill_as_waiting_to_retry() -> TestResult {
-        use std::{fs, io, sync::{Arc, atomic::AtomicBool}};
+        use std::{
+            fs, io,
+            sync::{Arc, atomic::AtomicBool},
+        };
         use tempfile::tempdir;
 
         let dir = tempdir()?;
@@ -2393,7 +2436,8 @@ exit "${EXIT_CODE:-0}"
             permissions.set_mode(0o755);
         }
         fs::set_permissions(&script_path, permissions)?;
-        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+        let backend =
+            grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
 
         let shutdown = Arc::new(AtomicBool::new(true));
         let mut request = sample_session_request(workspace_dir);

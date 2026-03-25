@@ -308,7 +308,9 @@ fn slow_starting_session_does_not_flip_idle_before_first_output() -> TestResult 
 
     let changes = hooks.changes.lock().expect("lock activity changes");
     assert!(
-        !changes.iter().any(|(activity, _, _)| *activity == AgentActivity::Idle),
+        !changes
+            .iter()
+            .any(|(activity, _, _)| *activity == AgentActivity::Idle),
         "default idle grace period should not mark a session idle before its first delayed output"
     );
     Ok(())

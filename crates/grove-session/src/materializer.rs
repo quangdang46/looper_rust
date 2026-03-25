@@ -263,12 +263,7 @@ fn apply_budget(sections: Vec<PromptSegment>, token_budget: Option<u32>) -> Budg
 }
 
 fn build_startup_prompt_section(text: &str) -> PromptSegment {
-    build_text_section(
-        PromptSegmentKind::StartupPrompt,
-        0,
-        "Startup prompt",
-        text,
-    )
+    build_text_section(PromptSegmentKind::StartupPrompt, 0, "Startup prompt", text)
 }
 
 fn build_contract_section(contract: ExecutionContract) -> PromptSegment {
@@ -516,7 +511,8 @@ mod tests {
     #[test]
     fn materializer_includes_startup_prompt_first_and_never_trims_it() {
         let mut input = sample_input(ExecutionContract::Implement);
-        input.startup_prompt = Some("First read ALL of AGENTS.md and README.md carefully.".to_owned());
+        input.startup_prompt =
+            Some("First read ALL of AGENTS.md and README.md carefully.".to_owned());
         input.token_budget = Some(10);
 
         let materialized = materialize_prompt(input);
@@ -529,9 +525,11 @@ mod tests {
 
         assert!(startup.included);
         assert_eq!(startup.trim_reason, None);
-        assert!(materialized
-            .rendered_prompt
-            .starts_with("First read ALL of AGENTS.md and README.md carefully."));
+        assert!(
+            materialized
+                .rendered_prompt
+                .starts_with("First read ALL of AGENTS.md and README.md carefully.")
+        );
     }
 
     #[test]

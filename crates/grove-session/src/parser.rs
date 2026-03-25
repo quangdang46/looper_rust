@@ -280,7 +280,10 @@ mod tests {
         parser.parse_stdout_line("");
         let plain = parser.parse_stdout_line("- not a warning anymore");
 
-        assert_eq!(plain, ParserLineKind::PlainStdout("- not a warning anymore".to_owned()));
+        assert_eq!(
+            plain,
+            ParserLineKind::PlainStdout("- not a warning anymore".to_owned())
+        );
         assert_eq!(parser.state().warnings, vec!["first warning".to_owned()]);
     }
 }

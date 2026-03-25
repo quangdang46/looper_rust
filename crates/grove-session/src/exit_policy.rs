@@ -38,7 +38,9 @@ impl ExitPolicy {
             return ExitDecision::Success;
         }
 
-        if !self.require_explicit_exit && analysis.completion_indicators >= self.completion_indicator_threshold {
+        if !self.require_explicit_exit
+            && analysis.completion_indicators >= self.completion_indicator_threshold
+        {
             ExitDecision::Success
         } else {
             ExitDecision::Continue

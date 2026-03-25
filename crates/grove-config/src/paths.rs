@@ -104,7 +104,10 @@ impl GrovePaths {
         vec![
             ("memory.db_path", self.db_path.clone()),
             ("memory.transcript_dir", self.transcript_dir.clone()),
-            ("runtime.startup_prompt_path", self.startup_prompt_path.clone()),
+            (
+                "runtime.startup_prompt_path",
+                self.startup_prompt_path.clone(),
+            ),
             ("prompts_dir", self.prompts_dir()),
             ("checkpoints_dir", self.checkpoints_dir()),
             ("artifacts_dir", self.artifacts_dir()),
@@ -117,8 +120,14 @@ impl GrovePaths {
     pub fn managed_reset_paths(&self) -> Vec<(&'static str, Utf8PathBuf)> {
         let mut paths = vec![
             ("memory.db_path", self.db_path.clone()),
-            ("memory.db_path_wal", Utf8PathBuf::from(format!("{}-wal", self.db_path))),
-            ("memory.db_path_shm", Utf8PathBuf::from(format!("{}-shm", self.db_path))),
+            (
+                "memory.db_path_wal",
+                Utf8PathBuf::from(format!("{}-wal", self.db_path)),
+            ),
+            (
+                "memory.db_path_shm",
+                Utf8PathBuf::from(format!("{}-shm", self.db_path)),
+            ),
             (
                 "memory.db_path_journal",
                 Utf8PathBuf::from(format!("{}-journal", self.db_path)),

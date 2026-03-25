@@ -1,14 +1,14 @@
+use crate::RunStartInput;
 use crate::status_view::{SuppressionReasonView, find_reservation_conflicts};
 use crate::{
     AcquireReservationInput, DispatchEligibilityContext, LeaderLeaseConfig, LeaderLeaseManager,
     LocalSuppressionReason, PersistedTaskRunOutcome, ReservationManager,
     execute_persisted_single_task_session_after_run_started,
 };
-use crate::RunStartInput;
 use anyhow::{Context, Result};
 use camino::{Utf8Path, Utf8PathBuf};
 use grove_br::BrClient;
-use grove_config::{GroveConfig, DEFAULT_CHECKPOINTS_DIR_NAME, DEFAULT_GROVE_DIR_NAME};
+use grove_config::{DEFAULT_CHECKPOINTS_DIR_NAME, DEFAULT_GROVE_DIR_NAME, GroveConfig};
 use grove_db::Database;
 use grove_session::{
     CheckpointPromptInput, ClaudeBackend, ContextMonitor, ExitPolicy, SessionShutdownConfig,
@@ -16,8 +16,7 @@ use grove_session::{
 };
 use grove_types::{
     BeadId, CoordinatorStopReason, EscalationTier, ExecutionContract, GroveBeadRecord,
-    GroveBeadStatus, PromptId, ReservationConflict, ReservationMode, RunId, SessionId,
-    Timestamp,
+    GroveBeadStatus, PromptId, ReservationConflict, ReservationMode, RunId, SessionId, Timestamp,
 };
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -195,16 +194,16 @@ fn summarize_blocked_ready_beads(
     let mut sample_beads = Vec::new();
     let mut blocked_ready_count = 0usize;
 
-    for bead in beads.iter().filter(|bead| ready_ids.contains(&bead.bead.id)) {
+    for bead in beads
+        .iter()
+        .filter(|bead| ready_ids.contains(&bead.bead.id))
+    {
         let eligibility = crate::evaluate_dispatch_eligibility(
             bead,
             &DispatchEligibilityContext {
                 ready_in_br: true,
                 circuit_state: crate::circuit_state_for_bead(bead),
-                reservation_conflicts: reservation_conflicts_for_bead(
-                    bead,
-                    reservation_conflicts,
-                ),
+                reservation_conflicts: reservation_conflicts_for_bead(bead, reservation_conflicts),
                 now,
             },
         );
@@ -389,22 +388,14 @@ fn handle_completed_worker<C: BrClient>(
             {
                 match br.mirror_handoff(&ctx.bead_id, handoff, true) {
                     Ok(()) => {
-                        eprintln!(
-                            "grove dispatch: mirrored {} to br",
-                            ctx.bead_id.as_str()
-                        );
+                        eprintln!("grove dispatch: mirrored {} to br", ctx.bead_id.as_str());
                     }
                     Err(error) => {
                         eprintln!(
                             "grove dispatch: mirror failed for {}: {error}",
                             ctx.bead_id.as_str()
                         );
-                        let _ = db.enqueue_mirror_outbox(
-                            &ctx.bead_id,
-                            &ctx.run_id,
-                            handoff,
-                            true,
-                        );
+                        let _ = db.enqueue_mirror_outbox(&ctx.bead_id, &ctx.run_id, handoff, true);
                         apply_reaction_side_effects(
                             db,
                             config,
@@ -2166,7 +2157,8 @@ mod tests {
     }
 
     #[test]
-    fn apply_reaction_side_effects_marks_failed_without_outcome_when_no_backoff_rule_matches() -> TestResult {
+    fn apply_reaction_side_effects_marks_failed_without_outcome_when_no_backoff_rule_matches()
+    -> TestResult {
         let dir = tempdir()?;
         let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
             .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;

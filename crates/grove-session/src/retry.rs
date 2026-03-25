@@ -344,14 +344,21 @@ mod tests {
     fn claude_crash_with_invalid_image_input_forces_text_only_retry_guidance() {
         let mut outcome = sample_outcome(IterationAnalysis::default(), SessionTerminalClass::Crash);
         outcome.stdout_tail = vec![
-            "API Error: 400 The image data you provided does not represent a valid image".to_owned(),
+            "API Error: 400 The image data you provided does not represent a valid image"
+                .to_owned(),
         ];
 
         let plan = plan_retry_mutation(FailureClass::ClaudeCrashed, Some(&outcome));
 
         assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
-        assert!(plan.retry_delta_summary.contains("avoid attaching or opening image inputs"));
-        assert!(plan.rescue_card.contains("Do not attach, open, or inspect image inputs"));
+        assert!(
+            plan.retry_delta_summary
+                .contains("avoid attaching or opening image inputs")
+        );
+        assert!(
+            plan.rescue_card
+                .contains("Do not attach, open, or inspect image inputs")
+        );
     }
 
     #[test]

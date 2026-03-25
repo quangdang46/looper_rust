@@ -1,6 +1,4 @@
-use crate::defaults::{
-    DEFAULT_DB_PATH, DEFAULT_STARTUP_PROMPT_PATH, DEFAULT_TRANSCRIPT_DIR,
-};
+use crate::defaults::{DEFAULT_DB_PATH, DEFAULT_STARTUP_PROMPT_PATH, DEFAULT_TRANSCRIPT_DIR};
 use grove_types::{ReactionRule, default_reactions};
 use serde::{Deserialize, Serialize};
 

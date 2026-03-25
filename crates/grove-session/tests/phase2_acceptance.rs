@@ -158,27 +158,28 @@ fn single_task_prompt_discourages_plan_approval_stops() -> TestResult {
         .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
 
     let request = sample_request(workspace_dir);
-    let materialized = grove_session::materialize_prompt(grove_session::PromptMaterializationInput {
-        prompt_id: request.prompt_id.clone(),
-        bead_id: request.bead_id.clone(),
-        run_id: request.run_id.clone(),
-        created_at: Utc::now(),
-        contract: request.contract,
-        task_title: request.task_title.clone(),
-        task_description: request.task_description.clone(),
-        startup_prompt: request.startup_prompt.clone(),
-        reservation_hints: request.reservation_hints.clone(),
-        parent_handoffs: request.parent_handoffs.clone(),
-        checkpoint: None,
-        protocol_block: "[GROVE PROTOCOL]\nGROVE_EXIT: true".to_owned(),
-        rescue_card: None,
-        token_budget: request.token_budget,
-        retry_delta_summary: None,
-        retrieval_query: None,
-        archive_bundle: None,
-        playbook_rules: Vec::new(),
-        escalation_context: None,
-    });
+    let materialized =
+        grove_session::materialize_prompt(grove_session::PromptMaterializationInput {
+            prompt_id: request.prompt_id.clone(),
+            bead_id: request.bead_id.clone(),
+            run_id: request.run_id.clone(),
+            created_at: Utc::now(),
+            contract: request.contract,
+            task_title: request.task_title.clone(),
+            task_description: request.task_description.clone(),
+            startup_prompt: request.startup_prompt.clone(),
+            reservation_hints: request.reservation_hints.clone(),
+            parent_handoffs: request.parent_handoffs.clone(),
+            checkpoint: None,
+            protocol_block: "[GROVE PROTOCOL]\nGROVE_EXIT: true".to_owned(),
+            rescue_card: None,
+            token_budget: request.token_budget,
+            retry_delta_summary: None,
+            retrieval_query: None,
+            archive_bundle: None,
+            playbook_rules: Vec::new(),
+            escalation_context: None,
+        });
 
     assert!(
         materialized
@@ -204,28 +205,30 @@ fn retry_rescue_prompt_discourages_plan_approval_stops() -> TestResult {
     let mut request = sample_request(workspace_dir);
     request.contract = ExecutionContract::RetryRescue;
     request.rescue_card = Some("Avoid the previous stuck path.".to_owned());
-    request.retry_delta_summary = Some("Changed retry framing for autonomous continuation.".to_owned());
-    let materialized = grove_session::materialize_prompt(grove_session::PromptMaterializationInput {
-        prompt_id: request.prompt_id.clone(),
-        bead_id: request.bead_id.clone(),
-        run_id: request.run_id.clone(),
-        created_at: Utc::now(),
-        contract: request.contract,
-        task_title: request.task_title.clone(),
-        task_description: request.task_description.clone(),
-        startup_prompt: request.startup_prompt.clone(),
-        reservation_hints: request.reservation_hints.clone(),
-        parent_handoffs: request.parent_handoffs.clone(),
-        checkpoint: None,
-        protocol_block: "[GROVE PROTOCOL]\nGROVE_EXIT: true".to_owned(),
-        rescue_card: request.rescue_card.clone(),
-        token_budget: request.token_budget,
-        retry_delta_summary: request.retry_delta_summary.clone(),
-        retrieval_query: None,
-        archive_bundle: None,
-        playbook_rules: Vec::new(),
-        escalation_context: None,
-    });
+    request.retry_delta_summary =
+        Some("Changed retry framing for autonomous continuation.".to_owned());
+    let materialized =
+        grove_session::materialize_prompt(grove_session::PromptMaterializationInput {
+            prompt_id: request.prompt_id.clone(),
+            bead_id: request.bead_id.clone(),
+            run_id: request.run_id.clone(),
+            created_at: Utc::now(),
+            contract: request.contract,
+            task_title: request.task_title.clone(),
+            task_description: request.task_description.clone(),
+            startup_prompt: request.startup_prompt.clone(),
+            reservation_hints: request.reservation_hints.clone(),
+            parent_handoffs: request.parent_handoffs.clone(),
+            checkpoint: None,
+            protocol_block: "[GROVE PROTOCOL]\nGROVE_EXIT: true".to_owned(),
+            rescue_card: request.rescue_card.clone(),
+            token_budget: request.token_budget,
+            retry_delta_summary: request.retry_delta_summary.clone(),
+            retrieval_query: None,
+            archive_bundle: None,
+            playbook_rules: Vec::new(),
+            escalation_context: None,
+        });
 
     assert!(
         materialized

@@ -16,16 +16,14 @@ use grove_db::Database;
 use grove_kernel::{
     BeadInspectView, DispatchBlockedSummary, DispatchExitReason, DispatchLoopConfig,
     DispatchLoopOutcome, LeaderLeaseConfig, LeaderLeaseManager, ShutdownSignal,
-    StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator,
-    init_trace_logging, load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop,
-    trace_runtime_event,
+    StartupRecoveryReport, WorkspaceStatusView, acquire_startup_coordinator, init_trace_logging,
+    load_bead_inspect_view, load_workspace_status_view, run_dispatch_loop, trace_runtime_event,
 };
 use grove_session::replay_transcript;
 use grove_types::{
     AgentActivity, BeadId, BeadPriority, EventKind, GroveBeadRecord, GroveBeadStatus,
     LeaderLeaseRecord, ProtocolEvent, RunReport, RunStatus, TranscriptEvent,
 };
-use rusqlite::OptionalExtension;
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
@@ -34,6 +32,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph, Tabs, Wrap},
 };
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use std::{cmp, env, fs, io, io::IsTerminal, sync::mpsc, thread, time::Duration};
 
@@ -54,9 +53,15 @@ enum Command {
         force: bool,
     },
     Status,
-    Inspect { bead_id: String },
-    Log { bead_id: String },
-    Retry { bead_id: String },
+    Inspect {
+        bead_id: String,
+    },
+    Log {
+        bead_id: String,
+    },
+    Retry {
+        bead_id: String,
+    },
     Run {
         #[arg(long, action = ArgAction::SetTrue)]
         live: bool,
@@ -74,7 +79,9 @@ fn main() -> Result<()> {
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
         Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id), cli.json),
         Some(Command::Retry { bead_id }) => handle_retry(&BeadId::new(bead_id), cli.json),
-        Some(Command::Run { live }) => run_json_command("run", cli.json, || handle_run(cli.json, live)),
+        Some(Command::Run { live }) => {
+            run_json_command("run", cli.json, || handle_run(cli.json, live))
+        }
         None => {
             if cli.json {
                 println!(
@@ -133,11 +140,12 @@ fn print_dispatch_blocked_summary(
     };
 
     println!("Blocked ready beads: {}", summary.blocked_ready_count);
-    if let Some(top_reason) = summary.reason_counts.iter().max_by_key(|reason| reason.count) {
-        println!(
-            "Top blocker: {} ({})",
-            top_reason.summary, top_reason.count
-        );
+    if let Some(top_reason) = summary
+        .reason_counts
+        .iter()
+        .max_by_key(|reason| reason.count)
+    {
+        println!("Top blocker: {} ({})", top_reason.summary, top_reason.count);
     }
     if let Some(sample) = summary.sample_beads.first() {
         println!("Sample blocked bead: {}", sample.bead_id.as_str());
@@ -207,9 +215,12 @@ fn try_autonomous_dispatch_blocked_recovery(
             continue;
         }
 
-        let bead = db
-            .get_bead_record(&sample.bead_id)?
-            .ok_or_else(|| anyhow!("blocked bead {} missing from local cache", sample.bead_id.as_str()))?;
+        let bead = db.get_bead_record(&sample.bead_id)?.ok_or_else(|| {
+            anyhow!(
+                "blocked bead {} missing from local cache",
+                sample.bead_id.as_str()
+            )
+        })?;
         let blocked_reason_codes = sample
             .reasons
             .iter()
@@ -351,7 +362,10 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
         println!("- wrote default config: {}", loaded.paths.config_path());
     }
     if wrote_startup_prompt {
-        println!("- wrote startup prompt template: {}", loaded.paths.startup_prompt_path());
+        println!(
+            "- wrote startup prompt template: {}",
+            loaded.paths.startup_prompt_path()
+        );
     }
     if br_capability.beads_dir_exists {
         println!("- bead cache synced: {synced_beads} bead(s)");
@@ -374,7 +388,9 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
     if !br_capability.beads_dir_exists || !bv_capability.beads_dir_exists || force {
         println!("\nNotes:");
         if force {
-            println!("- Forced reset requested; Grove-managed runtime state was cleared before initialization.");
+            println!(
+                "- Forced reset requested; Grove-managed runtime state was cleared before initialization."
+            );
         }
         if !br_capability.beads_dir_exists {
             println!(
@@ -516,7 +532,10 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
 
     let (loaded, mut db, br) = open_runtime()?;
     let mut autonomous_recovery_attempted = false;
-    init_trace_logging(loaded.paths.workspace_root(), loaded.config.logging.persist_jsonl)?;
+    init_trace_logging(
+        loaded.paths.workspace_root(),
+        loaded.config.logging.persist_jsonl,
+    )?;
     trace_runtime_event(
         "coordinator.run_started",
         serde_json::json!({
@@ -587,8 +606,11 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
         && outcome.exit_reason == DispatchExitReason::DispatchBlocked
         && !autonomous_recovery_attempted
     {
-        let recovered_bead_ids =
-            try_autonomous_dispatch_blocked_recovery(&mut db, &br, outcome.blocked_summary.as_ref())?;
+        let recovered_bead_ids = try_autonomous_dispatch_blocked_recovery(
+            &mut db,
+            &br,
+            outcome.blocked_summary.as_ref(),
+        )?;
         if !recovered_bead_ids.is_empty() {
             autonomous_recovery_attempted = true;
             if !json_mode {
@@ -673,7 +695,9 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
                 println!("Total poll cycles: {}", outcome.poll_cycles);
                 match outcome.exit_reason {
                     DispatchExitReason::QueueEmpty => {
-                        println!("No runnable beads remain right now. The project may still have unfinished work that is blocked locally; check `grove status` for active runs, checkpoints, retry backoff, failed-awaiting-manual-retry, reservation conflicts, or `dispatch:no` suppressions.");
+                        println!(
+                            "No runnable beads remain right now. The project may still have unfinished work that is blocked locally; check `grove status` for active runs, checkpoints, retry backoff, failed-awaiting-manual-retry, reservation conflicts, or `dispatch:no` suppressions."
+                        );
                     }
                     DispatchExitReason::DispatchBlocked => {
                         print_dispatch_blocked_summary(
@@ -1034,7 +1058,12 @@ impl LiveAuditState {
             .count();
         let failed = bead_records
             .iter()
-            .filter(|bead| matches!(bead.grove_status, GroveBeadStatus::Failed | GroveBeadStatus::WaitingToRetry))
+            .filter(|bead| {
+                matches!(
+                    bead.grove_status,
+                    GroveBeadStatus::Failed | GroveBeadStatus::WaitingToRetry
+                )
+            })
             .collect::<Vec<_>>();
 
         self.running = bead_records
@@ -1049,10 +1078,21 @@ impl LiveAuditState {
                     bead_id: bead.bead.id.clone(),
                     title: bead.bead.title.clone(),
                     run_id: bead.last_run_id.as_ref().map(ToString::to_string),
-                    session_id: latest_session.as_ref().map(|session| session.id.to_string()),
-                    transcript_path: latest_session.as_ref().map(|session| session.transcript_path.clone()),
-                    started_at: latest_session.as_ref().map(|session| session.started_at.to_rfc3339()),
-                    run_status: bead.last_run_id.as_ref().and_then(|run_id| db.generate_run_report(run_id).ok().flatten().map(|report| report.status)),
+                    session_id: latest_session
+                        .as_ref()
+                        .map(|session| session.id.to_string()),
+                    transcript_path: latest_session
+                        .as_ref()
+                        .map(|session| session.transcript_path.clone()),
+                    started_at: latest_session
+                        .as_ref()
+                        .map(|session| session.started_at.to_rfc3339()),
+                    run_status: bead.last_run_id.as_ref().and_then(|run_id| {
+                        db.generate_run_report(run_id)
+                            .ok()
+                            .flatten()
+                            .map(|report| report.status)
+                    }),
                     activity: bead
                         .last_run_id
                         .as_ref()
@@ -1095,7 +1135,10 @@ impl LiveAuditState {
     }
 }
 
-fn minimal_status_list_lines(beads: &[GroveBeadRecord], failed: &[&GroveBeadRecord]) -> Vec<String> {
+fn minimal_status_list_lines(
+    beads: &[GroveBeadRecord],
+    failed: &[&GroveBeadRecord],
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     let running = beads
@@ -1166,14 +1209,16 @@ fn run_activity(db: &Database, run_id: &str) -> Result<Option<AgentActivity>> {
         .optional()
         .context("query run activity")?
         .flatten()
-        .map(|activity: String| match activity.to_ascii_lowercase().as_str() {
-            "active" => Ok(AgentActivity::Active),
-            "ready" => Ok(AgentActivity::Ready),
-            "idle" => Ok(AgentActivity::Idle),
-            "blocked" => Ok(AgentActivity::Blocked),
-            "exited" => Ok(AgentActivity::Exited),
-            other => bail!("unknown activity value {other}"),
-        })
+        .map(
+            |activity: String| match activity.to_ascii_lowercase().as_str() {
+                "active" => Ok(AgentActivity::Active),
+                "ready" => Ok(AgentActivity::Ready),
+                "idle" => Ok(AgentActivity::Idle),
+                "blocked" => Ok(AgentActivity::Blocked),
+                "exited" => Ok(AgentActivity::Exited),
+                other => bail!("unknown activity value {other}"),
+            },
+        )
         .transpose()
 }
 
@@ -1229,7 +1274,10 @@ fn summarize_event_kind(kind: EventKind, payload: &serde_json::Value) -> String 
             .get("activity")
             .and_then(|v| v.as_str())
             .map(|activity| {
-                let detail = payload.get("detail").and_then(|v| v.as_str()).unwrap_or("-");
+                let detail = payload
+                    .get("detail")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
                 format!("activity → {activity} ({detail})")
             })
             .unwrap_or_else(|| "activity changed".to_owned()),
@@ -1287,11 +1335,15 @@ fn summarize_live_event(kind: &str, payload: &serde_json::Value) -> String {
         "ActivityStateChanged" => summarize_event_kind(EventKind::ActivityStateChanged, payload),
         "RecoveryActionTaken" => summarize_event_kind(EventKind::RecoveryActionTaken, payload),
         "CoordinatorStopped" => summarize_event_kind(EventKind::CoordinatorStopped, payload),
-        "RecoveryCapsuleCreated" => summarize_event_kind(EventKind::RecoveryCapsuleCreated, payload),
+        "RecoveryCapsuleCreated" => {
+            summarize_event_kind(EventKind::RecoveryCapsuleCreated, payload)
+        }
         "SessionTerminationRequested" => {
             summarize_event_kind(EventKind::SessionTerminationRequested, payload)
         }
-        "SessionTerminationForced" => summarize_event_kind(EventKind::SessionTerminationForced, payload),
+        "SessionTerminationForced" => {
+            summarize_event_kind(EventKind::SessionTerminationForced, payload)
+        }
         "EscalationTierChanged" => summarize_event_kind(EventKind::EscalationTierChanged, payload),
         "EscalationTierReset" => summarize_event_kind(EventKind::EscalationTierReset, payload),
         "HandoffWritten" => summarize_event_kind(EventKind::HandoffWritten, payload),
@@ -1345,7 +1397,7 @@ fn read_live_transcript_lines(path: &str) -> Result<Vec<String>> {
             return Ok(vec![
                 "Transcript is still being written...".to_owned(),
                 "Retrying on next refresh.".to_owned(),
-            ])
+            ]);
         }
     };
     let mut lines = replay
@@ -1358,12 +1410,15 @@ fn read_live_transcript_lines(path: &str) -> Result<Vec<String>> {
                 "PROTO {}",
                 match event {
                     ProtocolEvent::Result { summary } => format!("result: {summary}"),
-                    ProtocolEvent::Artifacts { items } => format!("artifacts: {}", items.join(", ")),
+                    ProtocolEvent::Artifacts { items } =>
+                        format!("artifacts: {}", items.join(", ")),
                     ProtocolEvent::Lessons { items } => format!("lessons: {}", items.join(", ")),
-                    ProtocolEvent::Decisions { items } => format!("decisions: {}", items.join(", ")),
+                    ProtocolEvent::Decisions { items } =>
+                        format!("decisions: {}", items.join(", ")),
                     ProtocolEvent::Warnings { items } => format!("warnings: {}", items.join(", ")),
                     ProtocolEvent::Exit { value } => format!("exit: {value}"),
-                    ProtocolEvent::Checkpoint { payload } => format!("checkpoint: {} -> {}", payload.progress, payload.next_step),
+                    ProtocolEvent::Checkpoint { payload } =>
+                        format!("checkpoint: {} -> {}", payload.progress, payload.next_step),
                 }
             )),
             TranscriptEvent::SessionStarted { session_id, .. } => {
@@ -1408,7 +1463,9 @@ fn run_dispatch_loop_with_live_ui(
     });
 
     if !io::stdout().is_terminal() {
-        return rx.recv().context("receive dispatch result from worker thread");
+        return rx
+            .recv()
+            .context("receive dispatch result from worker thread");
     }
 
     let mut live_hidden = false;
@@ -1417,7 +1474,9 @@ fn run_dispatch_loop_with_live_ui(
     let mut completed: Option<Result<DispatchLoopOutcome>> = None;
 
     loop {
-        if completed.is_none() && let Ok(result) = rx.try_recv() {
+        if completed.is_none()
+            && let Ok(result) = rx.try_recv()
+        {
             completed = Some(result);
             if live_hidden {
                 return Ok(completed.expect("completed result must exist"));
@@ -1465,7 +1524,8 @@ fn run_dispatch_loop_with_live_ui(
                         KeyCode::Down => match state.tab {
                             LiveTab::Status => {
                                 if !state.running.is_empty() {
-                                    state.selected = (state.selected + 1).min(state.running.len() - 1);
+                                    state.selected =
+                                        (state.selected + 1).min(state.running.len() - 1);
                                     state.live_scroll = 0;
                                 }
                             }
@@ -1589,8 +1649,14 @@ fn draw_live_audit(frame: &mut Frame<'_>, state: &LiveAuditState) {
 
     let leader = state.leader.as_deref().unwrap_or("none");
     let header = Paragraph::new(vec![Line::from(vec![
-        Span::styled("grove --live", Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(format!("  workspace={}  leader={leader}", state.workspace_root)),
+        Span::styled(
+            "grove --live",
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            "  workspace={}  leader={leader}",
+            state.workspace_root
+        )),
     ])])
     .block(Block::default().borders(Borders::ALL).title("Live Audit"));
     frame.render_widget(header, layout[0]);
@@ -1643,10 +1709,22 @@ fn draw_live_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
                 Line::from(format!("bead: {}", session.bead_id)),
                 Line::from(format!("title: {}", session.title)),
                 Line::from(format!("run: {}", session.run_id.as_deref().unwrap_or("-"))),
-                Line::from(format!("session: {}", session.session_id.as_deref().unwrap_or("-"))),
-                Line::from(format!("started: {}", session.started_at.as_deref().unwrap_or("-"))),
-                Line::from(format!("run status: {}", display_option(session.run_status.map(|status| format!("{status:?}"))))),
-                Line::from(format!("activity: {}", display_option(session.activity.map(|activity| format!("{activity:?}"))))),
+                Line::from(format!(
+                    "session: {}",
+                    session.session_id.as_deref().unwrap_or("-")
+                )),
+                Line::from(format!(
+                    "started: {}",
+                    session.started_at.as_deref().unwrap_or("-")
+                )),
+                Line::from(format!(
+                    "run status: {}",
+                    display_option(session.run_status.map(|status| format!("{status:?}")))
+                )),
+                Line::from(format!(
+                    "activity: {}",
+                    display_option(session.activity.map(|activity| format!("{activity:?}")))
+                )),
             ];
             if let Some(detail) = session.failure_detail.as_deref() {
                 lines.push(Line::from(format!("detail: {detail}")));
@@ -1660,8 +1738,11 @@ fn draw_live_tab(frame: &mut Frame<'_>, area: Rect, state: &LiveAuditState) {
                 Line::from("This tab will show live Claude output once a session starts."),
             ]
         });
-    let details = Paragraph::new(details)
-        .block(Block::default().borders(Borders::ALL).title("Current Session"));
+    let details = Paragraph::new(details).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Current Session"),
+    );
     frame.render_widget(details, chunks[0]);
 
     let transcript = Paragraph::new(state.transcript_lines.join("\n"))
@@ -1731,7 +1812,8 @@ fn existing_init_artifacts(paths: &GrovePaths) -> Vec<String> {
         .initialization_markers()
         .into_iter()
         .filter_map(|(label, path)| {
-            path.exists().then_some(format!("{label}={}", path.as_str()))
+            path.exists()
+                .then_some(format!("{label}={}", path.as_str()))
         })
         .collect()
 }
@@ -1828,7 +1910,10 @@ mod tests {
 
         let payload = serde_json::to_value(summary).expect("blocked summary should serialize");
         assert_eq!(payload["blocked_ready_count"], 1);
-        assert_eq!(payload["reason_counts"][0]["code"], "failed_awaiting_manual_retry");
+        assert_eq!(
+            payload["reason_counts"][0]["code"],
+            "failed_awaiting_manual_retry"
+        );
         assert_eq!(payload["sample_beads"][0]["bead_id"], "saw-1rb");
     }
 
@@ -1861,11 +1946,17 @@ mod tests {
         };
         let blocked_reason_codes = vec!["failed_awaiting_manual_retry"];
 
-        assert!(should_autonomously_reset_blocked_bead(&bead, &blocked_reason_codes));
+        assert!(should_autonomously_reset_blocked_bead(
+            &bead,
+            &blocked_reason_codes
+        ));
 
         let mut bead = bead;
         bead.last_failure_class = Some(grove_types::FailureClass::PermissionDenied);
-        assert!(!should_autonomously_reset_blocked_bead(&bead, &blocked_reason_codes));
+        assert!(!should_autonomously_reset_blocked_bead(
+            &bead,
+            &blocked_reason_codes
+        ));
     }
 }
 

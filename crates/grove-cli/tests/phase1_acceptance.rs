@@ -776,14 +776,20 @@ fn init_json_reports_initialized_workspace_as_machine_readable_failure() -> Test
     fs::create_dir_all(harness.workspace_root.join(".grove/logs"))?;
 
     let output = harness.run(["--json", "init"])?;
-    assert!(output.status.success(), "json failure payload should still exit successfully");
+    assert!(
+        output.status.success(),
+        "json failure payload should still exit successfully"
+    );
 
     let stdout = String::from_utf8(output.stdout)?;
     let payload: serde_json::Value = serde_json::from_str(&stdout)?;
     assert_eq!(payload["ok"], false);
     assert_eq!(payload["command"], "init");
     let errors = payload["error"].as_array().expect("error array");
-    assert!(errors.iter().any(|v| v.as_str().is_some_and(|s| s.contains("already initialized"))));
+    assert!(errors.iter().any(|v| {
+        v.as_str()
+            .is_some_and(|s| s.contains("already initialized"))
+    }));
     Ok(())
 }
 
@@ -794,8 +800,14 @@ fn init_force_resets_runtime_state_but_preserves_config() -> TestResult {
     harness.seed_runtime_bead(GroveBeadStatus::Running)?;
     fs::create_dir_all(harness.workspace_root.join(".grove/logs"))?;
     fs::create_dir_all(harness.workspace_root.join(".grove/prompts"))?;
-    fs::write(harness.workspace_root.join(".grove/logs/runtime.jsonl"), "old-log\n")?;
-    fs::write(harness.workspace_root.join(".grove/prompts/keep-me.txt"), "stale prompt")?;
+    fs::write(
+        harness.workspace_root.join(".grove/logs/runtime.jsonl"),
+        "old-log\n",
+    )?;
+    fs::write(
+        harness.workspace_root.join(".grove/prompts/keep-me.txt"),
+        "stale prompt",
+    )?;
     fs::write(
         harness.workspace_root.join(".grove/startup_prompt.md"),
         "custom startup instructions\n",
@@ -804,18 +816,28 @@ fn init_force_resets_runtime_state_but_preserves_config() -> TestResult {
     let original_config = fs::read_to_string(harness.workspace_root.join("grove.toml"))?;
 
     let output = harness.run(["init", "--force"])?;
-    assert!(output.status.success(), "init --force should succeed: {}", output_text(&output));
+    assert!(
+        output.status.success(),
+        "init --force should succeed: {}",
+        output_text(&output)
+    );
 
     let db = Database::open(&harness.workspace_root.join(".grove/grove.db"))?;
-    let bead_count: i64 = db
-        .connection()
-        .query_row("SELECT COUNT(*) FROM bead_cache", [], |row| row.get(0))?;
-    assert_eq!(bead_count, 1, "bead cache should be re-synced after force init");
+    let bead_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM bead_cache", [], |row| row.get(0))?;
+    assert_eq!(
+        bead_count, 1,
+        "bead cache should be re-synced after force init"
+    );
 
-    let run_count: i64 = db
-        .connection()
-        .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))?;
-    assert_eq!(run_count, 0, "runtime task runs should be cleared by force init");
+    let run_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))?;
+    assert_eq!(
+        run_count, 0,
+        "runtime task runs should be cleared by force init"
+    );
 
     assert_eq!(
         fs::read_to_string(harness.workspace_root.join("grove.toml"))?,
@@ -833,7 +855,10 @@ fn init_force_resets_runtime_state_but_preserves_config() -> TestResult {
         "force init should preserve the user-owned startup prompt file"
     );
     assert!(
-        !harness.workspace_root.join(".grove/prompts/keep-me.txt").exists(),
+        !harness
+            .workspace_root
+            .join(".grove/prompts/keep-me.txt")
+            .exists(),
         "force init should clear Grove-managed prompt artifacts"
     );
 

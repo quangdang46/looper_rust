@@ -467,7 +467,8 @@ mod tests {
     #[test]
     fn detects_invalid_image_input_from_api_error_text() {
         let stdout = vec![
-            "API Error: 400 The image data you provided does not represent a valid image".to_owned(),
+            "API Error: 400 The image data you provided does not represent a valid image"
+                .to_owned(),
         ];
         let stderr = Vec::new();
 

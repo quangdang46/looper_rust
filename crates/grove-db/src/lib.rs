@@ -948,7 +948,9 @@ impl Database {
         raw.map(raw_session_into_record).transpose()
     }
 
-    fn find_stale_unknown_retryable_runs(&self) -> Result<Vec<(TaskRunRecord, ClaudeSessionRecord)>> {
+    fn find_stale_unknown_retryable_runs(
+        &self,
+    ) -> Result<Vec<(TaskRunRecord, ClaudeSessionRecord)>> {
         let mut results = Vec::new();
         for bead in self.list_bead_records()? {
             if bead.grove_status != GroveBeadStatus::Failed
@@ -1021,7 +1023,9 @@ impl Database {
             None,
             None,
             Some("retry_rescue"),
-            Some("Changed retry framing: treat the stale plan-approval detour as unfinished work and continue autonomously."),
+            Some(
+                "Changed retry framing: treat the stale plan-approval detour as unfinished work and continue autonomously.",
+            ),
             &[],
         );
         if let Some(capsule) = recovery_capsule.clone() {
@@ -1685,7 +1689,11 @@ impl Database {
         bead_id: &BeadId,
         now: &chrono::DateTime<Utc>,
     ) -> Result<()> {
-        self.reset_bead_for_retry_with_action(bead_id, now, serde_json::json!({"action": "retry_reset"}))
+        self.reset_bead_for_retry_with_action(
+            bead_id,
+            now,
+            serde_json::json!({"action": "retry_reset"}),
+        )
     }
 
     pub fn reset_bead_for_retry_with_action(
@@ -3253,7 +3261,6 @@ fn transcript_suggests_retryable_unknown_failure(transcript_path: &str) -> bool 
     saw_plan_detour || !saw_activity_payload
 }
 
-
 fn list_expired_unreleased_reservations_tx(
     tx: &Transaction<'_>,
     now: &chrono::DateTime<Utc>,
@@ -3966,7 +3973,6 @@ mod tests {
     use anyhow::Result;
     use camino::Utf8PathBuf;
     use chrono::Utc;
-    use std::fs;
     use grove_br::{
         BeadCacheStore, BrCapability, BrClient, BrDependencySnapshot, BrError, BrIssueDetail,
         BrIssueSummary, BrVersion, sync_bead_cache,
@@ -3980,6 +3986,7 @@ mod tests {
     use rusqlite::OptionalExtension;
     use serde_json::json;
     use std::collections::BTreeMap;
+    use std::fs;
     use tempfile::tempdir;
 
     use super::{
@@ -4617,9 +4624,7 @@ mod tests {
         assert_eq!(recovered.run.status, RunStatus::WaitingToRetry);
         assert_eq!(recovered.run.failure_class, Some(FailureClass::NoProgress));
 
-        let bead = db
-            .get_bead_record(&BeadId::new("grove-stale"))?
-            .unwrap();
+        let bead = db.get_bead_record(&BeadId::new("grove-stale"))?.unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
         assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
         Ok(())
@@ -4701,9 +4706,7 @@ mod tests {
         assert_eq!(recovered.run.status, RunStatus::WaitingToRetry);
         assert_eq!(recovered.run.failure_class, Some(FailureClass::NoProgress));
 
-        let bead = db
-            .get_bead_record(&BeadId::new("grove-empty"))?
-            .unwrap();
+        let bead = db.get_bead_record(&BeadId::new("grove-empty"))?.unwrap();
         assert_eq!(bead.grove_status, GroveBeadStatus::WaitingToRetry);
         assert_eq!(bead.last_failure_class, Some(FailureClass::NoProgress));
         Ok(())
