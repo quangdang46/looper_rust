@@ -195,7 +195,8 @@ br create "Implement auth middleware" --type task
 br dep add bd-7f3a2c bd-e9b1d4   # auth depends on schema
 
 # Init grove
-grove init
+# Add --skills to scaffold the bundled flywheel-beads skill into .agents/skills/
+grove init --skills
 
 # Optional: customize the startup prompt template grove injects into new Claude sessions
 $EDITOR .grove/startup_prompt.md
@@ -206,6 +207,8 @@ grove run
 
 `grove init` creates a user-owned startup prompt template at `.grove/startup_prompt.md` if it does not already exist. Edit that file to change the baseline instructions Grove injects into every freshly spawned Claude session. Re-running `grove init` will preserve your edited file unless you delete it yourself.
 
+If you pass `grove init --skills`, Grove also scaffolds the bundled `flywheel-beads` skill into `.agents/skills/flywheel-beads/SKILL.md`. That scaffold is create-if-missing and becomes user-owned immediately, so reruns (including `--force`) preserve any edits you make there.
+
 Grove handles everything from here. When it finishes, your beads are closed and mirrored back to `br`. If a mirror fails, grove preserves the local result and flags it for retry — run `grove status` to see what landed and what needs attention.
 
 ---
@@ -215,6 +218,10 @@ Grove handles everything from here. When it finishes, your beads are closed and 
 ```bash
 # Init grove workspace
 grove init
+
+# Init grove and scaffold the bundled flywheel-beads skill for Claude Code
+# into .agents/skills/flywheel-beads/SKILL.md
+grove init --skills
 
 # Start orchestrator (the main command)
 grove run

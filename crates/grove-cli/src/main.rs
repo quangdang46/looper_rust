@@ -51,6 +51,8 @@ enum Command {
     Init {
         #[arg(long, action = ArgAction::SetTrue)]
         force: bool,
+        #[arg(long, action = ArgAction::SetTrue)]
+        skills: bool,
     },
     Status,
     Inspect {
@@ -72,8 +74,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Init { force }) => {
-            run_json_command("init", cli.json, || handle_init(cli.json, force))
+        Some(Command::Init { force, skills }) => {
+            run_json_command("init", cli.json, || handle_init(cli.json, force, skills))
         }
         Some(Command::Status) => handle_status(cli.json),
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
@@ -254,7 +256,9 @@ fn try_autonomous_dispatch_blocked_recovery(
     Ok(recovered)
 }
 
-fn handle_init(json_mode: bool, force: bool) -> Result<()> {
+const FLYWHEEL_BEADS_SKILL_TEMPLATE: &str = include_str!("../../../skills/flywheel-beads/SKILL.md");
+
+fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
     let workspace_root = current_workspace_root()?;
     let config_path = workspace_root.join("grove.toml");
     let paths = resolve_init_paths(&workspace_root, &config_path)?;
@@ -285,6 +289,15 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
     })?;
     ensure_workspace_layout(&loaded.paths)?;
     let wrote_startup_prompt = ensure_startup_prompt_file(&loaded.paths)?;
+    let flywheel_skill_path = loaded
+        .paths
+        .workspace_root()
+        .join(".agents/skills/flywheel-beads/SKILL.md");
+    let wrote_flywheel_skill = if skills {
+        ensure_flywheel_beads_skill_file(&flywheel_skill_path)?
+    } else {
+        false
+    };
 
     let tooling = detect_required_tooling(&loaded.config);
     ensure_required_tooling(&tooling)?;
@@ -329,8 +342,11 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
                 "transcript_dir": loaded.paths.transcript_dir().as_str(),
                 "checkpoints_dir": loaded.paths.checkpoints_dir().as_str(),
                 "startup_prompt_path": loaded.paths.startup_prompt_path().as_str(),
+                "skills_requested": skills,
+                "flywheel_skill_path": skills.then_some(flywheel_skill_path.as_str()),
                 "wrote_default_config": wrote_default_config,
                 "wrote_startup_prompt": wrote_startup_prompt,
+                "wrote_flywheel_skill": skills.then_some(wrote_flywheel_skill),
                 "forced_reset": force,
                 "synced_beads": synced_beads,
                 "tooling": {
@@ -358,6 +374,9 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
     println!("- transcripts: {}", loaded.paths.transcript_dir());
     println!("- checkpoints: {}", loaded.paths.checkpoints_dir());
     println!("- startup prompt: {}", loaded.paths.startup_prompt_path());
+    if skills {
+        println!("- flywheel skill: {flywheel_skill_path}");
+    }
     if wrote_default_config {
         println!("- wrote default config: {}", loaded.paths.config_path());
     }
@@ -366,6 +385,13 @@ fn handle_init(json_mode: bool, force: bool) -> Result<()> {
             "- wrote startup prompt template: {}",
             loaded.paths.startup_prompt_path()
         );
+    }
+    if skills {
+        if wrote_flywheel_skill {
+            println!("- wrote flywheel skill scaffold: {flywheel_skill_path}");
+        } else {
+            println!("- preserved existing flywheel skill: {flywheel_skill_path}");
+        }
     }
     if br_capability.beads_dir_exists {
         println!("- bead cache synced: {synced_beads} bead(s)");
@@ -1852,6 +1878,21 @@ fn ensure_startup_prompt_file(paths: &GrovePaths) -> Result<bool> {
         "First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your code investigation agent mode to fully understand the code, and technical architecture and purpose of the project. Then register with MCP Agent Mail and introduce yourself to the other agents. Be sure to check your agent mail and to promptly respond if needed to any messages; then proceed meticulously with your next assigned beads, working on the tasks systematically and meticulously and tracking your progress via beads and agent mail messages. Don't get stuck in \"communication purgatory\" where nothing is getting done; be proactive about starting tasks that need to be done, but inform your fellow agents via messages when you do so and mark beads appropriately. When you're not sure what to do next, use the bv tool mentioned in AGENTS.md to prioritize the best beads to work on next; pick the next one that you can usefully work on and get started. Make sure to acknowledge all communication requests from other agents and that you are aware of all active agents and their names. Use /effort max.\n"
     );
     fs::write(path, text).with_context(|| format!("write startup prompt template to {path}"))?;
+    Ok(true)
+}
+
+fn ensure_flywheel_beads_skill_file(path: &Utf8Path) -> Result<bool> {
+    if path.exists() {
+        return Ok(false);
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create flywheel skill directory {parent}"))?;
+    }
+
+    fs::write(path, FLYWHEEL_BEADS_SKILL_TEMPLATE)
+        .with_context(|| format!("write flywheel skill scaffold to {path}"))?;
     Ok(true)
 }
 

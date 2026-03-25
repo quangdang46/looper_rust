@@ -866,13 +866,127 @@ fn init_force_resets_runtime_state_but_preserves_config() -> TestResult {
 }
 
 #[test]
+fn init_force_with_skills_creates_scaffold_and_preserves_existing_file() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+
+    let skill_path = harness
+        .workspace_root
+        .join(".agents/skills/flywheel-beads/SKILL.md");
+
+    let first_output = harness.run(["init", "--force", "--skills"])?;
+    assert!(
+        first_output.status.success(),
+        "init --force --skills should succeed: {}",
+        output_text(&first_output)
+    );
+    assert_eq!(
+        fs::read_to_string(&skill_path)?,
+        include_str!("../../../skills/flywheel-beads/SKILL.md"),
+        "init --skills should scaffold the bundled flywheel skill"
+    );
+
+    fs::write(&skill_path, "custom flywheel skill\n")?;
+
+    let second_output = harness.run(["init", "--force", "--skills"])?;
+    assert!(
+        second_output.status.success(),
+        "second init --force --skills should succeed: {}",
+        output_text(&second_output)
+    );
+    assert_eq!(
+        fs::read_to_string(&skill_path)?,
+        "custom flywheel skill\n",
+        "init --skills should preserve an existing user-owned skill file"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_force_with_skills_preserves_skill_while_resetting_runtime_state() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+    harness.seed_runtime_bead(GroveBeadStatus::Running)?;
+    fs::create_dir_all(harness.workspace_root.join(".grove/logs"))?;
+    fs::create_dir_all(harness.workspace_root.join(".grove/prompts"))?;
+    fs::write(
+        harness.workspace_root.join(".grove/logs/runtime.jsonl"),
+        "old-log\n",
+    )?;
+    fs::write(
+        harness.workspace_root.join(".grove/prompts/keep-me.txt"),
+        "stale prompt",
+    )?;
+    fs::write(
+        harness.workspace_root.join(".grove/startup_prompt.md"),
+        "custom startup instructions\n",
+    )?;
+    let skill_path = harness
+        .workspace_root
+        .join(".agents/skills/flywheel-beads/SKILL.md");
+    fs::create_dir_all(skill_path.parent().expect("skill scaffold parent"))?;
+    fs::write(&skill_path, "custom flywheel skill\n")?;
+    let original_config = fs::read_to_string(harness.workspace_root.join("grove.toml"))?;
+
+    let output = harness.run(["init", "--force", "--skills"])?;
+    assert!(
+        output.status.success(),
+        "init --force --skills should succeed: {}",
+        output_text(&output)
+    );
+
+    let db = Database::open(&harness.workspace_root.join(".grove/grove.db"))?;
+    let bead_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM bead_cache", [], |row| row.get(0))?;
+    assert_eq!(
+        bead_count, 1,
+        "bead cache should be re-synced after force init"
+    );
+
+    let run_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM task_runs", [], |row| row.get(0))?;
+    assert_eq!(
+        run_count, 0,
+        "runtime task runs should be cleared by force init"
+    );
+
+    assert_eq!(
+        fs::read_to_string(harness.workspace_root.join("grove.toml"))?,
+        original_config,
+        "force init should preserve grove.toml"
+    );
+    assert_eq!(
+        fs::read_to_string(harness.workspace_root.join(".grove/startup_prompt.md"))?,
+        "custom startup instructions\n",
+        "force init should preserve the user-owned startup prompt file"
+    );
+    assert_eq!(
+        fs::read_to_string(&skill_path)?,
+        "custom flywheel skill\n",
+        "force init should preserve the user-owned flywheel skill file"
+    );
+    assert!(
+        !harness
+            .workspace_root
+            .join(".grove/prompts/keep-me.txt")
+            .exists(),
+        "force init should clear Grove-managed prompt artifacts"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn init_json_emits_machine_readable_output() -> TestResult {
     let harness = CliHarness::new()?;
-    let output = harness.run(["--json", "init", "--force"])?;
+    let output = harness.run(["--json", "init", "--force", "--skills"])?;
 
     assert!(
         output.status.success(),
-        "init --json --force should succeed: {}",
+        "init --json --force --skills should succeed: {}",
         output_text(&output)
     );
     let stdout = String::from_utf8(output.stdout)?;
@@ -882,6 +996,9 @@ fn init_json_emits_machine_readable_output() -> TestResult {
     assert!(payload["db_path"].as_str().is_some());
     assert!(payload["config_path"].as_str().is_some());
     assert!(payload["startup_prompt_path"].as_str().is_some());
+    assert_eq!(payload["skills_requested"], true);
+    assert!(payload["flywheel_skill_path"].as_str().is_some());
+    assert_eq!(payload["wrote_flywheel_skill"], true);
     assert!(payload["tooling"].is_object());
     assert!(payload["notes"].is_array());
     assert!(payload["next_steps"].is_array());
