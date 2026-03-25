@@ -1429,10 +1429,10 @@ fn read_live_transcript_lines(path: &str) -> Result<Vec<String>> {
     let mut lines = replay
         .events
         .into_iter()
-        .filter_map(|event| match event {
-            TranscriptEvent::StdoutLine { line, .. } => Some(format!("OUT  {line}")),
-            TranscriptEvent::StderrLine { line, .. } => Some(format!("ERR  {line}")),
-            TranscriptEvent::ParsedProtocol { event, .. } => Some(format!(
+        .map(|event| match event {
+            TranscriptEvent::StdoutLine { line, .. } => format!("OUT  {line}"),
+            TranscriptEvent::StderrLine { line, .. } => format!("ERR  {line}"),
+            TranscriptEvent::ParsedProtocol { event, .. } => format!(
                 "PROTO {}",
                 match event {
                     ProtocolEvent::Result { summary } => format!("result: {summary}"),
@@ -1446,12 +1446,12 @@ fn read_live_transcript_lines(path: &str) -> Result<Vec<String>> {
                     ProtocolEvent::Checkpoint { payload } =>
                         format!("checkpoint: {} -> {}", payload.progress, payload.next_step),
                 }
-            )),
+            ),
             TranscriptEvent::SessionStarted { session_id, .. } => {
-                Some(format!("SESSION started {}", session_id.as_str()))
+                format!("SESSION started {}", session_id.as_str())
             }
             TranscriptEvent::SessionEnded { exit_code, .. } => {
-                Some(format!("SESSION ended {:?}", exit_code))
+                format!("SESSION ended {:?}", exit_code)
             }
         })
         .collect::<Vec<_>>();
@@ -1505,7 +1505,10 @@ fn run_dispatch_loop_with_live_ui(
         {
             completed = Some(result);
             if live_hidden {
-                return Ok(completed.expect("completed result must exist"));
+                if let Some(completed) = completed {
+                    return Ok(completed);
+                }
+                unreachable!("completed result must exist");
             }
         }
 
@@ -1640,18 +1643,18 @@ fn hide_live_ui(
     reason: &str,
     detail: Option<&str>,
 ) {
-    if let Some(mut terminal) = terminal.take() {
-        if let Err(error) = leave_live_terminal(&mut terminal) {
-            trace_runtime_event(
-                "coordinator.live_ui_hide_error",
-                serde_json::json!({
-                    "reason": reason,
-                    "detail": detail,
-                    "cleanup_error": error.to_string(),
-                }),
-            );
-            return;
-        }
+    if let Some(mut terminal) = terminal.take()
+        && let Err(error) = leave_live_terminal(&mut terminal)
+    {
+        trace_runtime_event(
+            "coordinator.live_ui_hide_error",
+            serde_json::json!({
+                "reason": reason,
+                "detail": detail,
+                "cleanup_error": error.to_string(),
+            }),
+        );
+        return;
     }
 
     trace_runtime_event(
@@ -1874,9 +1877,7 @@ fn ensure_startup_prompt_file(paths: &GrovePaths) -> Result<bool> {
         return Ok(false);
     }
 
-    let text = concat!(
-        "First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your code investigation agent mode to fully understand the code, and technical architecture and purpose of the project. Then register with MCP Agent Mail and introduce yourself to the other agents. Be sure to check your agent mail and to promptly respond if needed to any messages; then proceed meticulously with your next assigned beads, working on the tasks systematically and meticulously and tracking your progress via beads and agent mail messages. Don't get stuck in \"communication purgatory\" where nothing is getting done; be proactive about starting tasks that need to be done, but inform your fellow agents via messages when you do so and mark beads appropriately. When you're not sure what to do next, use the bv tool mentioned in AGENTS.md to prioritize the best beads to work on next; pick the next one that you can usefully work on and get started. Make sure to acknowledge all communication requests from other agents and that you are aware of all active agents and their names. Use /effort max.\n"
-    );
+    let text = "First read ALL of the AGENTS.md file and README.md file super carefully and understand ALL of both! Then use your code investigation agent mode to fully understand the code, and technical architecture and purpose of the project. Then register with MCP Agent Mail and introduce yourself to the other agents. Be sure to check your agent mail and to promptly respond if needed to any messages; then proceed meticulously with your next assigned beads, working on the tasks systematically and meticulously and tracking your progress via beads and agent mail messages. Don't get stuck in \"communication purgatory\" where nothing is getting done; be proactive about starting tasks that need to be done, but inform your fellow agents via messages when you do so and mark beads appropriately. When you're not sure what to do next, use the bv tool mentioned in AGENTS.md to prioritize the best beads to work on next; pick the next one that you can usefully work on and get started. Make sure to acknowledge all communication requests from other agents and that you are aware of all active agents and their names. Use /effort max.\n";
     fs::write(path, text).with_context(|| format!("write startup prompt template to {path}"))?;
     Ok(true)
 }
@@ -1897,8 +1898,12 @@ fn ensure_flywheel_beads_skill_file(path: &Utf8Path) -> Result<bool> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_test_module,
+    clippy::unwrap_used,
+    clippy::expect_used
+)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
     use grove_kernel::{BlockedReasonCount, BlockedSampleBead, BlockedSampleReason};
