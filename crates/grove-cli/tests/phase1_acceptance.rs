@@ -1788,7 +1788,7 @@ impl CliHarness {
 fn stub_path(bin_dir: &camino::Utf8Path, name: &str) -> camino::Utf8PathBuf {
     #[cfg(windows)]
     {
-        return bin_dir.join(format!("{name}.cmd"));
+        bin_dir.join(format!("{name}.cmd"))
     }
     #[cfg(not(windows))]
     {

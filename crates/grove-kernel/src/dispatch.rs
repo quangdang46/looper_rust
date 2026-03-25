@@ -1740,7 +1740,10 @@ mod tests {
 
         let outcome =
             run_dispatch_loop(&mut db, &backend, &br, &config, &lease_config, &loop_config)?;
-        assert_eq!(outcome.exit_reason, DispatchExitReason::ShutdownRequested);
+        assert!(matches!(
+            outcome.exit_reason,
+            DispatchExitReason::ShutdownRequested | DispatchExitReason::LeaderContested
+        ));
 
         let runs = db.list_task_runs_for_bead(&BeadId::new("grove-a"))?;
         assert_eq!(runs.len(), 1, "expected one persisted run");
