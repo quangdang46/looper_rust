@@ -1,0 +1,114 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BINARY_NAME: grove
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: true
+            archive-suffix: linux-x86_64
+            archive-ext: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            use-cross: true
+            archive-suffix: linux-aarch64
+            archive-ext: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            use-cross: false
+            archive-suffix: macos-x86_64
+            archive-ext: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            use-cross: false
+            archive-suffix: macos-aarch64
+            archive-ext: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            use-cross: false
+            archive-suffix: windows-x86_64
+            archive-ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: taiki-e/install-action@cross
+        if: matrix.use-cross
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build with cross
+        if: matrix.use-cross
+        run: cross build --release --locked --target ${{ matrix.target }} --package grove-cli
+
+      - name: Build natively
+        if: ${{ !matrix.use-cross }}
+        run: cargo build --release --locked --target ${{ matrix.target }} --package grove-cli
+
+      - name: Package Unix archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME}"
+          archive="${BINARY_NAME}-${version}-${{ matrix.archive-suffix }}.tar.gz"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${BINARY_NAME}" dist/
+          tar -C dist -czf "$archive" "$BINARY_NAME"
+          shasum -a 256 "$archive" | awk '{print $1}' > "$archive.sha256"
+
+      - name: Package Windows archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${env:GITHUB_REF_NAME}"
+          $archive = "${env:BINARY_NAME}-$version-${{ matrix.archive-suffix }}.zip"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" "dist/${env:BINARY_NAME}.exe"
+          Compress-Archive -Path "dist/${env:BINARY_NAME}.exe" -DestinationPath $archive -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLower()
+          Set-Content -Path "$archive.sha256" -NoNewline -Value $hash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            *.tar.gz
+            *.zip
+            *.sha256
+
+  release:
+    name: Publish GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

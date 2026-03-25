@@ -166,7 +166,7 @@ Grove also records reaction evaluations on failure paths and can persist recover
 ## Install
 
 ```bash
-cargo install --git https://github.com/quangdang46/grove
+curl -fsSL "https://raw.githubusercontent.com/quangdang46/grove/main/install.sh?$(date +%s)" | bash
 ```
 
 **Required tools (install first):**
@@ -197,9 +197,14 @@ br dep add bd-7f3a2c bd-e9b1d4   # auth depends on schema
 # Init grove
 grove init
 
+# Optional: customize the startup prompt template grove injects into new Claude sessions
+$EDITOR .grove/startup_prompt.md
+
 # Run — then go do something else
 grove run
 ```
+
+`grove init` creates a user-owned startup prompt template at `.grove/startup_prompt.md` if it does not already exist. Edit that file to change the baseline instructions Grove injects into every freshly spawned Claude session. Re-running `grove init` will preserve your edited file unless you delete it yourself.
 
 Grove handles everything from here. When it finishes, your beads are closed and mirrored back to `br`. If a mirror fails, grove preserves the local result and flags it for retry — run `grove status` to see what landed and what needs attention.
 
@@ -262,6 +267,8 @@ GROVE_EXIT: false
 ---
 
 ## Config
+
+Besides `grove.toml`, Grove also uses a user-owned startup prompt file at `.grove/startup_prompt.md`. That file is created by `grove init`, can be edited freely, and is injected into every new Claude session before task-specific context. It is separate from `.grove/prompts/`, which stores Grove-generated rendered prompt manifests for dispatched sessions.
 
 ```toml
 # grove.toml
@@ -341,7 +348,8 @@ my-project/
 │   ├── transcripts/           # default transcript store (configurable)
 │   │   └── <bead-id>/
 │   │       └── <session-id>.jsonl
-│   ├── prompts/               # rendered prompts / manifests for dispatched sessions
+│   ├── startup_prompt.md      # user-edited baseline prompt injected into new sessions
+│   ├── prompts/               # grove-generated rendered prompts / manifests for dispatched sessions
 │   ├── checkpoints/
 │   │   └── <bead-id>/
 │   │       └── <checkpoint-id>.json
