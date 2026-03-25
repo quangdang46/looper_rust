@@ -25,6 +25,10 @@ const PERMISSION_DENIAL_PATTERNS: [&str; 8] = [
 ];
 
 const RATE_LIMIT_PATTERNS: [&str; 4] = ["rate limit", "rate-limit", "ratelimit", "rate limited"];
+const INVALID_IMAGE_PATTERNS: [&str; 2] = [
+    "image data you provided does not represent a valid image",
+    "does not represent a valid image",
+];
 
 const ERROR_PATTERNS: [&str; 12] = [
     "error",
@@ -155,6 +159,20 @@ fn count_rate_limit_markers(
 fn is_rate_limit_marker(line: &str) -> bool {
     let normalized = normalize_line(line);
     RATE_LIMIT_PATTERNS
+        .iter()
+        .any(|pattern| normalized.contains(pattern))
+}
+
+pub fn contains_invalid_image_input(stdout_lines: &[String], stderr_lines: &[String]) -> bool {
+    stdout_lines
+        .iter()
+        .chain(stderr_lines.iter())
+        .any(|line| is_invalid_image_input(line))
+}
+
+fn is_invalid_image_input(line: &str) -> bool {
+    let normalized = normalize_line(line);
+    INVALID_IMAGE_PATTERNS
         .iter()
         .any(|pattern| normalized.contains(pattern))
 }
@@ -444,5 +462,15 @@ mod tests {
         });
 
         assert_eq!(analysis.rate_limit_markers, 4);
+    }
+
+    #[test]
+    fn detects_invalid_image_input_from_api_error_text() {
+        let stdout = vec![
+            "API Error: 400 The image data you provided does not represent a valid image".to_owned(),
+        ];
+        let stderr = Vec::new();
+
+        assert!(contains_invalid_image_input(&stdout, &stderr));
     }
 }

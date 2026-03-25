@@ -265,6 +265,46 @@ fn reservation_conflicts_for_bead(
         .collect()
 }
 
+fn load_previous_outcome(
+    db: &Database,
+    run_id: &RunId,
+) -> Result<Option<grove_types::SessionOutcome>> {
+    let Some(session) = db.latest_session_for_run(run_id)? else {
+        return Ok(None);
+    };
+
+    let replay = match grove_session::replay_transcript(&session.transcript_path) {
+        Ok(replay) => replay,
+        Err(_) => return Ok(None),
+    };
+    let mut stdout_tail = Vec::new();
+    let mut stderr_tail = Vec::new();
+    for event in replay.events {
+        match event {
+            grove_types::TranscriptEvent::StdoutLine { line, .. } => stdout_tail.push(line),
+            grove_types::TranscriptEvent::StderrLine { line, .. } => stderr_tail.push(line),
+            _ => {}
+        }
+    }
+    if stdout_tail.len() > 20 {
+        stdout_tail = stdout_tail[stdout_tail.len().saturating_sub(20)..].to_vec();
+    }
+    if stderr_tail.len() > 20 {
+        stderr_tail = stderr_tail[stderr_tail.len().saturating_sub(20)..].to_vec();
+    }
+
+    Ok(Some(grove_types::SessionOutcome {
+        session,
+        protocol_events: Vec::new(),
+        analysis: grove_types::IterationAnalysis::default(),
+        terminal_class: grove_types::SessionTerminalClass::Crash,
+        context_pressure_pct: None,
+        context_pressure_level: grove_types::ContextPressureLevel::Ok,
+        stdout_tail,
+        stderr_tail,
+    }))
+}
+
 /// Configuration for the dispatch loop beyond what `GroveConfig` provides.
 #[derive(Debug, Clone)]
 pub struct DispatchLoopConfig {
@@ -1235,7 +1275,11 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
             }
 
             if let Some(failure_class) = bead.last_failure_class {
-                request = request.with_retry_context(failure_class, None);
+                let previous_outcome = bead
+                    .last_run_id
+                    .as_ref()
+                    .and_then(|run_id| load_previous_outcome(db, run_id).ok().flatten());
+                request = request.with_retry_context(failure_class, previous_outcome);
             }
 
             request.shutdown = SessionShutdownConfig {

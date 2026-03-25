@@ -220,9 +220,23 @@ pub fn execute_persisted_single_task_session_after_run_started<B: ClaudeBackend>
                     "exit_code": result.outcome.session.exit_code,
                 }),
             );
-            let checkpoint = hooks.take_checkpoint();
             let run =
                 finalize_persisted_run(hooks.db_mut(), &bead_id, &result.outcome, None, config)?;
+            let checkpoint_root = hooks.checkpoint_root().to_path_buf();
+            let checkpoint = if let Some(checkpoint) = hooks.take_checkpoint() {
+                Some(checkpoint)
+            } else {
+                persist_fallback_checkpoint(
+                    hooks.db_mut(),
+                    &checkpoint_root,
+                    &bead_id,
+                    &run_id,
+                    &session_id,
+                    &result.outcome,
+                    run.failure_class,
+                    run.failure_detail.as_deref(),
+                )?
+            };
             let handoff = persist_success_handoff(hooks.db_mut(), &bead_id, &result.outcome)?;
             Ok(PersistedTaskRunOutcome {
                 run,
@@ -314,6 +328,10 @@ impl<'a> DbSessionLifecycleHooks<'a> {
         self.checkpoint_root
             .join(self.bead_id.as_str())
             .join(format!("{}.json", checkpoint_id.as_str()))
+    }
+
+    fn checkpoint_root(&self) -> &Path {
+        &self.checkpoint_root
     }
 }
 
@@ -582,6 +600,7 @@ fn unknown_failure_should_retry(outcome: &grove_types::SessionOutcome) -> bool {
     outcome.session.exit_code.is_none()
         || outcome.analysis.repeated_error_fingerprint.is_some()
         || !matches!(outcome.analysis.probable_progress, ProgressSignal::None)
+        || grove_session::contains_invalid_image_input(&outcome.stdout_tail, &outcome.stderr_tail)
         || has_plan_approval_detour(&outcome.stdout_tail)
         || has_plan_approval_detour(&outcome.stderr_tail)
 }
@@ -670,6 +689,83 @@ fn finalize_persisted_run(
     }
 
     Ok(run)
+}
+
+fn synthetic_checkpoint_payload_from_outcome(
+    outcome: &grove_types::SessionOutcome,
+    failure_class: Option<FailureClass>,
+    failure_detail: Option<&str>,
+) -> Option<grove_types::CheckpointPayload> {
+    if outcome.session.status != SessionStatus::Crashed
+        && outcome.session.status != SessionStatus::UnknownFailure
+    {
+        return None;
+    }
+    if outcome
+        .protocol_events
+        .iter()
+        .any(|event| matches!(event, grove_types::ProtocolEvent::Checkpoint { .. }))
+    {
+        return None;
+    }
+
+    let failure_label = failure_class
+        .map(|class| format!("{:?}", class))
+        .unwrap_or_else(|| "Unknown".to_owned());
+    let detail = failure_detail
+        .filter(|detail| !detail.trim().is_empty())
+        .unwrap_or("session ended before Grove captured a structured checkpoint");
+
+    Some(grove_types::CheckpointPayload {
+        progress: format!("Synthetic fallback checkpoint after {}", failure_label),
+        next_step: "Resume from the transcript tail, avoid repeating completed setup, and continue with the smallest safe remaining step.".to_owned(),
+        context: serde_json::json!({
+            "synthetic": true,
+            "failure_class": failure_class.map(|class| format!("{:?}", class)),
+            "failure_detail": detail,
+            "stdout_tail": outcome.stdout_tail,
+            "stderr_tail": outcome.stderr_tail,
+        }),
+        open_questions: Vec::new(),
+        claimed_paths: Vec::new(),
+        confidence: Some(0.25),
+    })
+}
+
+fn persist_fallback_checkpoint(
+    db: &mut Database,
+    checkpoint_root: &std::path::Path,
+    bead_id: &BeadId,
+    run_id: &RunId,
+    session_id: &grove_types::SessionId,
+    outcome: &grove_types::SessionOutcome,
+    failure_class: Option<FailureClass>,
+    failure_detail: Option<&str>,
+) -> Result<Option<grove_types::CheckpointRecord>> {
+    let Some(payload) = synthetic_checkpoint_payload_from_outcome(outcome, failure_class, failure_detail)
+    else {
+        return Ok(None);
+    };
+    let saved_at = outcome.session.ended_at.unwrap_or_else(chrono::Utc::now);
+    let checkpoint_id = CheckpointId::new(format!(
+        "chk-{}-fallback-{}",
+        run_id.as_str(),
+        outcome.session.ordinal_in_run
+    ));
+    let checkpoint = db.record_checkpoint_saved(SessionCheckpointInput {
+        checkpoint_id: checkpoint_id.clone(),
+        bead_id: bead_id.clone(),
+        run_id: run_id.clone(),
+        session_id: session_id.clone(),
+        payload,
+        saved_at,
+        resume_generation: outcome.session.ordinal_in_run as u32,
+    })?;
+    let checkpoint_path = checkpoint_root
+        .join(bead_id.as_str())
+        .join(format!("{}.json", checkpoint_id.as_str()));
+    persist_checkpoint_file(&checkpoint_path, &checkpoint)?;
+    Ok(Some(checkpoint))
 }
 
 fn recovery_capsule_from_outcome(
@@ -2109,6 +2205,61 @@ exit "${EXIT_CODE:-0}"
                 .as_deref()
                 .is_some_and(|detail| detail.contains("failed to persist checkpoint file"))
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persisted_runner_writes_fallback_checkpoint_for_crashed_run_without_protocol_checkpoint() -> TestResult {
+        use std::{fs, io};
+        use tempfile::tempdir;
+
+        let dir = tempdir()?;
+        let workspace_dir = dir.path().join("workspace");
+        fs::create_dir_all(&workspace_dir)?;
+        let workspace_dir = camino::Utf8PathBuf::from_path_buf(workspace_dir)
+            .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+        let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+            .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+
+        let mut db = Database::open(&db_path)?;
+        db.migrate()?;
+        insert_bead_cache_row(&db, "grove-life", "Lifecycle bead")?;
+
+        let script_path = dir.path().join("fake-claude-crash");
+        write_fake_claude_script(&script_path)?;
+        let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+        let mut request = sample_session_request(workspace_dir.clone());
+        request.env = vec![
+            ("STDOUT_SCRIPT".to_owned(), "starting work\n".to_owned()),
+            (
+                "STDERR_SCRIPT".to_owned(),
+                "API Error: 400 The image data you provided does not represent a valid image\n".to_owned(),
+            ),
+            ("EXIT_CODE".to_owned(), "1".to_owned()),
+        ];
+
+        let persisted = execute_persisted_single_task_session(
+            &mut db,
+            &backend,
+            request,
+            1,
+            &GroveConfig::default(),
+        )?;
+
+        assert_eq!(persisted.run.status, RunStatus::Failed);
+        assert_eq!(persisted.run.failure_class, Some(FailureClass::ClaudeCrashed));
+        let checkpoint = persisted
+            .checkpoint
+            .expect("fallback checkpoint should be written for crash without GROVE_CHECKPOINT");
+        assert!(checkpoint.id.as_str().contains("fallback"));
+        assert!(checkpoint.progress.contains("Synthetic fallback checkpoint"));
+        assert!(checkpoint.next_step.contains("Resume from the transcript tail"));
+        let checkpoint_path = workspace_dir
+            .as_std_path()
+            .join(format!(".grove/checkpoints/grove-life/{}.json", checkpoint.id.as_str()));
+        assert!(checkpoint_path.exists(), "fallback checkpoint file should be written");
         Ok(())
     }
 

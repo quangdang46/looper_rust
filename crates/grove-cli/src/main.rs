@@ -178,13 +178,9 @@ fn print_dispatch_blocked_summary(
 
 fn should_autonomously_reset_blocked_bead(
     bead: &GroveBeadRecord,
-    blocked_summary: &DispatchBlockedSummary,
+    blocked_reason_codes: &[&str],
 ) -> bool {
-    blocked_summary.blocked_ready_count == 1
-        && blocked_summary.sample_beads.len() == 1
-        && blocked_summary.sample_beads[0].bead_id == bead.bead.id
-        && blocked_summary.sample_beads[0].reasons.len() == 1
-        && blocked_summary.sample_beads[0].reasons[0].code == "failed_awaiting_manual_retry"
+    blocked_reason_codes == ["failed_awaiting_manual_retry"]
         && bead.grove_status == GroveBeadStatus::Failed
         && bead.last_failure_class == Some(grove_types::FailureClass::ClaudeCrashed)
 }
@@ -193,12 +189,9 @@ fn try_autonomous_dispatch_blocked_recovery(
     db: &mut Database,
     br: &CliBrClient,
     blocked_summary: Option<&DispatchBlockedSummary>,
-) -> Result<Option<BeadId>> {
+) -> Result<Vec<BeadId>> {
     let Some(summary) = blocked_summary else {
-        return Ok(None);
-    };
-    let Some(sample) = summary.sample_beads.first() else {
-        return Ok(None);
+        return Ok(Vec::new());
     };
 
     let ready_ids = br
@@ -207,36 +200,47 @@ fn try_autonomous_dispatch_blocked_recovery(
         .into_iter()
         .map(|bead| bead.id)
         .collect::<std::collections::HashSet<_>>();
-    if !ready_ids.contains(&sample.bead_id) {
-        return Ok(None);
+    let mut recovered = Vec::new();
+
+    for sample in &summary.sample_beads {
+        if !ready_ids.contains(&sample.bead_id) {
+            continue;
+        }
+
+        let bead = db
+            .get_bead_record(&sample.bead_id)?
+            .ok_or_else(|| anyhow!("blocked bead {} missing from local cache", sample.bead_id.as_str()))?;
+        let blocked_reason_codes = sample
+            .reasons
+            .iter()
+            .map(|reason| reason.code)
+            .collect::<Vec<_>>();
+        if !should_autonomously_reset_blocked_bead(&bead, &blocked_reason_codes) {
+            continue;
+        }
+
+        let has_active_run = db
+            .list_task_runs_for_bead(&sample.bead_id)?
+            .into_iter()
+            .any(|run| run.status == RunStatus::Active);
+        if has_active_run {
+            continue;
+        }
+
+        let now = chrono::Utc::now();
+        db.reset_bead_for_retry_with_action(
+            &sample.bead_id,
+            &now,
+            serde_json::json!({
+                "action": "autonomous_retry_reset",
+                "trigger": "dispatch_blocked",
+                "previous_failure_class": "claude_crashed"
+            }),
+        )?;
+        recovered.push(sample.bead_id.clone());
     }
 
-    let bead = db
-        .get_bead_record(&sample.bead_id)?
-        .ok_or_else(|| anyhow!("blocked bead {} missing from local cache", sample.bead_id.as_str()))?;
-    if !should_autonomously_reset_blocked_bead(&bead, summary) {
-        return Ok(None);
-    }
-
-    let has_active_run = db
-        .list_task_runs_for_bead(&sample.bead_id)?
-        .into_iter()
-        .any(|run| run.status == RunStatus::Active);
-    if has_active_run {
-        return Ok(None);
-    }
-
-    let now = chrono::Utc::now();
-    db.reset_bead_for_retry_with_action(
-        &sample.bead_id,
-        &now,
-        serde_json::json!({
-            "action": "autonomous_retry_reset",
-            "trigger": "dispatch_blocked",
-            "previous_failure_class": "claude_crashed"
-        }),
-    )?;
-    Ok(Some(sample.bead_id.clone()))
+    Ok(recovered)
 }
 
 fn handle_init(json_mode: bool, force: bool) -> Result<()> {
@@ -575,24 +579,30 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
         && let Ok(outcome) = &dispatch_result
         && outcome.exit_reason == DispatchExitReason::DispatchBlocked
         && !autonomous_recovery_attempted
-        && let Some(recovered_bead_id) =
-            try_autonomous_dispatch_blocked_recovery(&mut db, &br, outcome.blocked_summary.as_ref())?
     {
-        autonomous_recovery_attempted = true;
-        if !json_mode {
-            println!(
-                "Autonomously recovered blocked bead {} and retrying dispatch once.",
-                recovered_bead_id.as_str()
+        let recovered_bead_ids =
+            try_autonomous_dispatch_blocked_recovery(&mut db, &br, outcome.blocked_summary.as_ref())?;
+        if !recovered_bead_ids.is_empty() {
+            autonomous_recovery_attempted = true;
+            if !json_mode {
+                println!(
+                    "Autonomously recovered blocked bead(s) {} and retrying dispatch once.",
+                    recovered_bead_ids
+                        .iter()
+                        .map(|bead_id| bead_id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            dispatch_result = run_dispatch_loop(
+                &mut db,
+                &backend,
+                &br,
+                &loaded.config,
+                &lease_config,
+                &loop_config,
             );
         }
-        dispatch_result = run_dispatch_loop(
-            &mut db,
-            &backend,
-            &br,
-            &loaded.config,
-            &lease_config,
-            &loop_config,
-        );
     }
 
     let release_at = chrono::Utc::now();
@@ -1803,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    fn should_autonomously_reset_only_single_crashed_manual_retry_bead() {
+    fn should_autonomously_reset_only_crashed_manual_retry_bead() {
         let updated_at: Timestamp = chrono::Utc::now();
         let bead = GroveBeadRecord {
             bead: BeadRef {
@@ -1829,27 +1839,13 @@ mod tests {
             synced_at: updated_at,
             runtime_updated_at: updated_at,
         };
-        let summary = DispatchBlockedSummary {
-            blocked_ready_count: 1,
-            reason_counts: vec![BlockedReasonCount {
-                code: "failed_awaiting_manual_retry",
-                summary: "failed and awaiting manual retry".to_owned(),
-                count: 1,
-            }],
-            sample_beads: vec![BlockedSampleBead {
-                bead_id: BeadId::new("saw-1rb"),
-                reasons: vec![BlockedSampleReason {
-                    code: "failed_awaiting_manual_retry",
-                    summary: "failed and awaiting manual retry".to_owned(),
-                }],
-            }],
-        };
+        let blocked_reason_codes = vec!["failed_awaiting_manual_retry"];
 
-        assert!(should_autonomously_reset_blocked_bead(&bead, &summary));
+        assert!(should_autonomously_reset_blocked_bead(&bead, &blocked_reason_codes));
 
         let mut bead = bead;
         bead.last_failure_class = Some(grove_types::FailureClass::PermissionDenied);
-        assert!(!should_autonomously_reset_blocked_bead(&bead, &summary));
+        assert!(!should_autonomously_reset_blocked_bead(&bead, &blocked_reason_codes));
     }
 }
 

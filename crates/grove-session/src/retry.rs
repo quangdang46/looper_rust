@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use grove_types::{ExecutionContract, FailureClass, ProgressSignal, SessionOutcome};
 
+const INVALID_IMAGE_PATTERN: &str = "does not represent a valid image";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryMutationPlan {
     pub next_contract: ExecutionContract,
@@ -43,6 +45,7 @@ fn retry_delta_summary_for_failure(
         } else {
             ""
         };
+    let invalid_image_input = had_invalid_image_input(previous_outcome);
 
     match failure_class {
         FailureClass::Timeout => format!(
@@ -63,6 +66,9 @@ fn retry_delta_summary_for_failure(
         FailureClass::ProtocolMalformed => format!(
             "Changed retry framing: keeps the implementation path tight while explicitly re-emphasizing exact GROVE marker formatting and structured checkpoint/result emission{progress_clause}."
         ),
+        FailureClass::ClaudeCrashed if invalid_image_input => format!(
+            "Changed retry framing: avoid attaching or opening image inputs, validate existing artifacts and README links textually first, and only touch media paths if a text-only check cannot finish the task{progress_clause}."
+        ),
         FailureClass::ClaudeCrashed => format!(
             "Changed retry framing: reconstructs state from the durable transcript tail, trims rework, and resumes with a safer step-by-step execution path{progress_clause}."
         ),
@@ -82,6 +88,8 @@ fn rescue_card_for_failure(
     failure_class: FailureClass,
     previous_outcome: Option<&SessionOutcome>,
 ) -> String {
+    let invalid_image_input = had_invalid_image_input(previous_outcome);
+
     let mut lines = match failure_class {
         FailureClass::Timeout => vec![
             "- Do not replay the full attempt; continue with the smallest remaining step that can prove progress.".to_owned(),
@@ -106,6 +114,11 @@ fn rescue_card_for_failure(
         FailureClass::ProtocolMalformed => vec![
             "- Keep the work path tight and emit valid GROVE markers exactly as specified.".to_owned(),
             "- Double-check structured marker formatting before ending the attempt.".to_owned(),
+        ],
+        FailureClass::ClaudeCrashed if invalid_image_input => vec![
+            "- Do not attach, open, or inspect image inputs on this retry.".to_owned(),
+            "- Validate demo/media tasks by file existence and README linkage before touching binary assets.".to_owned(),
+            "- If text-only validation is not enough, checkpoint instead of repeating the same image path.".to_owned(),
         ],
         FailureClass::ClaudeCrashed => vec![
             "- Start from the durable transcript tail instead of redoing completed setup.".to_owned(),
@@ -145,6 +158,16 @@ fn rescue_card_for_failure(
 fn had_progress(previous_outcome: Option<&SessionOutcome>) -> bool {
     previous_outcome
         .is_some_and(|outcome| !matches!(outcome.analysis.probable_progress, ProgressSignal::None))
+}
+
+fn had_invalid_image_input(previous_outcome: Option<&SessionOutcome>) -> bool {
+    previous_outcome.is_some_and(|outcome| {
+        outcome
+            .stdout_tail
+            .iter()
+            .chain(outcome.stderr_tail.iter())
+            .any(|line| line.to_ascii_lowercase().contains(INVALID_IMAGE_PATTERN))
+    })
 }
 
 fn repeated_error_excerpt(previous_outcome: Option<&SessionOutcome>) -> Option<String> {
@@ -315,6 +338,20 @@ mod tests {
             plan.rescue_card
                 .contains("Do not re-implement completed code")
         );
+    }
+
+    #[test]
+    fn claude_crash_with_invalid_image_input_forces_text_only_retry_guidance() {
+        let mut outcome = sample_outcome(IterationAnalysis::default(), SessionTerminalClass::Crash);
+        outcome.stdout_tail = vec![
+            "API Error: 400 The image data you provided does not represent a valid image".to_owned(),
+        ];
+
+        let plan = plan_retry_mutation(FailureClass::ClaudeCrashed, Some(&outcome));
+
+        assert_eq!(plan.next_contract, ExecutionContract::RetryRescue);
+        assert!(plan.retry_delta_summary.contains("avoid attaching or opening image inputs"));
+        assert!(plan.rescue_card.contains("Do not attach, open, or inspect image inputs"));
     }
 
     #[test]

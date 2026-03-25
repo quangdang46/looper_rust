@@ -11,7 +11,7 @@ mod runner;
 mod transcript;
 mod verify;
 
-pub use analysis::{AnalysisInput, analyze_iteration};
+pub use analysis::{AnalysisInput, analyze_iteration, contains_invalid_image_input};
 pub use analyzer::{
     ContextMonitor, ContextPressure, ContextPressureDecision, SessionAnalysisContext,
     analyze_session_outcome, classify_session_outcome, classify_session_outcome_with_policy,
