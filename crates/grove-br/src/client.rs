@@ -341,7 +341,7 @@ mod tests {
     fn capability_reports_beads_dir() -> TestResult {
         let dir = tempdir()?;
         fs::create_dir(dir.path().join(".beads"))?;
-        let client = CliBrClient::new("br", dir.path());
+        let client = CliBrClient::new("rustc", dir.path());
         let capability = client.capability()?;
         assert!(capability.available);
         assert!(capability.beads_dir_exists);
