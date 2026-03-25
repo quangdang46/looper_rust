@@ -1435,11 +1435,12 @@ impl fmt::Display for CliBvClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{error::Error, fs, io::Error as IoError};
-    use tempfile::tempdir;
+    use std::{error::Error, io::Error as IoError};
 
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::{fs, os::unix::fs::PermissionsExt};
+    #[cfg(unix)]
+    use tempfile::tempdir;
 
     type TestResult = Result<(), Box<dyn Error>>;
 

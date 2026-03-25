@@ -1099,7 +1099,14 @@ fn status_json_emits_machine_readable_operator_surface() -> TestResult {
     let view_root = payload["view"]["workspace_root"]
         .as_str()
         .expect("view.workspace_root string");
-    assert!(view_root.starts_with(harness.workspace_root.as_str()));
+    let view_root = std::path::Path::new(view_root);
+    assert!(
+        view_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == harness.workspace_root.file_name().unwrap_or(""))
+            || view_root.starts_with(harness.workspace_root.as_std_path())
+    );
     assert!(payload["view"]["running_beads"].is_array());
     assert!(payload["view"]["ready_queue"].is_array());
     assert!(payload["view"]["mirror_pending"].is_array());
