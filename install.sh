@@ -17,6 +17,7 @@ DOWNLOAD_TIMEOUT=120
 LOCK_DIR="/tmp/${BINARY_NAME}-install.lock.d"
 TMP=""
 MCP_AGENT_MAIL_BOOTSTRAP='curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/mcp_agent_mail/main/scripts/install.sh?$(date +%s)" | bash -s -- --yes'
+INSTALL_MCP_AGENT_MAIL=0
 
 log_info() {
     [ "$QUIET" -eq 1 ] && return
@@ -55,6 +56,8 @@ Options:
   --easy-mode         Append DEST to shell rc PATH
   --verify            Run grove --version after install
   --from-source       Build from source instead of downloading a release
+  --with-mcp-agent-mail    Install MCP Agent Mail without prompting
+  --without-mcp-agent-mail Skip MCP Agent Mail without prompting
   --quiet, -q         Reduce output
   --uninstall         Remove installed binary
   -h, --help          Show this help
@@ -64,6 +67,14 @@ EOF
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --with-mcp-agent-mail)
+            INSTALL_MCP_AGENT_MAIL=1
+            shift
+            ;;
+        --without-mcp-agent-mail)
+            INSTALL_MCP_AGENT_MAIL=0
+            shift
+            ;;
         --dest)
             DEST="$2"
             shift 2
@@ -263,6 +274,28 @@ bootstrap_mcp_agent_mail() {
     bash -lc "$MCP_AGENT_MAIL_BOOTSTRAP"
 }
 
+should_install_mcp_agent_mail() {
+    if [ -t 0 ]; then
+        printf "Install MCP Agent Mail too? [Y/n] " >&2
+        local reply
+        IFS= read -r reply || true
+        case "$reply" in
+            ""|[Yy]|[Yy][Ee][Ss])
+                return 0
+                ;;
+            [Nn]|[Nn][Oo])
+                return 1
+                ;;
+            *)
+                log_warn "Unrecognized response. Installing Grove only."
+                return 1
+                ;;
+        esac
+    fi
+
+    return "$INSTALL_MCP_AGENT_MAIL"
+}
+
 build_from_source() {
     command -v cargo >/dev/null || die "Rust/cargo not found. Install: https://rustup.rs"
     command -v git >/dev/null || die "git not found"
@@ -337,7 +370,13 @@ main() {
     fi
 
     log_success "grove installed → $DEST/$BINARY_NAME"
-    bootstrap_mcp_agent_mail
+
+    if should_install_mcp_agent_mail; then
+        bootstrap_mcp_agent_mail
+    else
+        log_info "Skipping MCP Agent Mail install"
+    fi
+
     maybe_add_path
 
     if [ "$VERIFY" -eq 1 ]; then
