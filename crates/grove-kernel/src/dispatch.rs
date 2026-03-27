@@ -413,37 +413,6 @@ fn lease_renew_interval(lease_ttl: chrono::Duration) -> chrono::Duration {
     chrono::Duration::milliseconds((lease_ttl.num_milliseconds() / 3).max(1))
 }
 
-fn handle_contested_leader_lease<C: BrClient>(
-    db: &mut Database,
-    br: &C,
-    config: &GroveConfig,
-    loop_config: &DispatchLoopConfig,
-    inflight_workers: &mut HashMap<BeadId, InFlightWorker>,
-    completed_rx: &mpsc::Receiver<CompletedWorker>,
-    poll_sleep: Duration,
-    dispatched_count: u32,
-    poll_cycles: u32,
-) -> DispatchLoopOutcome {
-    if !loop_config.shutdown_signal.is_triggered() {
-        loop_config.shutdown_signal.trigger();
-    }
-    drain_inflight_workers(
-        db,
-        br,
-        config,
-        inflight_workers,
-        completed_rx,
-        poll_sleep,
-        None,
-    );
-    dispatch_loop_outcome(
-        dispatched_count,
-        poll_cycles,
-        DispatchExitReason::LeaderContested,
-        None,
-    )
-}
-
 fn handle_completed_worker<C: BrClient>(
     db: &mut Database,
     br: &C,
@@ -1114,19 +1083,26 @@ pub fn run_dispatch_loop<B: ClaudeBackend + Clone + 'static, C: BrClient>(
         while let Ok(completed) = completed_rx.try_recv() {
             handle_completed_worker(db, br, &config, &mut inflight_workers, completed);
         }
-        while let Ok(event) = lease_monitor_rx.try_recv() {
+        if let Ok(event) = lease_monitor_rx.try_recv() {
             match event {
                 LeaseMonitorEvent::Contested => {
-                    return Ok(handle_contested_leader_lease(
+                    if !loop_config.shutdown_signal.is_triggered() {
+                        loop_config.shutdown_signal.trigger();
+                    }
+                    drain_inflight_workers(
                         db,
                         br,
                         &config,
-                        loop_config,
                         &mut inflight_workers,
                         &completed_rx,
                         poll_sleep,
+                        None,
+                    );
+                    return Ok(dispatch_loop_outcome(
                         dispatched_count,
                         poll_cycles,
+                        DispatchExitReason::LeaderContested,
+                        None,
                     ));
                 }
                 LeaseMonitorEvent::Error(error) => {
