@@ -258,7 +258,16 @@ fn try_autonomous_dispatch_blocked_recovery(
     Ok(recovered)
 }
 
-const FLYWHEEL_BEADS_SKILL_TEMPLATE: &str = include_str!("../../../skills/flywheel-beads/SKILL.md");
+const BUNDLED_SKILLS: &[(&str, &str)] = &[
+    (
+        "flywheel-beads",
+        include_str!("../../../skills/flywheel-beads/SKILL.md"),
+    ),
+    (
+        "flywheel-swarm",
+        include_str!("../../../skills/flywheel-swarm/SKILL.md"),
+    ),
+];
 
 fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
     let workspace_root = current_workspace_root()?;
@@ -293,14 +302,10 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
     })?;
     ensure_workspace_layout(&loaded.paths)?;
     let wrote_startup_prompt = ensure_startup_prompt_file(&loaded.paths)?;
-    let flywheel_skill_path = loaded
-        .paths
-        .workspace_root()
-        .join(".agents/skills/flywheel-beads/SKILL.md");
-    let wrote_flywheel_skill = if skills {
-        ensure_flywheel_beads_skill_file(&flywheel_skill_path)?
+    let bundled_skill_results = if skills {
+        ensure_bundled_skill_files(loaded.paths.workspace_root())?
     } else {
-        false
+        Vec::new()
     };
 
     let tooling = detect_required_tooling(&loaded.config);
@@ -347,10 +352,18 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
                 "checkpoints_dir": loaded.paths.checkpoints_dir().as_str(),
                 "startup_prompt_path": loaded.paths.startup_prompt_path().as_str(),
                 "skills_requested": skills,
-                "flywheel_skill_path": skills.then_some(flywheel_skill_path.as_str()),
+                "bundled_skills": skills.then_some(
+                    bundled_skill_results
+                        .iter()
+                        .map(|result| json!({
+                            "name": result.name,
+                            "path": result.path.as_str(),
+                            "written": result.written,
+                        }))
+                        .collect::<Vec<_>>()
+                ),
                 "wrote_default_config": wrote_default_config,
                 "wrote_startup_prompt": wrote_startup_prompt,
-                "wrote_flywheel_skill": skills.then_some(wrote_flywheel_skill),
                 "forced_reset": force,
                 "synced_beads": sync_result.as_ref().map_or(0, |result| result.beads_synced),
                 "sync_result": sync_result.as_ref().map(|result| json!({
@@ -388,7 +401,10 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
     println!("- checkpoints: {}", loaded.paths.checkpoints_dir());
     println!("- startup prompt: {}", loaded.paths.startup_prompt_path());
     if skills {
-        println!("- flywheel skill: {flywheel_skill_path}");
+        println!(
+            "- bundled skills directory: {}/.agents/skills",
+            loaded.paths.workspace_root()
+        );
     }
     if wrote_default_config {
         println!("- wrote default config: {}", loaded.paths.config_path());
@@ -400,10 +416,12 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
         );
     }
     if skills {
-        if wrote_flywheel_skill {
-            println!("- wrote flywheel skill scaffold: {flywheel_skill_path}");
-        } else {
-            println!("- preserved existing flywheel skill: {flywheel_skill_path}");
+        for result in &bundled_skill_results {
+            if result.written {
+                println!("- wrote bundled skill scaffold: {}", result.path);
+            } else {
+                println!("- preserved existing bundled skill: {}", result.path);
+            }
         }
     }
     if let Some(result) = &sync_result {
@@ -1947,18 +1965,38 @@ fn ensure_startup_prompt_file(paths: &GrovePaths) -> Result<bool> {
     Ok(true)
 }
 
-fn ensure_flywheel_beads_skill_file(path: &Utf8Path) -> Result<bool> {
+struct BundledSkillResult {
+    name: &'static str,
+    path: Utf8PathBuf,
+    written: bool,
+}
+
+fn ensure_bundled_skill_files(workspace_root: &Utf8Path) -> Result<Vec<BundledSkillResult>> {
+    BUNDLED_SKILLS
+        .iter()
+        .map(|(name, template)| {
+            let path = workspace_root.join(format!(".agents/skills/{name}/SKILL.md"));
+            let written = ensure_bundled_skill_file(&path, template)?;
+            Ok(BundledSkillResult {
+                name,
+                path,
+                written,
+            })
+        })
+        .collect()
+}
+
+fn ensure_bundled_skill_file(path: &Utf8Path, template: &str) -> Result<bool> {
     if path.exists() {
         return Ok(false);
     }
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("create flywheel skill directory {parent}"))?;
+            .with_context(|| format!("create bundled skill directory {parent}"))?;
     }
 
-    fs::write(path, FLYWHEEL_BEADS_SKILL_TEMPLATE)
-        .with_context(|| format!("write flywheel skill scaffold to {path}"))?;
+    fs::write(path, template).with_context(|| format!("write bundled skill scaffold to {path}"))?;
     Ok(true)
 }
 

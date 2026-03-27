@@ -881,9 +881,12 @@ fn init_force_with_skills_creates_scaffold_and_preserves_existing_file() -> Test
     let harness = CliHarness::new()?;
     harness.enable_beads()?;
 
-    let skill_path = harness
+    let beads_skill_path = harness
         .workspace_root
         .join(".agents/skills/flywheel-beads/SKILL.md");
+    let swarm_skill_path = harness
+        .workspace_root
+        .join(".agents/skills/flywheel-swarm/SKILL.md");
 
     let first_output = harness.run(["init", "--force", "--skills"])?;
     assert!(
@@ -892,12 +895,18 @@ fn init_force_with_skills_creates_scaffold_and_preserves_existing_file() -> Test
         output_text(&first_output)
     );
     assert_eq!(
-        fs::read_to_string(&skill_path)?,
+        fs::read_to_string(&beads_skill_path)?,
         include_str!("../../../skills/flywheel-beads/SKILL.md"),
-        "init --skills should scaffold the bundled flywheel skill"
+        "init --skills should scaffold the bundled flywheel-beads skill"
+    );
+    assert_eq!(
+        fs::read_to_string(&swarm_skill_path)?,
+        include_str!("../../../skills/flywheel-swarm/SKILL.md"),
+        "init --skills should scaffold the bundled flywheel-swarm skill"
     );
 
-    fs::write(&skill_path, "custom flywheel skill\n")?;
+    fs::write(&beads_skill_path, "custom flywheel beads skill\n")?;
+    fs::write(&swarm_skill_path, "custom flywheel swarm skill\n")?;
 
     let second_output = harness.run(["init", "--force", "--skills"])?;
     assert!(
@@ -906,9 +915,14 @@ fn init_force_with_skills_creates_scaffold_and_preserves_existing_file() -> Test
         output_text(&second_output)
     );
     assert_eq!(
-        fs::read_to_string(&skill_path)?,
-        "custom flywheel skill\n",
-        "init --skills should preserve an existing user-owned skill file"
+        fs::read_to_string(&beads_skill_path)?,
+        "custom flywheel beads skill\n",
+        "init --skills should preserve an existing user-owned flywheel-beads skill file"
+    );
+    assert_eq!(
+        fs::read_to_string(&swarm_skill_path)?,
+        "custom flywheel swarm skill\n",
+        "init --skills should preserve an existing user-owned flywheel-swarm skill file"
     );
 
     Ok(())
@@ -933,11 +947,16 @@ fn init_force_with_skills_preserves_skill_while_resetting_runtime_state() -> Tes
         harness.workspace_root.join(".grove/startup_prompt.md"),
         "custom startup instructions\n",
     )?;
-    let skill_path = harness
+    let beads_skill_path = harness
         .workspace_root
         .join(".agents/skills/flywheel-beads/SKILL.md");
-    fs::create_dir_all(skill_path.parent().expect("skill scaffold parent"))?;
-    fs::write(&skill_path, "custom flywheel skill\n")?;
+    let swarm_skill_path = harness
+        .workspace_root
+        .join(".agents/skills/flywheel-swarm/SKILL.md");
+    fs::create_dir_all(beads_skill_path.parent().expect("skill scaffold parent"))?;
+    fs::create_dir_all(swarm_skill_path.parent().expect("skill scaffold parent"))?;
+    fs::write(&beads_skill_path, "custom flywheel beads skill\n")?;
+    fs::write(&swarm_skill_path, "custom flywheel swarm skill\n")?;
     let original_config = fs::read_to_string(harness.workspace_root.join("grove.toml"))?;
 
     let output = harness.run(["init", "--force", "--skills"])?;
@@ -975,9 +994,14 @@ fn init_force_with_skills_preserves_skill_while_resetting_runtime_state() -> Tes
         "force init should preserve the user-owned startup prompt file"
     );
     assert_eq!(
-        fs::read_to_string(&skill_path)?,
-        "custom flywheel skill\n",
-        "force init should preserve the user-owned flywheel skill file"
+        fs::read_to_string(&beads_skill_path)?,
+        "custom flywheel beads skill\n",
+        "force init should preserve the user-owned flywheel-beads skill file"
+    );
+    assert_eq!(
+        fs::read_to_string(&swarm_skill_path)?,
+        "custom flywheel swarm skill\n",
+        "force init should preserve the user-owned flywheel-swarm skill file"
     );
     assert!(
         !harness
@@ -1009,8 +1033,20 @@ fn init_json_emits_machine_readable_output() -> TestResult {
     assert!(payload["config_path"].as_str().is_some());
     assert!(payload["startup_prompt_path"].as_str().is_some());
     assert_eq!(payload["skills_requested"], true);
-    assert!(payload["flywheel_skill_path"].as_str().is_some());
-    assert_eq!(payload["wrote_flywheel_skill"], true);
+    let bundled_skills = payload["bundled_skills"]
+        .as_array()
+        .expect("bundled skills array");
+    assert_eq!(bundled_skills.len(), 2);
+    assert!(
+        bundled_skills
+            .iter()
+            .any(|skill| skill["name"] == "flywheel-beads")
+    );
+    assert!(
+        bundled_skills
+            .iter()
+            .any(|skill| skill["name"] == "flywheel-swarm")
+    );
     assert!(payload["tooling"].is_object());
     assert!(payload["notes"].is_array());
     assert!(payload["next_steps"].is_array());
