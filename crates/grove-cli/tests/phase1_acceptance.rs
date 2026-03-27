@@ -349,17 +349,26 @@ fn sync_bead_cache_counts_removed_non_running_beads() -> TestResult {
     let mut store = FakeStore::default();
 
     let bead = sample_issue("grove-old-idle", "removed task", vec![], vec![]);
+    store
+        .beads
+        .insert(bead.id.as_str().to_owned(), bead.clone());
 
     // Mark bead as idle in cache (not running or checkpointed)
     store
         .statuses
         .insert(bead.id.as_str().to_owned(), GroveBeadStatus::Idle);
+    store
+        .dependencies
+        .insert(bead.id.as_str().to_owned(), (vec![], vec![]));
 
     // br.list_open() does not return that bead (it was closed in br)
     let result = sync_bead_cache(&FakeBrClient::new(vec![]), &mut store)?;
 
-    // Bead should be counted as removed
+    // Bead should be counted as removed and reconciled out of the local cache
     assert_eq!(result.beads_removed, 1);
+    assert!(!store.beads.contains_key(bead.id.as_str()));
+    assert!(!store.statuses.contains_key(bead.id.as_str()));
+    assert!(!store.dependencies.contains_key(bead.id.as_str()));
 
     Ok(())
 }
@@ -767,6 +776,7 @@ fn init_refuses_when_workspace_is_already_initialized() -> TestResult {
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("Grove is already initialized"));
     assert!(stderr.contains("Nothing was changed."));
+    assert!(stderr.contains("grove init --sync"));
     assert!(stderr.contains("grove init --force"));
     Ok(())
 }
@@ -993,6 +1003,7 @@ fn init_json_emits_machine_readable_output() -> TestResult {
     let stdout = String::from_utf8(output.stdout)?;
     let payload: serde_json::Value = serde_json::from_str(&stdout)?;
     assert_eq!(payload["ok"], true);
+    assert_eq!(payload["mode"], "force_reinit");
     assert!(payload["workspace_root"].as_str().is_some());
     assert!(payload["db_path"].as_str().is_some());
     assert!(payload["config_path"].as_str().is_some());
@@ -1004,6 +1015,7 @@ fn init_json_emits_machine_readable_output() -> TestResult {
     assert!(payload["notes"].is_array());
     assert!(payload["next_steps"].is_array());
     assert_eq!(payload["forced_reset"], true);
+    assert!(payload["sync_result"].is_null() || payload["sync_result"].is_object());
 
     Ok(())
 }
@@ -1510,6 +1522,13 @@ impl BeadCacheStore for FakeStore {
         self.statuses.insert(bead_id.as_str().to_owned(), status);
         Ok(())
     }
+
+    fn remove_bead_cache(&mut self, bead_id: &BeadId) -> anyhow::Result<()> {
+        self.beads.remove(bead_id.as_str());
+        self.dependencies.remove(bead_id.as_str());
+        self.statuses.remove(bead_id.as_str());
+        Ok(())
+    }
 }
 
 struct FakeBrClient {
@@ -1806,6 +1825,68 @@ fn write_executable(path: &camino::Utf8Path, content: &str) -> TestResult {
         permissions.set_mode(0o755);
         fs::set_permissions(path, permissions)?;
     }
+    Ok(())
+}
+
+#[test]
+fn init_sync_preserves_runtime_state_and_refreshes_bead_cache() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+    harness.seed_runtime_bead(GroveBeadStatus::Succeeded)?;
+    fs::create_dir_all(harness.workspace_root.join(".grove/logs"))?;
+    fs::write(
+        harness.workspace_root.join(".grove/logs/runtime.jsonl"),
+        "keep-log\n",
+    )?;
+
+    let output = harness.run(["init", "--sync"])?;
+    assert!(
+        output.status.success(),
+        "init --sync should succeed: {}",
+        output_text(&output)
+    );
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("Synced existing Grove workspace with br."));
+    assert!(stdout.contains("bead cache synced: 1 bead(s)"));
+
+    let db = Database::open(&harness.workspace_root.join(".grove/grove.db"))?;
+    let bead_count: i64 =
+        db.connection()
+            .query_row("SELECT COUNT(*) FROM bead_cache", [], |row| row.get(0))?;
+    assert_eq!(
+        bead_count, 1,
+        "sync should refresh the current open bead cache"
+    );
+
+    assert_eq!(
+        fs::read_to_string(harness.workspace_root.join(".grove/logs/runtime.jsonl"))?,
+        "keep-log\n",
+        "sync should preserve non-database Grove artifacts"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_sync_json_reports_sync_mode() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+
+    let output = harness.run(["--json", "init", "--sync"])?;
+    assert!(
+        output.status.success(),
+        "init --json --sync should succeed: {}",
+        output_text(&output)
+    );
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let payload: serde_json::Value = serde_json::from_str(&stdout)?;
+    assert_eq!(payload["ok"], true);
+    assert_eq!(payload["mode"], "sync");
+    assert_eq!(payload["sync_requested"], true);
+    assert!(payload["sync_result"].is_object());
+
     Ok(())
 }
 

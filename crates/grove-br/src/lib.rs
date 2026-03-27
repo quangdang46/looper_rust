@@ -38,6 +38,8 @@ pub trait BeadCacheStore {
     fn list_cached_beads(&self) -> Result<Vec<CachedBeadState>>;
 
     fn set_grove_status(&mut self, bead_id: &BeadId, status: GroveBeadStatus) -> Result<()>;
+
+    fn remove_bead_cache(&mut self, bead_id: &BeadId) -> Result<()>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,15 +139,23 @@ pub fn sync_bead_cache<C: BrClient, S: BeadCacheStore>(
         result.beads_synced += 1;
     }
 
-    result.beads_removed = cached_ids
-        .difference(&remote_ids)
-        .filter(|bead_id| {
-            !matches!(
-                cached_statuses.get(*bead_id).copied().flatten(),
-                Some(GroveBeadStatus::Running | GroveBeadStatus::Checkpointed)
-            )
-        })
-        .count();
+    for bead_id in cached_ids.difference(&remote_ids) {
+        if matches!(
+            cached_statuses.get(bead_id).copied().flatten(),
+            Some(GroveBeadStatus::Running | GroveBeadStatus::Checkpointed)
+        ) {
+            continue;
+        }
+
+        match store.remove_bead_cache(bead_id) {
+            Ok(()) => result.beads_removed += 1,
+            Err(error) => result.errors.push(SyncError {
+                bead_id: Some((*bead_id).clone()),
+                operation: "remove_bead_cache".into(),
+                error: error.to_string(),
+            }),
+        }
+    }
 
     Ok(result)
 }
@@ -211,6 +221,13 @@ mod tests {
 
         fn set_grove_status(&mut self, bead_id: &BeadId, status: GroveBeadStatus) -> Result<()> {
             self.statuses.insert(bead_id.as_str().to_owned(), status);
+            Ok(())
+        }
+
+        fn remove_bead_cache(&mut self, bead_id: &BeadId) -> Result<()> {
+            self.beads.remove(bead_id.as_str());
+            self.dependencies.remove(bead_id.as_str());
+            self.statuses.remove(bead_id.as_str());
             Ok(())
         }
     }

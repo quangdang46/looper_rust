@@ -2695,6 +2695,16 @@ impl BeadCacheStore for Database {
             .with_context(|| format!("set grove status for {}", bead_id.as_str()))?;
         Ok(())
     }
+
+    fn remove_bead_cache(&mut self, bead_id: &BeadId) -> Result<()> {
+        self.conn
+            .execute(
+                "DELETE FROM bead_cache WHERE bead_id = ?1",
+                [bead_id.as_str()],
+            )
+            .with_context(|| format!("remove bead cache row for {}", bead_id.as_str()))?;
+        Ok(())
+    }
 }
 
 pub fn migrations_dir() -> &'static str {

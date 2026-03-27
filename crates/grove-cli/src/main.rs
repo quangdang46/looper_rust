@@ -49,8 +49,10 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Init {
-        #[arg(long, action = ArgAction::SetTrue)]
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "sync")]
         force: bool,
+        #[arg(long, action = ArgAction::SetTrue, conflicts_with = "force")]
+        sync: bool,
         #[arg(long, action = ArgAction::SetTrue)]
         skills: bool,
     },
@@ -74,9 +76,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Command::Init { force, skills }) => {
-            run_json_command("init", cli.json, || handle_init(cli.json, force, skills))
-        }
+        Some(Command::Init {
+            force,
+            sync,
+            skills,
+        }) => run_json_command("init", cli.json, || {
+            handle_init(cli.json, force, sync, skills)
+        }),
         Some(Command::Status) => handle_status(cli.json),
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
         Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id), cli.json),
@@ -258,20 +264,22 @@ fn try_autonomous_dispatch_blocked_recovery(
 
 const FLYWHEEL_BEADS_SKILL_TEMPLATE: &str = include_str!("../../../skills/flywheel-beads/SKILL.md");
 
-fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
+fn handle_init(json_mode: bool, force: bool, sync: bool, skills: bool) -> Result<()> {
     let workspace_root = current_workspace_root()?;
     let config_path = workspace_root.join("grove.toml");
     let paths = resolve_init_paths(&workspace_root, &config_path)?;
     let existing_artifacts = existing_init_artifacts(&paths);
+    let already_initialized = !existing_artifacts.is_empty();
 
-    if !existing_artifacts.is_empty() {
-        if !force {
+    if already_initialized {
+        if force {
+            reset_managed_init_state(&paths)?;
+        } else if !sync {
             bail!(
-                "Grove is already initialized in {}.\n\nNothing was changed.\nIf you want a clean local Grove state, run:\n  grove init --force\n\nThis resets Grove-managed runtime state only and keeps grove.toml.",
+                "Grove is already initialized in {}.\n\nNothing was changed.\nTo sync Grove with the current open bead set without resetting local state, run:\n  grove init --sync\n\nIf you want a clean local Grove state, run:\n  grove init --force\n\n`--sync` preserves Grove-managed runtime state and reconciles bead additions/removals with `br`. `--force` resets Grove-managed runtime state only and keeps grove.toml.",
                 workspace_root,
             );
         }
-        reset_managed_init_state(&paths)?;
     }
 
     let wrote_default_config = if config_path.exists() {
@@ -311,16 +319,24 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
         .with_context(|| format!("open database at {}", loaded.paths.db_path()))?;
     db.migrate().context("apply database migrations")?;
 
-    let synced_beads = if br_capability.beads_dir_exists {
-        let sync_result = sync_bead_cache(&br, &mut db).context("sync bead cache from br")?;
-        sync_result.beads_synced
+    let sync_result = if br_capability.beads_dir_exists {
+        Some(sync_bead_cache(&br, &mut db).context("sync bead cache from br")?)
     } else {
-        0
+        None
+    };
+    let synced_beads = sync_result.as_ref().map_or(0, |result| result.beads_synced);
+    let operation = if force {
+        "force_reinit"
+    } else if sync {
+        "sync"
+    } else {
+        "init"
     };
 
     if json_mode {
         let notes = [
             force.then_some("Forced reset requested; Grove-managed runtime state was cleared before initialization."),
+            sync.then_some("Sync requested; Grove-managed runtime state was preserved while the bead cache was reconciled with `br`."),
             (!br_capability.beads_dir_exists).then_some(
                 "No .beads directory detected yet; run `br init` before `grove status` or `grove run`.",
             ),
@@ -336,6 +352,7 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&json!({
                 "ok": true,
+                "mode": operation,
                 "workspace_root": loaded.paths.workspace_root().as_str(),
                 "db_path": loaded.paths.db_path().as_str(),
                 "config_path": loaded.paths.config_path().as_str(),
@@ -348,7 +365,16 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
                 "wrote_startup_prompt": wrote_startup_prompt,
                 "wrote_flywheel_skill": skills.then_some(wrote_flywheel_skill),
                 "forced_reset": force,
+                "sync_requested": sync,
                 "synced_beads": synced_beads,
+                "sync_result": sync_result.as_ref().map(|result| json!({
+                    "beads_synced": result.beads_synced,
+                    "beads_added": result.beads_added,
+                    "beads_updated": result.beads_updated,
+                    "beads_removed": result.beads_removed,
+                    "dependencies_updated": result.dependencies_updated,
+                    "error_count": result.errors.len(),
+                })),
                 "tooling": {
                     "claude": render_tool_line(&tooling.claude.binary, tooling.claude.version.as_deref()),
                     "br": render_tool_line("br", br_capability.version_line.as_deref()),
@@ -365,10 +391,13 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
         return Ok(());
     }
 
-    if force {
+    if force && already_initialized {
         println!("Reset existing Grove-managed state before initialization.");
+    } else if sync {
+        println!("Synced existing Grove workspace with br.");
+    } else {
+        println!("Initialized grove workspace.");
     }
-    println!("Initialized grove workspace.");
     println!("- database: {}", loaded.paths.db_path());
     println!("- config: {}", loaded.paths.config_path());
     println!("- transcripts: {}", loaded.paths.transcript_dir());
@@ -393,8 +422,15 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
             println!("- preserved existing flywheel skill: {flywheel_skill_path}");
         }
     }
-    if br_capability.beads_dir_exists {
-        println!("- bead cache synced: {synced_beads} bead(s)");
+    if let Some(result) = &sync_result {
+        println!(
+            "- bead cache synced: {} bead(s) (added {}, updated {}, removed {}, dependencies refreshed {})",
+            result.beads_synced,
+            result.beads_added,
+            result.beads_updated,
+            result.beads_removed,
+            result.dependencies_updated
+        );
     }
 
     println!("\nValidated tools:");
@@ -411,11 +447,16 @@ fn handle_init(json_mode: bool, force: bool, skills: bool) -> Result<()> {
         render_tool_line("bv", bv_capability.version.as_deref())
     );
 
-    if !br_capability.beads_dir_exists || !bv_capability.beads_dir_exists || force {
+    if !br_capability.beads_dir_exists || !bv_capability.beads_dir_exists || force || sync {
         println!("\nNotes:");
         if force {
             println!(
                 "- Forced reset requested; Grove-managed runtime state was cleared before initialization."
+            );
+        }
+        if sync {
+            println!(
+                "- Sync requested; Grove-managed runtime state was preserved while the bead cache was reconciled with `br`."
             );
         }
         if !br_capability.beads_dir_exists {
