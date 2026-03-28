@@ -16,8 +16,7 @@ use grove_types::{
 };
 use rusqlite::OptionalExtension;
 use serde_json::json;
-use std::collections::BTreeMap;
-use std::fs;
+use std::{collections::BTreeMap, fs, thread, time::Duration};
 use tempfile::tempdir;
 
 use super::{
@@ -35,6 +34,90 @@ fn open_creates_database_parent_directory() -> Result<()> {
     let _db = Database::open(&db_path)?;
 
     assert!(db_path.exists());
+    Ok(())
+}
+
+#[test]
+fn record_run_finished_retries_when_database_is_temporarily_locked() -> Result<()> {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+    let mut writer = Database::open(&db_path)?;
+    writer.migrate()?;
+    insert_bead_cache_row(&writer, "grove-lock", "Lock bead")?;
+    insert_run_row(&writer, "run-lock", "grove-lock", "Active")?;
+    writer
+        .connection()
+        .execute_batch("PRAGMA busy_timeout = 0;")?;
+
+    let mut blocker = Database::open(&db_path)?;
+    blocker.migrate()?;
+    let hold = thread::spawn(move || -> Result<()> {
+        blocker.with_tx(|_| {
+            thread::sleep(Duration::from_millis(150));
+            Ok(())
+        })
+    });
+
+    thread::sleep(Duration::from_millis(20));
+    let run = writer.record_run_finished(
+        &BeadId::new("grove-lock"),
+        RunFinishInput {
+            run_id: RunId::new("run-lock"),
+            status: RunStatus::Succeeded,
+            failure_class: None,
+            failure_detail: None,
+            ended_at: "2026-03-20T06:00:00Z".parse()?,
+            retry_after: None,
+            circuit_breaker_state: None,
+        },
+    )?;
+
+    hold.join()
+        .map_err(|_| anyhow::anyhow!("lock holder thread panicked"))??;
+    assert_eq!(run.status, RunStatus::Succeeded);
+    Ok(())
+}
+
+#[test]
+fn heartbeat_leader_lease_retries_when_database_is_temporarily_locked() -> Result<()> {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+    let mut leader = Database::open(&db_path)?;
+    leader.migrate()?;
+    let acquired_at: Timestamp = "2026-03-16T12:00:00Z".parse()?;
+    let heartbeat_at: Timestamp = "2026-03-16T12:00:05Z".parse()?;
+    leader
+        .acquire_leader_lease(crate::LeaderLeaseAcquireInput {
+            owner_label: "leader-a".to_owned(),
+            run_id: None,
+            acquired_at,
+            expires_at: "2026-03-16T12:00:30Z".parse()?,
+        })?
+        .unwrap();
+    leader
+        .connection()
+        .execute_batch("PRAGMA busy_timeout = 0;")?;
+
+    let mut blocker = Database::open(&db_path)?;
+    blocker.migrate()?;
+    let hold = thread::spawn(move || -> Result<()> {
+        blocker.with_tx(|_| {
+            thread::sleep(Duration::from_millis(150));
+            Ok(())
+        })
+    });
+
+    thread::sleep(Duration::from_millis(20));
+    let heartbeat = leader
+        .heartbeat_leader_lease("leader-a", &heartbeat_at, &"2026-03-16T12:00:35Z".parse()?)?
+        .unwrap();
+
+    hold.join()
+        .map_err(|_| anyhow::anyhow!("lock holder thread panicked"))??;
+    assert_eq!(heartbeat.owner_label, "leader-a");
+    assert_eq!(heartbeat.heartbeat_at, heartbeat_at);
     Ok(())
 }
 
@@ -211,6 +294,30 @@ fn with_tx_commits_changes() -> Result<()> {
         .connection()
         .query_row("SELECT COUNT(*) FROM bead_cache", [], |row| row.get(0))?;
     assert_eq!(count, 1);
+    Ok(())
+}
+
+#[test]
+fn remove_bead_cache_preserves_bead_with_active_run() -> Result<()> {
+    let dir = tempdir()?;
+    let db_path = Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| anyhow::anyhow!("temp path was not valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+    insert_bead_cache_row(&db, "grove-active", "Active bead")?;
+    insert_run_row(&db, "run-active", "grove-active", "Active")?;
+
+    grove_br::BeadCacheStore::remove_bead_cache(&mut db, &BeadId::new("grove-active"))?;
+
+    let exists: Option<String> = db
+        .connection()
+        .query_row(
+            "SELECT bead_id FROM bead_cache WHERE bead_id = ?1",
+            ["grove-active"],
+            |row| row.get(0),
+        )
+        .optional()?;
+    assert_eq!(exists.as_deref(), Some("grove-active"));
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use camino::{Utf8Path, Utf8PathBuf};
@@ -426,10 +426,7 @@ impl Database {
     }
 
     pub fn with_tx<T>(&mut self, f: impl FnOnce(&Transaction<'_>) -> Result<T>) -> Result<T> {
-        let tx = begin_immediate_tx(&mut self.conn, "begin transaction")?;
-        let value = f(&tx)?;
-        tx.commit().context("commit transaction")?;
-        Ok(value)
+        with_immediate_tx(&mut self.conn, "begin transaction", "commit transaction", f)
     }
 
     #[must_use]
@@ -577,61 +574,63 @@ impl Database {
     }
 
     pub fn record_run_started(&mut self, input: RunStartInput) -> Result<TaskRunRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin run start transaction")?;
-        ensure_bead_exists(&tx, &input.bead_id)?;
-        tx.execute(
-            "INSERT INTO task_runs(\
-                id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
-             ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL, ?6, ?7, ?8)",
-            params![
-                input.run_id.as_str(),
-                input.bead_id.as_str(),
-                input.attempt_no,
-                encode_run_status(RunStatus::Active),
-                timestamp_string(&input.started_at),
-                encode_agent_activity(grove_types::AgentActivity::Active),
-                timestamp_string(&input.started_at),
-                encode_escalation_tier(input.escalation_tier),
-            ],
+        with_immediate_tx(
+            &mut self.conn,
+            "begin run start transaction",
+            "commit run start transaction",
+            |tx| {
+                ensure_bead_exists(tx, &input.bead_id)?;
+                tx.execute(
+                    "INSERT INTO task_runs(\
+                        id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier\
+                     ) VALUES (?1, ?2, ?3, ?4, NULL, NULL, ?5, NULL, 0, 0, NULL, ?6, ?7, ?8)",
+                    params![
+                        input.run_id.as_str(),
+                        input.bead_id.as_str(),
+                        input.attempt_no,
+                        encode_run_status(RunStatus::Active),
+                        timestamp_string(&input.started_at),
+                        encode_agent_activity(grove_types::AgentActivity::Active),
+                        timestamp_string(&input.started_at),
+                        encode_escalation_tier(input.escalation_tier),
+                    ],
+                )
+                .with_context(|| format!("insert task run {}", input.run_id.as_str()))?;
+                upsert_bead_runtime_tx(
+                    tx,
+                    &input.bead_id,
+                    Some(GroveBeadStatus::Running),
+                    None,
+                    Some(Some(input.run_id.clone())),
+                    Some(None),
+                    Some(None),
+                    Some(None),
+                    None,
+                    &input.started_at,
+                )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::RunStarted,
+                    Some(&input.bead_id),
+                    Some(&input.run_id),
+                    None,
+                    &serde_json::json!({
+                        "attempt_no": input.attempt_no,
+                        "status": encode_run_status(RunStatus::Active),
+                    }),
+                    &input.started_at,
+                )?;
+                let raw = tx
+                    .query_row(
+                        "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
+                         FROM task_runs WHERE id = ?1",
+                        [input.run_id.as_str()],
+                        raw_task_run_row,
+                    )
+                    .with_context(|| format!("query inserted task run {}", input.run_id.as_str()))?;
+                raw_task_run_into_record(raw)
+            },
         )
-        .with_context(|| format!("insert task run {}", input.run_id.as_str()))?;
-        upsert_bead_runtime_tx(
-            &tx,
-            &input.bead_id,
-            Some(GroveBeadStatus::Running),
-            None,
-            Some(Some(input.run_id.clone())),
-            Some(None),
-            Some(None),
-            Some(None),
-            None,
-            &input.started_at,
-        )?;
-        insert_event_log_tx(
-            &tx,
-            EventKind::RunStarted,
-            Some(&input.bead_id),
-            Some(&input.run_id),
-            None,
-            &serde_json::json!({
-                "attempt_no": input.attempt_no,
-                "status": encode_run_status(RunStatus::Active),
-            }),
-            &input.started_at,
-        )?;
-        let raw = tx
-            .query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
-                 FROM task_runs WHERE id = ?1",
-                [input.run_id.as_str()],
-                raw_task_run_row,
-            )
-            .with_context(|| format!("query inserted task run {}", input.run_id.as_str()))?;
-        tx.commit().context("commit run start transaction")?;
-        raw_task_run_into_record(raw)
     }
 
     pub fn record_session_started(
@@ -639,68 +638,72 @@ impl Database {
         bead_id: &BeadId,
         session: &ClaudeSessionRecord,
     ) -> Result<ClaudeSessionRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin session start transaction")?;
-        ensure_bead_exists(&tx, bead_id)?;
-        ensure_run_exists(&tx, &session.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &session.run_id, bead_id)?;
-        tx.execute(
-            "INSERT INTO claude_sessions(\
-                id, run_id, provider, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path\
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-            params![
-                session.id.as_str(),
-                session.run_id.as_str(),
-                session.provider.as_str(),
-                session.external_session_id.as_deref(),
-                session.ordinal_in_run,
-                encode_session_status(session.status),
-                timestamp_string(&session.started_at),
-                session.ended_at.as_ref().map(timestamp_string),
-                session.prompt_id.as_ref().map(PromptId::as_str),
-                session.prompt_manifest_path.as_deref(),
-                session.prompt_bytes,
-                session.estimated_input_tokens,
-                session.estimated_output_tokens,
-                session.exit_code,
-                session.stop_reason.map(encode_stop_reason),
-                session.transcript_path.as_str(),
-            ],
+        with_immediate_tx(
+            &mut self.conn,
+            "begin session start transaction",
+            "commit session start transaction",
+            |tx| {
+                ensure_bead_exists(tx, bead_id)?;
+                ensure_run_exists(tx, &session.run_id)?;
+                ensure_run_belongs_to_bead(tx, &session.run_id, bead_id)?;
+                tx.execute(
+                    "INSERT INTO claude_sessions(\
+                        id, run_id, provider, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path\
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                    params![
+                        session.id.as_str(),
+                        session.run_id.as_str(),
+                        session.provider.as_str(),
+                        session.external_session_id.as_deref(),
+                        session.ordinal_in_run,
+                        encode_session_status(session.status),
+                        timestamp_string(&session.started_at),
+                        session.ended_at.as_ref().map(timestamp_string),
+                        session.prompt_id.as_ref().map(PromptId::as_str),
+                        session.prompt_manifest_path.as_deref(),
+                        session.prompt_bytes,
+                        session.estimated_input_tokens,
+                        session.estimated_output_tokens,
+                        session.exit_code,
+                        session.stop_reason.map(encode_stop_reason),
+                        session.transcript_path.as_str(),
+                    ],
+                )
+                .with_context(|| format!("insert session {}", session.id.as_str()))?;
+                tx.execute(
+                    "UPDATE task_runs SET session_count = session_count + 1 WHERE id = ?1",
+                    [session.run_id.as_str()],
+                )
+                .with_context(|| {
+                    format!("increment session count for {}", session.run_id.as_str())
+                })?;
+                upsert_bead_runtime_tx(
+                    tx,
+                    bead_id,
+                    Some(GroveBeadStatus::Running),
+                    None,
+                    Some(Some(session.run_id.clone())),
+                    None,
+                    Some(None),
+                    Some(None),
+                    None,
+                    &session.started_at,
+                )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::SessionStarted,
+                    Some(bead_id),
+                    Some(&session.run_id),
+                    Some(&session.id),
+                    &serde_json::json!({
+                        "ordinal_in_run": session.ordinal_in_run,
+                        "status": encode_session_status(session.status),
+                    }),
+                    &session.started_at,
+                )?;
+                Ok(session.clone())
+            },
         )
-        .with_context(|| format!("insert session {}", session.id.as_str()))?;
-        tx.execute(
-            "UPDATE task_runs SET session_count = session_count + 1 WHERE id = ?1",
-            [session.run_id.as_str()],
-        )
-        .with_context(|| format!("increment session count for {}", session.run_id.as_str()))?;
-        upsert_bead_runtime_tx(
-            &tx,
-            bead_id,
-            Some(GroveBeadStatus::Running),
-            None,
-            Some(Some(session.run_id.clone())),
-            None,
-            Some(None),
-            Some(None),
-            None,
-            &session.started_at,
-        )?;
-        insert_event_log_tx(
-            &tx,
-            EventKind::SessionStarted,
-            Some(bead_id),
-            Some(&session.run_id),
-            Some(&session.id),
-            &serde_json::json!({
-                "ordinal_in_run": session.ordinal_in_run,
-                "status": encode_session_status(session.status),
-            }),
-            &session.started_at,
-        )?;
-        tx.commit().context("commit session start transaction")?;
-        Ok(session.clone())
     }
 
     pub fn record_session_finished(
@@ -708,158 +711,164 @@ impl Database {
         bead_id: &BeadId,
         session: &ClaudeSessionRecord,
     ) -> Result<ClaudeSessionRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin session finish transaction")?;
-        ensure_bead_exists(&tx, bead_id)?;
-        ensure_run_exists(&tx, &session.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &session.run_id, bead_id)?;
-        ensure_session_belongs_to_run(&tx, &session.id, &session.run_id)?;
-        tx.execute(
-            "UPDATE claude_sessions SET \
-                provider = ?2, external_session_id = ?3, ordinal_in_run = ?4, status = ?5, started_at = ?6, ended_at = ?7, prompt_id = ?8, prompt_manifest_path = ?9, prompt_bytes = ?10, estimated_input_tokens = ?11, estimated_output_tokens = ?12, exit_code = ?13, stop_reason = ?14, transcript_path = ?15 \
-             WHERE id = ?1",
-            params![
-                session.id.as_str(),
-                session.provider.as_str(),
-                session.external_session_id.as_deref(),
-                session.ordinal_in_run,
-                encode_session_status(session.status),
-                timestamp_string(&session.started_at),
-                session.ended_at.as_ref().map(timestamp_string),
-                session.prompt_id.as_ref().map(PromptId::as_str),
-                session.prompt_manifest_path.as_deref(),
-                session.prompt_bytes,
-                session.estimated_input_tokens,
-                session.estimated_output_tokens,
-                session.exit_code,
-                session.stop_reason.map(encode_stop_reason),
-                session.transcript_path.as_str(),
-            ],
+        with_immediate_tx(
+            &mut self.conn,
+            "begin session finish transaction",
+            "commit session finish transaction",
+            |tx| {
+                ensure_bead_exists(tx, bead_id)?;
+                ensure_run_exists(tx, &session.run_id)?;
+                ensure_run_belongs_to_bead(tx, &session.run_id, bead_id)?;
+                ensure_session_belongs_to_run(tx, &session.id, &session.run_id)?;
+                tx.execute(
+                    "UPDATE claude_sessions SET \
+                        provider = ?2, external_session_id = ?3, ordinal_in_run = ?4, status = ?5, started_at = ?6, ended_at = ?7, prompt_id = ?8, prompt_manifest_path = ?9, prompt_bytes = ?10, estimated_input_tokens = ?11, estimated_output_tokens = ?12, exit_code = ?13, stop_reason = ?14, transcript_path = ?15 \
+                     WHERE id = ?1",
+                    params![
+                        session.id.as_str(),
+                        session.provider.as_str(),
+                        session.external_session_id.as_deref(),
+                        session.ordinal_in_run,
+                        encode_session_status(session.status),
+                        timestamp_string(&session.started_at),
+                        session.ended_at.as_ref().map(timestamp_string),
+                        session.prompt_id.as_ref().map(PromptId::as_str),
+                        session.prompt_manifest_path.as_deref(),
+                        session.prompt_bytes,
+                        session.estimated_input_tokens,
+                        session.estimated_output_tokens,
+                        session.exit_code,
+                        session.stop_reason.map(encode_stop_reason),
+                        session.transcript_path.as_str(),
+                    ],
+                )
+                .with_context(|| format!("update session {}", session.id.as_str()))?;
+                let event_kind = match session.status {
+                    SessionStatus::Checkpointed => EventKind::SessionCheckpointed,
+                    SessionStatus::Completed => EventKind::SessionSucceeded,
+                    SessionStatus::TimedOut
+                    | SessionStatus::RateLimited
+                    | SessionStatus::PermissionDenied
+                    | SessionStatus::Crashed
+                    | SessionStatus::UnknownFailure => EventKind::SessionFailed,
+                    SessionStatus::Starting | SessionStatus::Running => EventKind::SessionStarted,
+                };
+                let runtime_status = match session.status {
+                    SessionStatus::Checkpointed => GroveBeadStatus::Checkpointed,
+                    SessionStatus::Completed => GroveBeadStatus::Succeeded,
+                    SessionStatus::TimedOut | SessionStatus::RateLimited => {
+                        GroveBeadStatus::WaitingToRetry
+                    }
+                    SessionStatus::PermissionDenied
+                    | SessionStatus::Crashed
+                    | SessionStatus::UnknownFailure => GroveBeadStatus::Failed,
+                    SessionStatus::Starting | SessionStatus::Running => GroveBeadStatus::Running,
+                };
+                let failure_class = session_failure_class(session);
+                let failure_detail = session
+                    .stop_reason
+                    .map(|reason| format!("session ended with {:?}", reason));
+                upsert_bead_runtime_tx(
+                    tx,
+                    bead_id,
+                    Some(runtime_status),
+                    None,
+                    Some(Some(session.run_id.clone())),
+                    Some(None),
+                    Some(failure_class),
+                    Some(failure_detail.clone()),
+                    None,
+                    &session.ended_at.unwrap_or_else(Utc::now),
+                )?;
+                insert_event_log_tx(
+                    tx,
+                    event_kind,
+                    Some(bead_id),
+                    Some(&session.run_id),
+                    Some(&session.id),
+                    &serde_json::json!({
+                        "status": encode_session_status(session.status),
+                        "stop_reason": session.stop_reason.map(encode_stop_reason),
+                        "exit_code": session.exit_code,
+                    }),
+                    &session.ended_at.unwrap_or_else(Utc::now),
+                )?;
+                Ok(session.clone())
+            },
         )
-        .with_context(|| format!("update session {}", session.id.as_str()))?;
-        let event_kind = match session.status {
-            SessionStatus::Checkpointed => EventKind::SessionCheckpointed,
-            SessionStatus::Completed => EventKind::SessionSucceeded,
-            SessionStatus::TimedOut
-            | SessionStatus::RateLimited
-            | SessionStatus::PermissionDenied
-            | SessionStatus::Crashed
-            | SessionStatus::UnknownFailure => EventKind::SessionFailed,
-            SessionStatus::Starting | SessionStatus::Running => EventKind::SessionStarted,
-        };
-        let runtime_status = match session.status {
-            SessionStatus::Checkpointed => GroveBeadStatus::Checkpointed,
-            SessionStatus::Completed => GroveBeadStatus::Succeeded,
-            SessionStatus::TimedOut | SessionStatus::RateLimited => GroveBeadStatus::WaitingToRetry,
-            SessionStatus::PermissionDenied
-            | SessionStatus::Crashed
-            | SessionStatus::UnknownFailure => GroveBeadStatus::Failed,
-            SessionStatus::Starting | SessionStatus::Running => GroveBeadStatus::Running,
-        };
-        let failure_class = session_failure_class(session);
-        let failure_detail = session
-            .stop_reason
-            .map(|reason| format!("session ended with {:?}", reason));
-        upsert_bead_runtime_tx(
-            &tx,
-            bead_id,
-            Some(runtime_status),
-            None,
-            Some(Some(session.run_id.clone())),
-            Some(None),
-            Some(failure_class),
-            Some(failure_detail.clone()),
-            None,
-            &session.ended_at.unwrap_or_else(Utc::now),
-        )?;
-        insert_event_log_tx(
-            &tx,
-            event_kind,
-            Some(bead_id),
-            Some(&session.run_id),
-            Some(&session.id),
-            &serde_json::json!({
-                "status": encode_session_status(session.status),
-                "stop_reason": session.stop_reason.map(encode_stop_reason),
-                "exit_code": session.exit_code,
-            }),
-            &session.ended_at.unwrap_or_else(Utc::now),
-        )?;
-        tx.commit().context("commit session finish transaction")?;
-        Ok(session.clone())
     }
 
     pub fn record_checkpoint_saved(
         &mut self,
         input: SessionCheckpointInput,
     ) -> Result<CheckpointRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin checkpoint save transaction")?;
-        ensure_bead_exists(&tx, &input.bead_id)?;
-        ensure_run_exists(&tx, &input.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
-        ensure_session_belongs_to_run(&tx, &input.session_id, &input.run_id)?;
-        tx.execute(
-            "INSERT INTO checkpoints(\
-                id, bead_id, run_id, session_id, progress, next_step, payload_json, saved_at, resume_generation\
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                input.checkpoint_id.as_str(),
-                input.bead_id.as_str(),
-                input.run_id.as_str(),
-                input.session_id.as_str(),
-                input.payload.progress,
-                input.payload.next_step,
-                serde_json::to_string(&input.payload).context("serialize checkpoint payload")?,
-                timestamp_string(&input.saved_at),
-                input.resume_generation,
-            ],
+        with_immediate_tx(
+            &mut self.conn,
+            "begin checkpoint save transaction",
+            "commit checkpoint save transaction",
+            |tx| {
+                ensure_bead_exists(tx, &input.bead_id)?;
+                ensure_run_exists(tx, &input.run_id)?;
+                ensure_run_belongs_to_bead(tx, &input.run_id, &input.bead_id)?;
+                ensure_session_belongs_to_run(tx, &input.session_id, &input.run_id)?;
+                tx.execute(
+                    "INSERT INTO checkpoints(\
+                        id, bead_id, run_id, session_id, progress, next_step, payload_json, saved_at, resume_generation\
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        input.checkpoint_id.as_str(),
+                        input.bead_id.as_str(),
+                        input.run_id.as_str(),
+                        input.session_id.as_str(),
+                        input.payload.progress,
+                        input.payload.next_step,
+                        serde_json::to_string(&input.payload).context("serialize checkpoint payload")?,
+                        timestamp_string(&input.saved_at),
+                        input.resume_generation,
+                    ],
+                )
+                .with_context(|| format!("insert checkpoint {}", input.checkpoint_id.as_str()))?;
+                tx.execute(
+                    "UPDATE task_runs SET checkpoint_count = checkpoint_count + 1, last_checkpoint_id = ?2 WHERE id = ?1",
+                    params![input.run_id.as_str(), input.checkpoint_id.as_str()],
+                )
+                .with_context(|| format!("update checkpoint counters for {}", input.run_id.as_str()))?;
+                upsert_bead_runtime_tx(
+                    tx,
+                    &input.bead_id,
+                    Some(GroveBeadStatus::Checkpointed),
+                    Some(input.payload.claimed_paths.clone()),
+                    Some(Some(input.run_id.clone())),
+                    Some(None),
+                    Some(None),
+                    Some(None),
+                    None,
+                    &input.saved_at,
+                )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::SessionCheckpointed,
+                    Some(&input.bead_id),
+                    Some(&input.run_id),
+                    Some(&input.session_id),
+                    &serde_json::json!({
+                        "checkpoint_id": input.checkpoint_id.as_str(),
+                        "resume_generation": input.resume_generation,
+                        "next_step": input.payload.next_step,
+                    }),
+                    &input.saved_at,
+                )?;
+                let raw = tx
+                    .query_row(
+                        "SELECT id, bead_id, run_id, session_id, progress, next_step, payload_json, saved_at, resume_generation \
+                         FROM checkpoints WHERE id = ?1",
+                        [input.checkpoint_id.as_str()],
+                        raw_checkpoint_row,
+                    )
+                    .with_context(|| format!("query inserted checkpoint {}", input.checkpoint_id.as_str()))?;
+                raw_checkpoint_into_record(raw)
+            },
         )
-        .with_context(|| format!("insert checkpoint {}", input.checkpoint_id.as_str()))?;
-        tx.execute(
-            "UPDATE task_runs SET checkpoint_count = checkpoint_count + 1, last_checkpoint_id = ?2 WHERE id = ?1",
-            params![input.run_id.as_str(), input.checkpoint_id.as_str()],
-        )
-        .with_context(|| format!("update checkpoint counters for {}", input.run_id.as_str()))?;
-        upsert_bead_runtime_tx(
-            &tx,
-            &input.bead_id,
-            Some(GroveBeadStatus::Checkpointed),
-            Some(input.payload.claimed_paths.clone()),
-            Some(Some(input.run_id.clone())),
-            Some(None),
-            Some(None),
-            Some(None),
-            None,
-            &input.saved_at,
-        )?;
-        insert_event_log_tx(
-            &tx,
-            EventKind::SessionCheckpointed,
-            Some(&input.bead_id),
-            Some(&input.run_id),
-            Some(&input.session_id),
-            &serde_json::json!({
-                "checkpoint_id": input.checkpoint_id.as_str(),
-                "resume_generation": input.resume_generation,
-                "next_step": input.payload.next_step,
-            }),
-            &input.saved_at,
-        )?;
-        let raw = tx
-            .query_row(
-                "SELECT id, bead_id, run_id, session_id, progress, next_step, payload_json, saved_at, resume_generation \
-                 FROM checkpoints WHERE id = ?1",
-                [input.checkpoint_id.as_str()],
-                raw_checkpoint_row,
-            )
-            .with_context(|| format!("query inserted checkpoint {}", input.checkpoint_id.as_str()))?;
-        tx.commit().context("commit checkpoint save transaction")?;
-        raw_checkpoint_into_record(raw)
     }
 
     pub fn record_run_finished(
@@ -867,78 +876,80 @@ impl Database {
         bead_id: &BeadId,
         input: RunFinishInput,
     ) -> Result<TaskRunRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin run finish transaction")?;
-        ensure_bead_exists(&tx, bead_id)?;
-        ensure_run_exists(&tx, &input.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &input.run_id, bead_id)?;
-        tx.execute(
-            "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5, last_activity_at = ?6 WHERE id = ?1",
-            params![
-                input.run_id.as_str(),
-                encode_run_status(input.status),
-                input.failure_class.map(encode_failure_class),
-                input.failure_detail.as_deref(),
-                timestamp_string(&input.ended_at),
-                timestamp_string(&input.ended_at),
-            ],
+        with_immediate_tx(
+            &mut self.conn,
+            "begin run finish transaction",
+            "commit run finish transaction",
+            |tx| {
+                ensure_bead_exists(tx, bead_id)?;
+                ensure_run_exists(tx, &input.run_id)?;
+                ensure_run_belongs_to_bead(tx, &input.run_id, bead_id)?;
+                tx.execute(
+                    "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5, last_activity_at = ?6 WHERE id = ?1",
+                    params![
+                        input.run_id.as_str(),
+                        encode_run_status(input.status),
+                        input.failure_class.map(encode_failure_class),
+                        input.failure_detail.as_deref(),
+                        timestamp_string(&input.ended_at),
+                        timestamp_string(&input.ended_at),
+                    ],
+                )
+                .with_context(|| format!("update task run {}", input.run_id.as_str()))?;
+                let runtime_status = match input.status {
+                    RunStatus::Active => GroveBeadStatus::Running,
+                    RunStatus::Checkpointed => GroveBeadStatus::Checkpointed,
+                    RunStatus::WaitingToRetry => GroveBeadStatus::WaitingToRetry,
+                    RunStatus::Succeeded => GroveBeadStatus::Succeeded,
+                    RunStatus::Failed => GroveBeadStatus::Failed,
+                };
+                let declared_paths = match input.status {
+                    RunStatus::Checkpointed => None,
+                    _ => Some(Vec::new()),
+                };
+                upsert_bead_runtime_tx(
+                    tx,
+                    bead_id,
+                    Some(runtime_status),
+                    declared_paths,
+                    Some(Some(input.run_id.clone())),
+                    Some(input.retry_after),
+                    Some(input.failure_class),
+                    Some(input.failure_detail.clone()),
+                    Some(input.circuit_breaker_state.clone()),
+                    &input.ended_at,
+                )?;
+                let event_kind = match input.status {
+                    RunStatus::Active => EventKind::RunStarted,
+                    RunStatus::Checkpointed => EventKind::RunCheckpointed,
+                    RunStatus::Succeeded => EventKind::RunSucceeded,
+                    RunStatus::WaitingToRetry | RunStatus::Failed => EventKind::RunFailed,
+                };
+                insert_event_log_tx(
+                    tx,
+                    event_kind,
+                    Some(bead_id),
+                    Some(&input.run_id),
+                    None,
+                    &serde_json::json!({
+                        "status": encode_run_status(input.status),
+                        "failure_class": input.failure_class.map(encode_failure_class),
+                        "failure_detail": input.failure_detail,
+                        "retry_after": input.retry_after.map(|ts| timestamp_string(&ts)),
+                    }),
+                    &input.ended_at,
+                )?;
+                let raw = tx
+                    .query_row(
+                        "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
+                         FROM task_runs WHERE id = ?1",
+                        [input.run_id.as_str()],
+                        raw_task_run_row,
+                    )
+                    .with_context(|| format!("query updated task run {}", input.run_id.as_str()))?;
+                raw_task_run_into_record(raw)
+            },
         )
-        .with_context(|| format!("update task run {}", input.run_id.as_str()))?;
-        let runtime_status = match input.status {
-            RunStatus::Active => GroveBeadStatus::Running,
-            RunStatus::Checkpointed => GroveBeadStatus::Checkpointed,
-            RunStatus::WaitingToRetry => GroveBeadStatus::WaitingToRetry,
-            RunStatus::Succeeded => GroveBeadStatus::Succeeded,
-            RunStatus::Failed => GroveBeadStatus::Failed,
-        };
-        let declared_paths = match input.status {
-            RunStatus::Checkpointed => None,
-            _ => Some(Vec::new()),
-        };
-        upsert_bead_runtime_tx(
-            &tx,
-            bead_id,
-            Some(runtime_status),
-            declared_paths,
-            Some(Some(input.run_id.clone())),
-            Some(input.retry_after),
-            Some(input.failure_class),
-            Some(input.failure_detail.clone()),
-            Some(input.circuit_breaker_state.clone()),
-            &input.ended_at,
-        )?;
-        let event_kind = match input.status {
-            RunStatus::Active => EventKind::RunStarted,
-            RunStatus::Checkpointed => EventKind::RunCheckpointed,
-            RunStatus::Succeeded => EventKind::RunSucceeded,
-            RunStatus::WaitingToRetry | RunStatus::Failed => EventKind::RunFailed,
-        };
-        insert_event_log_tx(
-            &tx,
-            event_kind,
-            Some(bead_id),
-            Some(&input.run_id),
-            None,
-            &serde_json::json!({
-                "status": encode_run_status(input.status),
-                "failure_class": input.failure_class.map(encode_failure_class),
-                "failure_detail": input.failure_detail,
-                "retry_after": input.retry_after.map(|ts| timestamp_string(&ts)),
-            }),
-            &input.ended_at,
-        )?;
-        let raw = tx
-            .query_row(
-                "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
-                 FROM task_runs WHERE id = ?1",
-                [input.run_id.as_str()],
-                raw_task_run_row,
-            )
-            .with_context(|| format!("query updated task run {}", input.run_id.as_str()))?;
-        tx.commit().context("commit run finish transaction")?;
-        raw_task_run_into_record(raw)
     }
 
     pub fn latest_session_for_run(&self, run_id: &RunId) -> Result<Option<ClaudeSessionRecord>> {
@@ -1105,58 +1116,60 @@ impl Database {
     }
 
     pub fn write_handoff(&mut self, input: HandoffWriteInput) -> Result<HandoffRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin handoff write transaction")?;
-        ensure_bead_exists(&tx, &input.bead_id)?;
-        ensure_run_exists(&tx, &input.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin handoff write transaction",
+            "commit handoff write transaction",
+            |tx| {
+                ensure_bead_exists(tx, &input.bead_id)?;
+                ensure_run_exists(tx, &input.run_id)?;
+                ensure_run_belongs_to_bead(tx, &input.run_id, &input.bead_id)?;
 
-        tx.execute(
-            "INSERT INTO handoffs(\
-                bead_id, run_id, summary, artifacts_json, lessons_json, decisions_json, warnings_json, completed_at\
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                input.bead_id.as_str(),
-                input.run_id.as_str(),
-                &input.summary,
-                serde_json::to_string(&input.artifacts).context("serialize handoff artifacts")?,
-                serde_json::to_string(&input.lessons).context("serialize handoff lessons")?,
-                serde_json::to_string(&input.decisions).context("serialize handoff decisions")?,
-                serde_json::to_string(&input.warnings).context("serialize handoff warnings")?,
-                timestamp_string(&input.completed_at),
-            ],
+                tx.execute(
+                    "INSERT INTO handoffs(\
+                        bead_id, run_id, summary, artifacts_json, lessons_json, decisions_json, warnings_json, completed_at\
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        input.bead_id.as_str(),
+                        input.run_id.as_str(),
+                        &input.summary,
+                        serde_json::to_string(&input.artifacts).context("serialize handoff artifacts")?,
+                        serde_json::to_string(&input.lessons).context("serialize handoff lessons")?,
+                        serde_json::to_string(&input.decisions).context("serialize handoff decisions")?,
+                        serde_json::to_string(&input.warnings).context("serialize handoff warnings")?,
+                        timestamp_string(&input.completed_at),
+                    ],
+                )
+                .with_context(|| format!("insert handoff for {}", input.bead_id.as_str()))?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::HandoffWritten,
+                    Some(&input.bead_id),
+                    Some(&input.run_id),
+                    None,
+                    &serde_json::json!({
+                        "summary": input.summary,
+                        "artifacts": input.artifacts,
+                        "lessons": input.lessons,
+                        "decisions": input.decisions,
+                        "warnings": input.warnings,
+                    }),
+                    &input.completed_at,
+                )?;
+
+                let raw = tx
+                    .query_row(
+                        "SELECT bead_id, run_id, summary, artifacts_json, lessons_json, decisions_json, warnings_json, completed_at \
+                         FROM handoffs \
+                         WHERE bead_id = ?1 AND run_id = ?2",
+                        params![input.bead_id.as_str(), input.run_id.as_str()],
+                        raw_handoff_row,
+                    )
+                    .with_context(|| format!("query inserted handoff for {}", input.bead_id.as_str()))?;
+                raw_handoff_into_record(raw)
+            },
         )
-        .with_context(|| format!("insert handoff for {}", input.bead_id.as_str()))?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::HandoffWritten,
-            Some(&input.bead_id),
-            Some(&input.run_id),
-            None,
-            &serde_json::json!({
-                "summary": input.summary,
-                "artifacts": input.artifacts,
-                "lessons": input.lessons,
-                "decisions": input.decisions,
-                "warnings": input.warnings,
-            }),
-            &input.completed_at,
-        )?;
-
-        let raw = tx
-            .query_row(
-                "SELECT bead_id, run_id, summary, artifacts_json, lessons_json, decisions_json, warnings_json, completed_at \
-                 FROM handoffs \
-                 WHERE bead_id = ?1 AND run_id = ?2",
-                params![input.bead_id.as_str(), input.run_id.as_str()],
-                raw_handoff_row,
-            )
-            .with_context(|| format!("query inserted handoff for {}", input.bead_id.as_str()))?;
-        tx.commit().context("commit handoff write transaction")?;
-        raw_handoff_into_record(raw)
     }
 
     pub fn advance_bead_workflow(
@@ -1166,60 +1179,63 @@ impl Database {
         run_id: &RunId,
         advanced_at: &chrono::DateTime<Utc>,
     ) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin workflow advance transaction")?;
-        ensure_bead_exists(&tx, bead_id)?;
-        ensure_run_exists(&tx, run_id)?;
-        ensure_run_belongs_to_bead(&tx, run_id, bead_id)?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin workflow advance transaction",
+            "commit workflow advance transaction",
+            |tx| {
+                ensure_bead_exists(tx, bead_id)?;
+                ensure_run_exists(tx, run_id)?;
+                ensure_run_belongs_to_bead(tx, run_id, bead_id)?;
 
-        let metadata = current_runtime_metadata_tx(&tx, bead_id)?;
-        let metadata_json = serde_json::to_string(&workflow_state.apply_to_metadata(&metadata))
-            .context("serialize advanced workflow metadata")?;
-        let advanced_at_text = timestamp_string(advanced_at);
+                let metadata = current_runtime_metadata_tx(tx, bead_id)?;
+                let metadata_json =
+                    serde_json::to_string(&workflow_state.apply_to_metadata(&metadata))
+                        .context("serialize advanced workflow metadata")?;
+                let advanced_at_text = timestamp_string(advanced_at);
 
-        tx.execute(
-            "INSERT INTO bead_runtime(\
-                bead_id, grove_status, declared_paths_json, metadata_json, last_run_id, retry_after,\
-                last_failure_class, last_failure_detail, circuit_breaker_json, runtime_updated_at\
-             ) VALUES (\
-                ?1, ?2, COALESCE((SELECT declared_paths_json FROM bead_runtime WHERE bead_id = ?1), '[]'),\
-                ?3, ?4, NULL, NULL, NULL, COALESCE((SELECT circuit_breaker_json FROM bead_runtime WHERE bead_id = ?1), NULL), ?5\
-             ) \
-             ON CONFLICT(bead_id) DO UPDATE SET \
-                grove_status = excluded.grove_status,\
-                metadata_json = excluded.metadata_json,\
-                last_run_id = excluded.last_run_id,\
-                retry_after = NULL,\
-                last_failure_class = NULL,\
-                last_failure_detail = NULL,\
-                runtime_updated_at = excluded.runtime_updated_at",
-            params![
-                bead_id.as_str(),
-                encode_grove_bead_status(GroveBeadStatus::Ready),
-                metadata_json,
-                run_id.as_str(),
-                advanced_at_text,
-            ],
+                tx.execute(
+                    "INSERT INTO bead_runtime(\
+                        bead_id, grove_status, declared_paths_json, metadata_json, last_run_id, retry_after,\
+                        last_failure_class, last_failure_detail, circuit_breaker_json, runtime_updated_at\
+                     ) VALUES (\
+                        ?1, ?2, COALESCE((SELECT declared_paths_json FROM bead_runtime WHERE bead_id = ?1), '[]'),\
+                        ?3, ?4, NULL, NULL, NULL, COALESCE((SELECT circuit_breaker_json FROM bead_runtime WHERE bead_id = ?1), NULL), ?5\
+                     ) \
+                     ON CONFLICT(bead_id) DO UPDATE SET \
+                        grove_status = excluded.grove_status,\
+                        metadata_json = excluded.metadata_json,\
+                        last_run_id = excluded.last_run_id,\
+                        retry_after = NULL,\
+                        last_failure_class = NULL,\
+                        last_failure_detail = NULL,\
+                        runtime_updated_at = excluded.runtime_updated_at",
+                    params![
+                        bead_id.as_str(),
+                        encode_grove_bead_status(GroveBeadStatus::Ready),
+                        metadata_json,
+                        run_id.as_str(),
+                        advanced_at_text,
+                    ],
+                )
+                .with_context(|| format!("advance workflow for {}", bead_id.as_str()))?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::RecoveryActionTaken,
+                    Some(bead_id),
+                    Some(run_id),
+                    None,
+                    &serde_json::json!({
+                        "action": "workflow_phase_advanced",
+                        "phase": workflow_state.phase.as_str(),
+                    }),
+                    advanced_at,
+                )?;
+
+                Ok(())
+            },
         )
-        .with_context(|| format!("advance workflow for {}", bead_id.as_str()))?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::RecoveryActionTaken,
-            Some(bead_id),
-            Some(run_id),
-            None,
-            &serde_json::json!({
-                "action": "workflow_phase_advanced",
-                "phase": workflow_state.phase.as_str(),
-            }),
-            advanced_at,
-        )?;
-
-        tx.commit().context("commit workflow advance transaction")?;
-        Ok(())
     }
 
     pub fn parent_handoffs_for_bead(&self, bead_id: &BeadId) -> Result<Vec<HandoffRecord>> {
@@ -1273,57 +1289,56 @@ impl Database {
         &mut self,
         input: LeaderLeaseAcquireInput,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin leader lease acquire transaction")?;
-        if let Some(run_id) = input.run_id.as_ref() {
-            ensure_run_exists(&tx, run_id)?;
-        }
+        with_immediate_tx(
+            &mut self.conn,
+            "begin leader lease acquire transaction",
+            "commit leader lease acquire transaction",
+            |tx| {
+                if let Some(run_id) = input.run_id.as_ref() {
+                    ensure_run_exists(tx, run_id)?;
+                }
 
-        let current = active_leader_lease_tx(&tx, &input.acquired_at)?;
-        if current.is_some() {
-            tx.commit()
-                .context("commit contested leader lease transaction")?;
-            return Ok(None);
-        }
+                let current = active_leader_lease_tx(tx, &input.acquired_at)?;
+                if current.is_some() {
+                    return Ok(None);
+                }
 
-        tx.execute("DELETE FROM leader_leases WHERE slot = 1", [])
-            .context("clear prior leader lease row")?;
+                tx.execute("DELETE FROM leader_leases WHERE slot = 1", [])
+                    .context("clear prior leader lease row")?;
 
-        tx.execute(
-            "INSERT INTO leader_leases(\
-                slot, owner_label, run_id, acquired_at, heartbeat_at, expires_at, released_at\
-             ) VALUES (1, ?1, ?2, ?3, ?4, ?5, NULL)",
-            params![
-                input.owner_label,
-                input.run_id.as_ref().map(RunId::as_str),
-                timestamp_string(&input.acquired_at),
-                timestamp_string(&input.acquired_at),
-                timestamp_string(&input.expires_at),
-            ],
+                tx.execute(
+                    "INSERT INTO leader_leases(\
+                        slot, owner_label, run_id, acquired_at, heartbeat_at, expires_at, released_at\
+                     ) VALUES (1, ?1, ?2, ?3, ?4, ?5, NULL)",
+                    params![
+                        input.owner_label,
+                        input.run_id.as_ref().map(RunId::as_str),
+                        timestamp_string(&input.acquired_at),
+                        timestamp_string(&input.acquired_at),
+                        timestamp_string(&input.expires_at),
+                    ],
+                )
+                .context("insert leader lease")?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::LeaseAcquired,
+                    None,
+                    input.run_id.as_ref(),
+                    None,
+                    &serde_json::json!({
+                        "owner_label": input.owner_label,
+                        "acquired_at": timestamp_string(&input.acquired_at),
+                        "expires_at": timestamp_string(&input.expires_at),
+                    }),
+                    &input.acquired_at,
+                )?;
+
+                let lease = active_leader_lease_tx(tx, &input.acquired_at)?
+                    .context("leader lease should exist after acquire")?;
+                Ok(Some(lease))
+            },
         )
-        .context("insert leader lease")?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::LeaseAcquired,
-            None,
-            input.run_id.as_ref(),
-            None,
-            &serde_json::json!({
-                "owner_label": input.owner_label,
-                "acquired_at": timestamp_string(&input.acquired_at),
-                "expires_at": timestamp_string(&input.expires_at),
-            }),
-            &input.acquired_at,
-        )?;
-
-        let lease = active_leader_lease_tx(&tx, &input.acquired_at)?
-            .context("leader lease should exist after acquire")?;
-        tx.commit()
-            .context("commit leader lease acquire transaction")?;
-        Ok(Some(lease))
     }
 
     pub fn heartbeat_leader_lease(
@@ -1332,47 +1347,46 @@ impl Database {
         now: &chrono::DateTime<Utc>,
         expires_at: &chrono::DateTime<Utc>,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin leader lease heartbeat transaction")?;
-        let updated = tx
-            .execute(
-                "UPDATE leader_leases \
-             SET heartbeat_at = ?1, expires_at = ?2 \
-             WHERE slot = 1 AND released_at IS NULL AND owner_label = ?3 AND expires_at > ?1",
-                params![
-                    timestamp_string(now),
-                    timestamp_string(expires_at),
-                    owner_label
-                ],
-            )
-            .context("update leader lease heartbeat")?;
-        if updated == 0 {
-            tx.commit()
-                .context("commit empty leader lease heartbeat transaction")?;
-            return Ok(None);
-        }
+        with_immediate_tx(
+            &mut self.conn,
+            "begin leader lease heartbeat transaction",
+            "commit leader lease heartbeat transaction",
+            |tx| {
+                let updated = tx
+                    .execute(
+                        "UPDATE leader_leases \
+                     SET heartbeat_at = ?1, expires_at = ?2 \
+                     WHERE slot = 1 AND released_at IS NULL AND owner_label = ?3 AND expires_at > ?1",
+                        params![
+                            timestamp_string(now),
+                            timestamp_string(expires_at),
+                            owner_label
+                        ],
+                    )
+                    .context("update leader lease heartbeat")?;
+                if updated == 0 {
+                    return Ok(None);
+                }
 
-        insert_event_log_tx(
-            &tx,
-            EventKind::LeaseHeartbeat,
-            None,
-            None,
-            None,
-            &serde_json::json!({
-                "owner_label": owner_label,
-                "heartbeat_at": timestamp_string(now),
-                "expires_at": timestamp_string(expires_at),
-            }),
-            now,
-        )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::LeaseHeartbeat,
+                    None,
+                    None,
+                    None,
+                    &serde_json::json!({
+                        "owner_label": owner_label,
+                        "heartbeat_at": timestamp_string(now),
+                        "expires_at": timestamp_string(expires_at),
+                    }),
+                    now,
+                )?;
 
-        let lease = active_leader_lease_tx(&tx, now)?
-            .context("leader lease should exist after heartbeat")?;
-        tx.commit()
-            .context("commit leader lease heartbeat transaction")?;
-        Ok(Some(lease))
+                let lease = active_leader_lease_tx(tx, now)?
+                    .context("leader lease should exist after heartbeat")?;
+                Ok(Some(lease))
+            },
+        )
     }
 
     pub fn release_leader_lease(
@@ -1380,44 +1394,41 @@ impl Database {
         owner_label: &str,
         released_at: &chrono::DateTime<Utc>,
     ) -> Result<Option<LeaderLeaseRecord>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin leader lease release transaction")?;
-        let lease = active_leader_lease_tx(&tx, released_at)?;
-        let Some(lease) = lease else {
-            tx.commit()
-                .context("commit empty leader lease release transaction")?;
-            return Ok(None);
-        };
-        if lease.owner_label != owner_label {
-            tx.commit()
-                .context("commit mismatched leader lease release transaction")?;
-            return Ok(None);
-        }
+        with_immediate_tx(
+            &mut self.conn,
+            "begin leader lease release transaction",
+            "commit leader lease release transaction",
+            |tx| {
+                let lease = active_leader_lease_tx(tx, released_at)?;
+                let Some(lease) = lease else {
+                    return Ok(None);
+                };
+                if lease.owner_label != owner_label {
+                    return Ok(None);
+                }
 
-        tx.execute(
-            "UPDATE leader_leases SET released_at = ?1 WHERE slot = 1 AND released_at IS NULL",
-            [timestamp_string(released_at)],
+                tx.execute(
+                    "UPDATE leader_leases SET released_at = ?1 WHERE slot = 1 AND released_at IS NULL",
+                    [timestamp_string(released_at)],
+                )
+                .context("release leader lease")?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::LeaseReleased,
+                    None,
+                    lease.run_id.as_ref(),
+                    None,
+                    &serde_json::json!({
+                        "owner_label": owner_label,
+                        "released_at": timestamp_string(released_at),
+                    }),
+                    released_at,
+                )?;
+
+                Ok(Some(lease))
+            },
         )
-        .context("release leader lease")?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::LeaseReleased,
-            None,
-            lease.run_id.as_ref(),
-            None,
-            &serde_json::json!({
-                "owner_label": owner_label,
-                "released_at": timestamp_string(released_at),
-            }),
-            released_at,
-        )?;
-
-        tx.commit()
-            .context("commit leader lease release transaction")?;
-        Ok(Some(lease))
     }
 
     pub fn reconcile_interrupted_runs(
@@ -1426,105 +1437,105 @@ impl Database {
     ) -> Result<Vec<InterruptedRunRecovery>> {
         let mut recovered = Vec::new();
 
-        {
-            let tx = self
-                .conn
-                .transaction_with_behavior(TransactionBehavior::Immediate)
-                .context("begin interrupted run reconciliation transaction")?;
-            let active_runs = list_runs_by_status_tx(&tx, RunStatus::Active)?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin interrupted run reconciliation transaction",
+            "commit interrupted run reconciliation transaction",
+            |tx| {
+                let active_runs = list_runs_by_status_tx(tx, RunStatus::Active)?;
 
-            for run in active_runs {
-                let failure_detail =
-                    "startup reconciliation marked previously active run as interrupted";
-                let recovered_status = if run.last_checkpoint_id.is_some() {
-                    RunStatus::Checkpointed
-                } else {
-                    RunStatus::WaitingToRetry
-                };
-                tx.execute(
-                    "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
-                    params![
-                        run.id.as_str(),
-                        encode_run_status(recovered_status),
-                        encode_failure_class(FailureClass::Interrupted),
-                        failure_detail,
-                        timestamp_string(now),
-                    ],
-                )
-                .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
+                for run in active_runs {
+                    let failure_detail =
+                        "startup reconciliation marked previously active run as interrupted";
+                    let recovered_status = if run.last_checkpoint_id.is_some() {
+                        RunStatus::Checkpointed
+                    } else {
+                        RunStatus::WaitingToRetry
+                    };
+                    tx.execute(
+                        "UPDATE task_runs SET status = ?2, failure_class = ?3, failure_detail = ?4, ended_at = ?5 WHERE id = ?1",
+                        params![
+                            run.id.as_str(),
+                            encode_run_status(recovered_status),
+                            encode_failure_class(FailureClass::Interrupted),
+                            failure_detail,
+                            timestamp_string(now),
+                        ],
+                    )
+                    .with_context(|| format!("mark interrupted run {}", run.id.as_str()))?;
 
-                let recovered_bead_status = if run.last_checkpoint_id.is_some() {
-                    GroveBeadStatus::Checkpointed
-                } else {
-                    GroveBeadStatus::WaitingToRetry
-                };
-                upsert_bead_runtime_tx(
-                    &tx,
-                    &run.bead_id,
-                    Some(recovered_bead_status),
-                    None,
-                    Some(Some(run.id.clone())),
-                    Some(Some(*now)),
-                    Some(Some(FailureClass::Interrupted)),
-                    Some(Some(failure_detail.to_owned())),
-                    None,
-                    now,
-                )?;
+                    let recovered_bead_status = if run.last_checkpoint_id.is_some() {
+                        GroveBeadStatus::Checkpointed
+                    } else {
+                        GroveBeadStatus::WaitingToRetry
+                    };
+                    upsert_bead_runtime_tx(
+                        tx,
+                        &run.bead_id,
+                        Some(recovered_bead_status),
+                        None,
+                        Some(Some(run.id.clone())),
+                        Some(Some(*now)),
+                        Some(Some(FailureClass::Interrupted)),
+                        Some(Some(failure_detail.to_owned())),
+                        None,
+                        now,
+                    )?;
 
-                insert_event_log_tx(
-                    &tx,
-                    EventKind::RecoveryActionTaken,
-                    Some(&run.bead_id),
-                    Some(&run.id),
-                    None,
-                    &serde_json::json!({
-                        "action": "interrupt_active_run",
-                        "previous_status": encode_run_status(RunStatus::Active),
-                        "failure_class": encode_failure_class(FailureClass::Interrupted),
-                    }),
-                    now,
-                )?;
-
-                let recovery_capsule = RecoveryCapsule::from_parts(
-                    RecoveryCapsuleOutcome::Interrupted,
-                    Some(FailureClass::Interrupted),
-                    Some(failure_detail),
-                    None,
-                    None,
-                    None,
-                    None,
-                    &[],
-                );
-                if let Some(capsule) = recovery_capsule.as_ref() {
                     insert_event_log_tx(
-                        &tx,
-                        EventKind::RecoveryCapsuleCreated,
+                        tx,
+                        EventKind::RecoveryActionTaken,
                         Some(&run.bead_id),
                         Some(&run.id),
                         None,
-                        &serde_json::to_value(capsule)
-                            .context("serialize interrupted recovery capsule")?,
+                        &serde_json::json!({
+                            "action": "interrupt_active_run",
+                            "previous_status": encode_run_status(RunStatus::Active),
+                            "failure_class": encode_failure_class(FailureClass::Interrupted),
+                        }),
                         now,
                     )?;
+
+                    let recovery_capsule = RecoveryCapsule::from_parts(
+                        RecoveryCapsuleOutcome::Interrupted,
+                        Some(FailureClass::Interrupted),
+                        Some(failure_detail),
+                        None,
+                        None,
+                        None,
+                        None,
+                        &[],
+                    );
+                    if let Some(capsule) = recovery_capsule.as_ref() {
+                        insert_event_log_tx(
+                            tx,
+                            EventKind::RecoveryCapsuleCreated,
+                            Some(&run.bead_id),
+                            Some(&run.id),
+                            None,
+                            &serde_json::to_value(capsule)
+                                .context("serialize interrupted recovery capsule")?,
+                            now,
+                        )?;
+                    }
+
+                    let raw = tx.query_row(
+                        "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
+                         FROM task_runs WHERE id = ?1",
+                        [run.id.as_str()],
+                        raw_task_run_row,
+                    )
+                    .with_context(|| format!("query interrupted run {}", run.id.as_str()))?;
+                    recovered.push(InterruptedRunRecovery {
+                        run: raw_task_run_into_record(raw)?,
+                        bead_id: run.bead_id.clone(),
+                        recovery_capsule,
+                    });
                 }
 
-                let raw = tx.query_row(
-                    "SELECT id, bead_id, attempt_no, status, failure_class, failure_detail, started_at, ended_at, session_count, checkpoint_count, last_checkpoint_id, activity, last_activity_at, escalation_tier \
-                     FROM task_runs WHERE id = ?1",
-                    [run.id.as_str()],
-                    raw_task_run_row,
-                )
-                .with_context(|| format!("query interrupted run {}", run.id.as_str()))?;
-                recovered.push(InterruptedRunRecovery {
-                    run: raw_task_run_into_record(raw)?,
-                    bead_id: run.bead_id.clone(),
-                    recovery_capsule,
-                });
-            }
-
-            tx.commit()
-                .context("commit interrupted run reconciliation transaction")?;
-        }
+                Ok(())
+            },
+        )?;
 
         let stale_unknown_runs = self.find_stale_unknown_retryable_runs()?;
         for stale in stale_unknown_runs {
@@ -1640,49 +1651,50 @@ impl Database {
         &mut self,
         input: RecoveryCapsuleWriteInput,
     ) -> Result<RecoveryCapsuleEvent> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin recovery capsule write transaction")?;
-        ensure_bead_exists(&tx, &input.bead_id)?;
-        ensure_run_exists(&tx, &input.run_id)?;
-        ensure_run_belongs_to_bead(&tx, &input.run_id, &input.bead_id)?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin recovery capsule write transaction",
+            "commit recovery capsule write transaction",
+            |tx| {
+                ensure_bead_exists(tx, &input.bead_id)?;
+                ensure_run_exists(tx, &input.run_id)?;
+                ensure_run_belongs_to_bead(tx, &input.run_id, &input.bead_id)?;
 
-        insert_event_log_tx(
-            &tx,
-            EventKind::RecoveryCapsuleCreated,
-            Some(&input.bead_id),
-            Some(&input.run_id),
-            None,
-            &serde_json::to_value(&input.capsule).context("serialize recovery capsule")?,
-            &input.created_at,
-        )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::RecoveryCapsuleCreated,
+                    Some(&input.bead_id),
+                    Some(&input.run_id),
+                    None,
+                    &serde_json::to_value(&input.capsule).context("serialize recovery capsule")?,
+                    &input.created_at,
+                )?;
 
-        let row = tx
-            .query_row(
-                "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
-                    correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
-                 FROM event_log \
-                 WHERE bead_id = ?1 AND run_id = ?2 AND kind = ?3 \
-                 ORDER BY id DESC \
-                 LIMIT 1",
-                params![
-                    input.bead_id.as_str(),
-                    input.run_id.as_str(),
-                    encode_event_kind(EventKind::RecoveryCapsuleCreated)
-                ],
-                raw_event_log_row,
-            )
-            .with_context(|| {
-                format!(
-                    "query inserted recovery capsule for {} run {}",
-                    input.bead_id.as_str(),
-                    input.run_id.as_str()
-                )
-            })?;
-        tx.commit()
-            .context("commit recovery capsule write transaction")?;
-        raw_recovery_capsule_event_into_record(row)
+                let row = tx
+                    .query_row(
+                        "SELECT id, kind, bead_id, run_id, session_id, payload_json, created_at, \
+                            correlation_id, operation, outcome, duration_ms, error_json, context_snapshot_json \
+                         FROM event_log \
+                         WHERE bead_id = ?1 AND run_id = ?2 AND kind = ?3 \
+                         ORDER BY id DESC \
+                         LIMIT 1",
+                        params![
+                            input.bead_id.as_str(),
+                            input.run_id.as_str(),
+                            encode_event_kind(EventKind::RecoveryCapsuleCreated)
+                        ],
+                        raw_event_log_row,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "query inserted recovery capsule for {} run {}",
+                            input.bead_id.as_str(),
+                            input.run_id.as_str()
+                        )
+                    })?;
+                raw_recovery_capsule_event_into_record(row)
+            },
+        )
     }
 
     pub fn latest_recovery_capsule_for_bead(
@@ -1786,36 +1798,36 @@ impl Database {
         now: &chrono::DateTime<Utc>,
         action_payload: serde_json::Value,
     ) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin reset bead for retry transaction")?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin reset bead for retry transaction",
+            "commit reset bead for retry transaction",
+            |tx| {
+                tx.execute(
+                    "UPDATE bead_runtime \
+                     SET grove_status = ?2, retry_after = NULL, circuit_breaker_json = NULL, runtime_updated_at = ?3 \
+                     WHERE bead_id = ?1",
+                    params![
+                        bead_id.as_str(),
+                        encode_grove_bead_status(GroveBeadStatus::Ready),
+                        timestamp_string(now)
+                    ],
+                )
+                .with_context(|| format!("update bead_runtime for retry {}", bead_id.as_str()))?;
 
-        tx.execute(
-            "UPDATE bead_runtime \
-             SET grove_status = ?2, retry_after = NULL, circuit_breaker_json = NULL, runtime_updated_at = ?3 \
-             WHERE bead_id = ?1",
-            params![
-                bead_id.as_str(),
-                encode_grove_bead_status(GroveBeadStatus::Ready),
-                timestamp_string(now)
-            ],
+                insert_event_log_tx(
+                    tx,
+                    EventKind::RecoveryActionTaken,
+                    Some(bead_id),
+                    None,
+                    None,
+                    &action_payload,
+                    now,
+                )?;
+
+                Ok(())
+            },
         )
-        .with_context(|| format!("update bead_runtime for retry {}", bead_id.as_str()))?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::RecoveryActionTaken,
-            Some(bead_id),
-            None,
-            None,
-            &action_payload,
-            now,
-        )?;
-
-        tx.commit()
-            .context("commit reset bead for retry transaction")?;
-        Ok(())
     }
 
     pub fn latest_event_by_kind(&self, kind: EventKind) -> Result<Option<EventLogRecord>> {
@@ -2031,112 +2043,111 @@ impl Database {
         requests: &[ReservationRequest<'_>],
         acquired_at: &chrono::DateTime<Utc>,
     ) -> Result<ReservationAcquireOutcome> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin reservation acquire transaction")?;
-        ensure_bead_exists(&tx, bead_id)?;
-        if let Some(run_id) = run_id {
-            ensure_run_exists(&tx, run_id)?;
-        }
+        with_immediate_tx(
+            &mut self.conn,
+            "begin reservation acquire transaction",
+            "commit reservation acquire transaction",
+            |tx| {
+                ensure_bead_exists(tx, bead_id)?;
+                if let Some(run_id) = run_id {
+                    ensure_run_exists(tx, run_id)?;
+                }
 
-        let active = list_active_reservations_tx(&tx, acquired_at)?;
-        let mut conflicts = Vec::new();
-        for request in requests {
-            conflicts.extend(conflicts_for_request(bead_id, run_id, request, &active));
-        }
+                let active = list_active_reservations_tx(tx, acquired_at)?;
+                let mut conflicts = Vec::new();
+                for request in requests {
+                    conflicts.extend(conflicts_for_request(bead_id, run_id, request, &active));
+                }
 
-        if !conflicts.is_empty() {
-            for conflict in &conflicts {
-                insert_event_log_tx(
-                    &tx,
-                    EventKind::ReservationConflictDetected,
-                    Some(bead_id),
-                    run_id,
-                    None,
-                    &serde_json::json!({
-                        "requested_pattern": conflict.requested_pattern,
-                        "held_pattern": conflict.held_pattern,
-                        "conflicting_bead": conflict.conflicting_bead.as_str(),
-                        "conflicting_run_id": conflict.conflicting_run_id.as_ref().map(RunId::as_str),
-                    }),
-                    acquired_at,
-                )?;
-            }
-            tx.commit()
-                .context("commit reservation conflict transaction")?;
-            return Ok(ReservationAcquireOutcome {
-                acquired: Vec::new(),
-                conflicts,
-            });
-        }
+                if !conflicts.is_empty() {
+                    for conflict in &conflicts {
+                        insert_event_log_tx(
+                            tx,
+                            EventKind::ReservationConflictDetected,
+                            Some(bead_id),
+                            run_id,
+                            None,
+                            &serde_json::json!({
+                                "requested_pattern": conflict.requested_pattern,
+                                "held_pattern": conflict.held_pattern,
+                                "conflicting_bead": conflict.conflicting_bead.as_str(),
+                                "conflicting_run_id": conflict.conflicting_run_id.as_ref().map(RunId::as_str),
+                            }),
+                            acquired_at,
+                        )?;
+                    }
+                    return Ok(ReservationAcquireOutcome {
+                        acquired: Vec::new(),
+                        conflicts,
+                    });
+                }
 
-        let mut acquired = Vec::with_capacity(requests.len());
-        for request in requests {
-            tx.execute(
-                "INSERT INTO reservations(\
-                    bead_id, run_id, path_pattern, exclusive, reason, expires_at, released_at\
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
-                params![
-                    bead_id.as_str(),
-                    run_id.map(RunId::as_str),
-                    request.path_pattern,
-                    matches!(request.mode, ReservationMode::Exclusive),
-                    request.reason,
-                    timestamp_string(&request.expires_at),
-                ],
-            )
-            .with_context(|| {
-                format!(
-                    "insert reservation {} for {}",
-                    request.path_pattern,
-                    bead_id.as_str()
-                )
-            })?;
-            let reservation_id = tx.last_insert_rowid();
-            let record = ReservationRecord {
-                id: reservation_id,
-                bead_id: bead_id.clone(),
-                run_id: run_id.cloned(),
-                path_pattern: request.path_pattern.to_owned(),
-                mode: request.mode,
-                reason: request.reason.map(ToOwned::to_owned),
-                expires_at: request.expires_at,
-                released_at: None,
-            };
-            insert_event_log_tx(
-                &tx,
-                EventKind::ReservationGranted,
-                Some(bead_id),
-                run_id,
-                None,
-                &serde_json::json!({
-                    "reservation_id": reservation_id,
-                    "path_pattern": record.path_pattern,
-                    "mode": encode_reservation_mode(record.mode),
-                    "reason": record.reason,
-                    "expires_at": record.expires_at.to_rfc3339(),
-                }),
-                acquired_at,
-            )?;
-            acquired.push(record);
-        }
+                let mut acquired = Vec::with_capacity(requests.len());
+                for request in requests {
+                    tx.execute(
+                        "INSERT INTO reservations(\
+                            bead_id, run_id, path_pattern, exclusive, reason, expires_at, released_at\
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+                        params![
+                            bead_id.as_str(),
+                            run_id.map(RunId::as_str),
+                            request.path_pattern,
+                            matches!(request.mode, ReservationMode::Exclusive),
+                            request.reason,
+                            timestamp_string(&request.expires_at),
+                        ],
+                    )
+                    .with_context(|| {
+                        format!(
+                            "insert reservation {} for {}",
+                            request.path_pattern,
+                            bead_id.as_str()
+                        )
+                    })?;
+                    let reservation_id = tx.last_insert_rowid();
+                    let record = ReservationRecord {
+                        id: reservation_id,
+                        bead_id: bead_id.clone(),
+                        run_id: run_id.cloned(),
+                        path_pattern: request.path_pattern.to_owned(),
+                        mode: request.mode,
+                        reason: request.reason.map(ToOwned::to_owned),
+                        expires_at: request.expires_at,
+                        released_at: None,
+                    };
+                    insert_event_log_tx(
+                        tx,
+                        EventKind::ReservationGranted,
+                        Some(bead_id),
+                        run_id,
+                        None,
+                        &serde_json::json!({
+                            "reservation_id": reservation_id,
+                            "path_pattern": record.path_pattern,
+                            "mode": encode_reservation_mode(record.mode),
+                            "reason": record.reason,
+                            "expires_at": record.expires_at.to_rfc3339(),
+                        }),
+                        acquired_at,
+                    )?;
+                    acquired.push(record);
+                }
 
-        if !acquired.is_empty() {
-            set_declared_paths_tx(
-                &tx,
-                bead_id,
-                run_id,
-                &active_declared_paths_tx(&tx, bead_id, acquired_at)?,
-            )?;
-        }
+                if !acquired.is_empty() {
+                    set_declared_paths_tx(
+                        tx,
+                        bead_id,
+                        run_id,
+                        &active_declared_paths_tx(tx, bead_id, acquired_at)?,
+                    )?;
+                }
 
-        tx.commit()
-            .context("commit reservation acquire transaction")?;
-        Ok(ReservationAcquireOutcome {
-            acquired,
-            conflicts: Vec::new(),
-        })
+                Ok(ReservationAcquireOutcome {
+                    acquired,
+                    conflicts: Vec::new(),
+                })
+            },
+        )
     }
 
     pub fn release_reservations_for_run(
@@ -2160,95 +2171,97 @@ impl Database {
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<ReservationRecord>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin reservation expiry transaction")?;
-        let expired = list_expired_unreleased_reservations_tx(&tx, now)?;
-        for record in &expired {
-            mark_reservation_released_tx(&tx, record.id, now)?;
-            insert_event_log_tx(
-                &tx,
-                EventKind::ReservationExpired,
-                Some(&record.bead_id),
-                record.run_id.as_ref(),
-                None,
-                &serde_json::json!({
-                    "reservation_id": record.id,
-                    "path_pattern": record.path_pattern,
-                    "expired_at": timestamp_string(now),
-                }),
-                now,
-            )?;
-        }
-        refresh_declared_paths_for_beads_tx(
-            &tx,
-            expired.iter().map(|r| r.bead_id.clone()).collect(),
-            now,
-        )?;
-        tx.commit()
-            .context("commit reservation expiry transaction")?;
-        Ok(expired)
+        with_immediate_tx(
+            &mut self.conn,
+            "begin reservation expiry transaction",
+            "commit reservation expiry transaction",
+            |tx| {
+                let expired = list_expired_unreleased_reservations_tx(tx, now)?;
+                for record in &expired {
+                    mark_reservation_released_tx(tx, record.id, now)?;
+                    insert_event_log_tx(
+                        tx,
+                        EventKind::ReservationExpired,
+                        Some(&record.bead_id),
+                        record.run_id.as_ref(),
+                        None,
+                        &serde_json::json!({
+                            "reservation_id": record.id,
+                            "path_pattern": record.path_pattern,
+                            "expired_at": timestamp_string(now),
+                        }),
+                        now,
+                    )?;
+                }
+                refresh_declared_paths_for_beads_tx(
+                    tx,
+                    expired.iter().map(|r| r.bead_id.clone()).collect(),
+                    now,
+                )?;
+                Ok(expired)
+            },
+        )
     }
 
     pub fn recover_stale_reservations(
         &mut self,
         now: &chrono::DateTime<Utc>,
     ) -> Result<Vec<RecoveredReservation>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin reservation recovery transaction")?;
-        let active = list_active_reservations_tx(&tx, now)?;
-        let stale = active
-            .into_iter()
-            .filter(|record| {
-                record
-                    .run_id
-                    .as_ref()
-                    .is_some_and(|run_id| is_run_terminal_tx(&tx, run_id).unwrap_or(false))
-            })
-            .collect::<Vec<_>>();
+        with_immediate_tx(
+            &mut self.conn,
+            "begin reservation recovery transaction",
+            "commit reservation recovery transaction",
+            |tx| {
+                let active = list_active_reservations_tx(tx, now)?;
+                let stale = active
+                    .into_iter()
+                    .filter(|record| {
+                        record
+                            .run_id
+                            .as_ref()
+                            .is_some_and(|run_id| is_run_terminal_tx(tx, run_id).unwrap_or(false))
+                    })
+                    .collect::<Vec<_>>();
 
-        let mut recovered = Vec::with_capacity(stale.len());
-        for record in stale {
-            mark_reservation_released_tx(&tx, record.id, now)?;
-            let run_terminal = record
-                .run_id
-                .as_ref()
-                .map(|run_id| run_status_for_event_tx(&tx, run_id))
-                .transpose()?;
-            insert_event_log_tx(
-                &tx,
-                EventKind::RecoveryActionTaken,
-                Some(&record.bead_id),
-                record.run_id.as_ref(),
-                None,
-                &serde_json::json!({
-                    "action": "release_stale_reservation",
-                    "reservation_id": record.id,
-                    "path_pattern": record.path_pattern,
-                    "run_status": run_terminal,
-                }),
-                now,
-            )?;
-            recovered.push(RecoveredReservation {
-                reservation: record,
-                reason: RecoveryReason::RunNoLongerActive,
-            });
-        }
+                let mut recovered = Vec::with_capacity(stale.len());
+                for record in stale {
+                    mark_reservation_released_tx(tx, record.id, now)?;
+                    let run_terminal = record
+                        .run_id
+                        .as_ref()
+                        .map(|run_id| run_status_for_event_tx(tx, run_id))
+                        .transpose()?;
+                    insert_event_log_tx(
+                        tx,
+                        EventKind::RecoveryActionTaken,
+                        Some(&record.bead_id),
+                        record.run_id.as_ref(),
+                        None,
+                        &serde_json::json!({
+                            "action": "release_stale_reservation",
+                            "reservation_id": record.id,
+                            "path_pattern": record.path_pattern,
+                            "run_status": run_terminal,
+                        }),
+                        now,
+                    )?;
+                    recovered.push(RecoveredReservation {
+                        reservation: record,
+                        reason: RecoveryReason::RunNoLongerActive,
+                    });
+                }
 
-        refresh_declared_paths_for_beads_tx(
-            &tx,
-            recovered
-                .iter()
-                .map(|entry| entry.reservation.bead_id.clone())
-                .collect(),
-            now,
-        )?;
-        tx.commit()
-            .context("commit reservation recovery transaction")?;
-        Ok(recovered)
+                refresh_declared_paths_for_beads_tx(
+                    tx,
+                    recovered
+                        .iter()
+                        .map(|entry| entry.reservation.bead_id.clone())
+                        .collect(),
+                    now,
+                )?;
+                Ok(recovered)
+            },
+        )
     }
 
     fn release_reservations_matching(
@@ -2258,32 +2271,33 @@ impl Database {
         path_patterns: Option<&[String]>,
         released_at: &chrono::DateTime<Utc>,
     ) -> Result<Vec<ReservationRecord>> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin reservation release transaction")?;
-        let matching = list_releasable_reservations_tx(&tx, bead_id, run_id, path_patterns)?;
-        for record in &matching {
-            mark_reservation_released_tx(&tx, record.id, released_at)?;
-            insert_event_log_tx(
-                &tx,
-                EventKind::RecoveryActionTaken,
-                Some(&record.bead_id),
-                record.run_id.as_ref(),
-                None,
-                &serde_json::json!({
-                    "action": "release_reservation",
-                    "reservation_id": record.id,
-                    "path_pattern": record.path_pattern,
-                    "released_at": timestamp_string(released_at),
-                }),
-                released_at,
-            )?;
-        }
-        refresh_declared_paths_for_beads_tx(&tx, vec![bead_id.clone()], released_at)?;
-        tx.commit()
-            .context("commit reservation release transaction")?;
-        Ok(matching)
+        with_immediate_tx(
+            &mut self.conn,
+            "begin reservation release transaction",
+            "commit reservation release transaction",
+            |tx| {
+                let matching = list_releasable_reservations_tx(tx, bead_id, run_id, path_patterns)?;
+                for record in &matching {
+                    mark_reservation_released_tx(tx, record.id, released_at)?;
+                    insert_event_log_tx(
+                        tx,
+                        EventKind::RecoveryActionTaken,
+                        Some(&record.bead_id),
+                        record.run_id.as_ref(),
+                        None,
+                        &serde_json::json!({
+                            "action": "release_reservation",
+                            "reservation_id": record.id,
+                            "path_pattern": record.path_pattern,
+                            "released_at": timestamp_string(released_at),
+                        }),
+                        released_at,
+                    )?;
+                }
+                refresh_declared_paths_for_beads_tx(tx, vec![bead_id.clone()], released_at)?;
+                Ok(matching)
+            },
+        )
     }
 
     // Mirror outbox methods for durable br sync retries (grove-1j9.7.6)
@@ -2295,62 +2309,62 @@ impl Database {
         handoff: &HandoffRecord,
         close_bead: bool,
     ) -> Result<MirrorOutboxRecord> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin enqueue mirror outbox transaction")?;
-        let id = format!("mirror-{}-{}", bead_id.as_str(), run_id.as_str());
-        let now = now_timestamp_string();
-        let handoff_json =
-            serde_json::to_string(handoff).context("serialize handoff for mirror outbox")?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin enqueue mirror outbox transaction",
+            "commit enqueue mirror outbox transaction",
+            |tx| {
+                let id = format!("mirror-{}-{}", bead_id.as_str(), run_id.as_str());
+                let now = now_timestamp_string();
+                let handoff_json = serde_json::to_string(handoff)
+                    .context("serialize handoff for mirror outbox")?;
 
-        tx.execute(
-            "INSERT INTO mirror_outbox(id, bead_id, run_id, handoff_json, close_bead, mirror_status, attempt_count, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                id,
-                bead_id.as_str(),
-                run_id.as_str(),
-                handoff_json,
-                close_bead as i32,
-                "pending",
-                0i32,
-                now,
-                now,
-            ],
-        ).context("insert mirror outbox record")?;
+                tx.execute(
+                    "INSERT INTO mirror_outbox(id, bead_id, run_id, handoff_json, close_bead, mirror_status, attempt_count, created_at, updated_at) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        id,
+                        bead_id.as_str(),
+                        run_id.as_str(),
+                        handoff_json,
+                        close_bead as i32,
+                        "pending",
+                        0i32,
+                        now,
+                        now,
+                    ],
+                ).context("insert mirror outbox record")?;
 
-        insert_event_log_tx(
-            &tx,
-            EventKind::BrMirrorRequested,
-            Some(bead_id),
-            Some(run_id),
-            None,
-            &serde_json::json!({
-                "mirror_outbox_id": id,
-                "close_bead": close_bead,
-                "handoff_summary": handoff.summary,
-            }),
-            &Utc::now(),
-        )?;
+                insert_event_log_tx(
+                    tx,
+                    EventKind::BrMirrorRequested,
+                    Some(bead_id),
+                    Some(run_id),
+                    None,
+                    &serde_json::json!({
+                        "mirror_outbox_id": id,
+                        "close_bead": close_bead,
+                        "handoff_summary": handoff.summary,
+                    }),
+                    &Utc::now(),
+                )?;
 
-        tx.commit()
-            .context("commit enqueue mirror outbox transaction")?;
-
-        Ok(MirrorOutboxRecord {
-            id,
-            bead_id: bead_id.clone(),
-            run_id: run_id.clone(),
-            handoff: handoff.clone(),
-            close_bead,
-            mirror_status: MirrorStatus::Pending,
-            attempt_count: 0,
-            last_attempt_at: None,
-            next_retry_after: None,
-            last_error: None,
-            created_at: now.parse().context("parse created timestamp")?,
-            updated_at: now.parse().context("parse updated timestamp")?,
-        })
+                Ok(MirrorOutboxRecord {
+                    id,
+                    bead_id: bead_id.clone(),
+                    run_id: run_id.clone(),
+                    handoff: handoff.clone(),
+                    close_bead,
+                    mirror_status: MirrorStatus::Pending,
+                    attempt_count: 0,
+                    last_attempt_at: None,
+                    next_retry_after: None,
+                    last_error: None,
+                    created_at: now.parse().context("parse created timestamp")?,
+                    updated_at: now.parse().context("parse updated timestamp")?,
+                })
+            },
+        )
     }
 
     pub fn list_pending_mirror_operations(&self, limit: i32) -> Result<Vec<MirrorOutboxRecord>> {
@@ -2414,47 +2428,48 @@ impl Database {
     }
 
     pub fn record_mirror_success(&mut self, id: &str, run_id: &RunId) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin record mirror success transaction")?;
-        let now = now_timestamp_string();
-        let bead_id: Option<String> = tx
-            .query_row(
-                "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()
-            .context("lookup bead id for mirror success")?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin record mirror success transaction",
+            "commit record mirror success transaction",
+            |tx| {
+                let now = now_timestamp_string();
+                let bead_id: Option<String> = tx
+                    .query_row(
+                        "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context("lookup bead id for mirror success")?;
 
-        tx.execute(
-            "UPDATE mirror_outbox \
-             SET mirror_status = 'succeeded', \
-                 last_attempt_at = COALESCE(last_attempt_at, ?1), \
-                 next_retry_after = NULL, \
-                 last_error = NULL, \
-                 updated_at = ?1 \
-             WHERE id = ?2",
-            params![now, id],
+                tx.execute(
+                    "UPDATE mirror_outbox \
+                     SET mirror_status = 'succeeded', \
+                         last_attempt_at = COALESCE(last_attempt_at, ?1), \
+                         next_retry_after = NULL, \
+                         last_error = NULL, \
+                         updated_at = ?1 \
+                     WHERE id = ?2",
+                    params![now, id],
+                )
+                .context("update mirror outbox status to succeeded")?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::BrMirrorSucceeded,
+                    bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
+                    Some(run_id),
+                    None,
+                    &serde_json::json!({
+                        "mirror_outbox_id": id,
+                    }),
+                    &Utc::now(),
+                )?;
+
+                Ok(())
+            },
         )
-        .context("update mirror outbox status to succeeded")?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::BrMirrorSucceeded,
-            bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
-            Some(run_id),
-            None,
-            &serde_json::json!({
-                "mirror_outbox_id": id,
-            }),
-            &Utc::now(),
-        )?;
-
-        tx.commit()
-            .context("commit record mirror success transaction")?;
-        Ok(())
     }
 
     pub fn record_mirror_failure(
@@ -2464,49 +2479,50 @@ impl Database {
         error: &str,
         retry_after: Option<&chrono::DateTime<Utc>>,
     ) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .context("begin record mirror failure transaction")?;
-        let now = now_timestamp_string();
-        let retry_after_str = retry_after.map(timestamp_string);
-        let bead_id: Option<String> = tx
-            .query_row(
-                "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()
-            .context("lookup bead id for mirror failure")?;
+        with_immediate_tx(
+            &mut self.conn,
+            "begin record mirror failure transaction",
+            "commit record mirror failure transaction",
+            |tx| {
+                let now = now_timestamp_string();
+                let retry_after_str = retry_after.map(timestamp_string);
+                let bead_id: Option<String> = tx
+                    .query_row(
+                        "SELECT bead_id FROM mirror_outbox WHERE id = ?1",
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .context("lookup bead id for mirror failure")?;
 
-        tx.execute(
-            "UPDATE mirror_outbox \
-             SET mirror_status = 'failed', \
-                 next_retry_after = ?1, \
-                 last_error = ?2, \
-                 last_attempt_at = COALESCE(last_attempt_at, ?3), \
-                 updated_at = ?3 \
-             WHERE id = ?4",
-            params![retry_after_str, error, now, id],
+                tx.execute(
+                    "UPDATE mirror_outbox \
+                     SET mirror_status = 'failed', \
+                         next_retry_after = ?1, \
+                         last_error = ?2, \
+                         last_attempt_at = COALESCE(last_attempt_at, ?3), \
+                         updated_at = ?3 \
+                     WHERE id = ?4",
+                    params![retry_after_str, error, now, id],
+                )
+                .context("update mirror outbox with failure details")?;
+
+                insert_event_log_tx(
+                    tx,
+                    EventKind::BrMirrorFailed,
+                    bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
+                    Some(run_id),
+                    None,
+                    &serde_json::json!({
+                        "mirror_outbox_id": id,
+                        "error": error,
+                    }),
+                    &Utc::now(),
+                )?;
+
+                Ok(())
+            },
         )
-        .context("update mirror outbox with failure details")?;
-
-        insert_event_log_tx(
-            &tx,
-            EventKind::BrMirrorFailed,
-            bead_id.as_ref().map(|id| BeadId::new(id.clone())).as_ref(),
-            Some(run_id),
-            None,
-            &serde_json::json!({
-                "mirror_outbox_id": id,
-                "error": error,
-            }),
-            &Utc::now(),
-        )?;
-
-        tx.commit()
-            .context("commit record mirror failure transaction")?;
-        Ok(())
     }
 
     pub fn mirror_status_for_bead(&self, bead_id: &BeadId) -> Result<Option<MirrorStatus>> {
@@ -2796,6 +2812,25 @@ impl BeadCacheStore for Database {
     }
 
     fn remove_bead_cache(&mut self, bead_id: &BeadId) -> Result<()> {
+        let has_active_run: bool = self
+            .conn
+            .query_row(
+                "SELECT EXISTS(\
+                    SELECT 1 FROM task_runs \
+                    WHERE bead_id = ?1 AND status IN (?2, ?3)\
+                )",
+                params![
+                    bead_id.as_str(),
+                    encode_run_status(RunStatus::Active),
+                    encode_run_status(RunStatus::Checkpointed),
+                ],
+                |row| row.get(0),
+            )
+            .with_context(|| format!("check active runs before removing {}", bead_id.as_str()))?;
+        if has_active_run {
+            return Ok(());
+        }
+
         self.conn
             .execute(
                 "DELETE FROM bead_cache WHERE bead_id = ?1",
@@ -2832,12 +2867,43 @@ fn current_runtime_metadata_tx(tx: &Transaction<'_>, bead_id: &BeadId) -> Result
     parse_json(&metadata_json, "runtime metadata")
 }
 
-fn begin_immediate_tx<'conn>(
-    conn: &'conn mut Connection,
-    context: &'static str,
-) -> Result<Transaction<'conn>> {
-    conn.transaction_with_behavior(TransactionBehavior::Immediate)
-        .context(context)
+fn with_immediate_tx<T>(
+    conn: &mut Connection,
+    begin_context: &'static str,
+    commit_context: &'static str,
+    f: impl FnOnce(&Transaction<'_>) -> Result<T>,
+) -> Result<T> {
+    let mut operation = Some(f);
+    for attempt in 0..120 {
+        match conn.transaction_with_behavior(TransactionBehavior::Immediate) {
+            Ok(tx) => {
+                let operation = operation
+                    .take()
+                    .context("immediate transaction closure should only run once")?;
+                let value = operation(&tx)?;
+                tx.commit().context(commit_context)?;
+                return Ok(value);
+            }
+            Err(error) if sqlite_write_lock_retryable(&error) && attempt + 1 < 120 => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(error).context(begin_context),
+        }
+    }
+
+    bail!("immediate transaction retry loop exhausted unexpectedly")
+}
+
+fn sqlite_write_lock_retryable(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(failure, _)
+            if matches!(
+                failure.code,
+                rusqlite::ffi::ErrorCode::DatabaseBusy
+                    | rusqlite::ffi::ErrorCode::DatabaseLocked
+            )
+    )
 }
 
 fn ensure_migration_table(conn: &Connection) -> Result<()> {
