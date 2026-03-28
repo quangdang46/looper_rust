@@ -7,6 +7,19 @@ use tempfile::tempdir;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[cfg(unix)]
+fn write_fake_br_script(path: &std::path::Path, script: &str) -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, script)?;
+    let mut permissions = fs::metadata(&temp_path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&temp_path, permissions)?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
 #[test]
 fn first_non_empty_line_prefers_stdout_content() {
     assert_eq!(
@@ -87,21 +100,16 @@ fn build_handoff_comment_returns_none_for_empty_handoff() {
 #[cfg(unix)]
 #[test]
 fn create_issue_invokes_br_with_expected_flags_and_parses_issue() -> TestResult {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempdir()?;
     let log_path = dir.path().join("commands.log");
     let script_path = dir.path().join("fake-br");
-    fs::write(
+    write_fake_br_script(
         &script_path,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ \"$1\" = \"create\" ]; then\n  printf '%s\\n' '{{\"id\":\"bd-created\",\"title\":\"Generated child\",\"description\":\"From workflow plan\",\"priority\":1,\"issue_type\":\"task\",\"status\":\"open\",\"labels\":[\"grove:generated\"],\"created_at\":\"2026-03-20T05:00:00Z\",\"updated_at\":\"2026-03-20T05:00:00Z\"}}'\nelse\n  printf '%s\\n' '{{}}'\nfi\n",
             log_path.display()
         ),
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let client = CliBrClient::new(script_path.to_string_lossy().into_owned(), dir.path());
     let created = client.create_issue(&BrCreateIssueInput {
@@ -123,21 +131,16 @@ fn create_issue_invokes_br_with_expected_flags_and_parses_issue() -> TestResult 
 #[cfg(unix)]
 #[test]
 fn add_dependency_invokes_br_dep_add() -> TestResult {
-    use std::os::unix::fs::PermissionsExt;
-
     let dir = tempdir()?;
     let log_path = dir.path().join("commands.log");
     let script_path = dir.path().join("fake-br");
-    fs::write(
+    write_fake_br_script(
         &script_path,
-        format!(
+        &format!(
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nprintf '%s\\n' '{{}}'\n",
             log_path.display()
         ),
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let client = CliBrClient::new(script_path.to_string_lossy().into_owned(), dir.path());
     client.add_dependency(&BeadId::new("bd-parent"), &BeadId::new("bd-child"))?;
