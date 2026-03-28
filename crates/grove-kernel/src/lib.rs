@@ -1224,7 +1224,23 @@ impl LeaderLeaseManager {
         now: chrono::DateTime<chrono::Utc>,
     ) -> Result<Option<grove_types::LeaderLeaseRecord>> {
         let expires_at = now + config.lease_ttl;
-        db.heartbeat_leader_lease(&config.owner_label, &now, &expires_at)
+        match db.heartbeat_leader_lease(&config.owner_label, &now, &expires_at)? {
+            Some(lease) => Ok(Some(lease)),
+            None => {
+                let active = db.active_leader_lease(&now)?;
+                if active
+                    .as_ref()
+                    .is_some_and(|lease| lease.owner_label != config.owner_label)
+                {
+                    return Ok(None);
+                }
+
+                match Self::acquire(db, config, None, now) {
+                    Ok(lease) => Ok(Some(lease)),
+                    Err(LeaderLeaseAcquireError::Contested { .. }) => Ok(None),
+                }
+            }
+        }
     }
 
     pub fn release(

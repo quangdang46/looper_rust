@@ -315,6 +315,37 @@ fn leader_lease_manager_round_trips_acquire_heartbeat_and_release() -> TestResul
 }
 
 #[test]
+fn leader_lease_manager_reacquires_its_own_expired_lease_when_uncontested() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+
+    let config = LeaderLeaseConfig {
+        owner_label: "worker-a".to_owned(),
+        lease_ttl: chrono::Duration::seconds(30),
+    };
+    let acquired_at: Timestamp = "2026-03-16T12:00:00Z".parse()?;
+    let heartbeat_at: Timestamp = "2026-03-16T12:00:31Z".parse()?;
+
+    LeaderLeaseManager::acquire(&mut db, &config, None, acquired_at)?;
+    let heartbeat = require_some(
+        LeaderLeaseManager::heartbeat(&mut db, &config, heartbeat_at)?,
+        "heartbeat should reacquire an expired uncontested lease",
+    )?;
+
+    assert_eq!(heartbeat.owner_label, "worker-a");
+    assert_eq!(heartbeat.acquired_at, heartbeat_at);
+    assert_eq!(heartbeat.heartbeat_at, heartbeat_at);
+    assert_eq!(
+        heartbeat.expires_at,
+        "2026-03-16T12:01:01Z".parse::<Timestamp>()?
+    );
+    Ok(())
+}
+
+#[test]
 fn leader_lease_manager_reports_contested_owner() -> TestResult {
     let dir = tempfile::tempdir()?;
     let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
@@ -342,6 +373,32 @@ fn leader_lease_manager_reports_contested_owner() -> TestResult {
             owner_label: "worker-a".to_owned(),
         }
     );
+    Ok(())
+}
+
+#[test]
+fn leader_lease_manager_does_not_reacquire_when_another_owner_takes_over() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| std::io::Error::other("db path must be valid UTF-8"))?;
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+
+    let first = LeaderLeaseConfig {
+        owner_label: "worker-a".to_owned(),
+        lease_ttl: chrono::Duration::seconds(30),
+    };
+    let second = LeaderLeaseConfig {
+        owner_label: "worker-b".to_owned(),
+        lease_ttl: chrono::Duration::seconds(30),
+    };
+
+    LeaderLeaseManager::acquire(&mut db, &first, None, "2026-03-16T12:00:00Z".parse()?)?;
+    LeaderLeaseManager::acquire(&mut db, &second, None, "2026-03-16T12:00:31Z".parse()?)?;
+
+    let heartbeat =
+        LeaderLeaseManager::heartbeat(&mut db, &first, "2026-03-16T12:00:32Z".parse()?)?;
+    assert!(heartbeat.is_none(), "first owner should observe contention");
     Ok(())
 }
 

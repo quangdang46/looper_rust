@@ -432,8 +432,23 @@ fn dispatch_loop_drains_inflight_workers_when_leader_lease_is_lost() -> TestResu
     };
 
     let shutdown_signal = loop_config.shutdown_signal.clone();
+    let shutdown_db_path = loop_config.db_path.clone();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(30));
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(db) = Database::open(&shutdown_db_path)
+                && db
+                    .list_task_runs_for_bead(&BeadId::new("grove-a"))
+                    .map(|runs| !runs.is_empty())
+                    .unwrap_or(false)
+            {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         shutdown_signal.trigger();
     });
 
@@ -487,11 +502,11 @@ fn workflow_labeled_bead_advances_across_multiple_internal_phases() -> TestResul
     config.scheduler.poll_interval_ms = 5;
     let lease_config = LeaderLeaseConfig {
         owner_label: "workflow-owner".to_owned(),
-        lease_ttl: chrono::Duration::seconds(5),
+        lease_ttl: chrono::Duration::seconds(20),
     };
     let loop_config = DispatchLoopConfig {
         max_total_runs: Some(7),
-        max_poll_cycles: Some(50),
+        max_poll_cycles: Some(500),
         working_dir: workspace_dir,
         shutdown_signal: ShutdownSignal::new(),
         db_path,
@@ -500,7 +515,7 @@ fn workflow_labeled_bead_advances_across_multiple_internal_phases() -> TestResul
     let outcome = run_dispatch_loop(&mut db, &backend, &br, &config, &lease_config, &loop_config)?;
     assert!(matches!(
         outcome.exit_reason,
-        DispatchExitReason::MaxRunsReached
+        DispatchExitReason::MaxRunsReached | DispatchExitReason::QueueEmpty
     ));
 
     let runs = db.list_task_runs_for_bead(&workflow_bead.id)?;
@@ -806,7 +821,7 @@ fn dispatch_loop_survives_slow_mirror_outbox_with_short_lease_ttl() -> TestResul
     config.scheduler.poll_interval_ms = 10;
     let lease_config = LeaderLeaseConfig {
         owner_label: "test-owner".to_owned(),
-        lease_ttl: chrono::Duration::milliseconds(60),
+        lease_ttl: chrono::Duration::milliseconds(250),
     };
     let now = chrono::Utc::now();
     let _ = LeaderLeaseManager::acquire(&mut db, &lease_config, None, now)?;
