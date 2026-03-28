@@ -8,6 +8,18 @@ use tempfile::tempdir;
 
 type TestResult = Result<(), Box<dyn Error>>;
 
+#[cfg(unix)]
+fn write_mock_bv_script(path: &std::path::Path) -> TestResult {
+    let temp_path = path.with_extension("tmp");
+    fs::write(&temp_path, "#!/bin/sh\nprintf 'bv 1.2.3\\n'\n")?;
+
+    let mut permissions = fs::metadata(&temp_path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&temp_path, permissions)?;
+    fs::rename(&temp_path, path)?;
+    Ok(())
+}
+
 #[test]
 fn parse_triage_live_shape() -> TestResult {
     let parsed = parse_triage_output(
@@ -379,11 +391,7 @@ fn capability_reports_beads_dir_from_mock_binary() -> TestResult {
     let dir = tempdir()?;
     fs::create_dir(dir.path().join(".beads"))?;
     let script = dir.path().join("mock-bv");
-    fs::write(&script, "#!/bin/sh\nprintf 'bv 1.2.3\\n'\n")?;
-
-    let mut permissions = fs::metadata(&script)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script, permissions)?;
+    write_mock_bv_script(&script)?;
 
     let client = CliBvClient::new(script.display().to_string(), dir.path());
     let capability = client.capability()?;

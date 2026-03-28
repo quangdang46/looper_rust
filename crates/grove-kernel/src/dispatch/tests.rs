@@ -101,6 +101,7 @@ impl TestBrClient {
         }
     }
 
+    #[cfg(unix)]
     fn all_issue_ids(&self) -> Vec<String> {
         self.state
             .lock()
