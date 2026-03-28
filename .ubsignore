@@ -1,1 +1,3 @@
 crates/*/tests/*.rs
+crates/*/src/tests.rs
+crates/*/src/**/tests.rs
