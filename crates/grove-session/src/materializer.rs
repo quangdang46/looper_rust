@@ -366,10 +366,11 @@ fn render_sections(sections: &[PromptSegment]) -> String {
 
 fn preview_text(text: &str) -> String {
     const MAX_PREVIEW: usize = 80;
-    if text.len() <= MAX_PREVIEW {
+    if text.chars().count() <= MAX_PREVIEW {
         text.to_owned()
     } else {
-        format!("{}…", &text[..MAX_PREVIEW])
+        let preview = text.chars().take(MAX_PREVIEW).collect::<String>();
+        format!("{preview}…")
     }
 }
 
@@ -580,5 +581,20 @@ mod tests {
         );
         assert!(materialized.manifest.estimated_tokens > 0);
         Ok(())
+    }
+
+    #[test]
+    fn preview_text_handles_multibyte_characters() {
+        let text = format!(
+            "{}{}",
+            "a".repeat(79),
+            "│     → <b>extract</b> lessons into playbook"
+        );
+
+        let preview = super::preview_text(&text);
+
+        assert!(preview.ends_with('…'));
+        assert_eq!(preview.chars().count(), 81);
+        assert!(preview.is_char_boundary(preview.len()));
     }
 }
