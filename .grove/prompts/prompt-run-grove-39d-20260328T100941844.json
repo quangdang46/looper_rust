@@ -1,0 +1,107 @@
+{
+  "prompt_id": "prompt-run-grove-39d-20260328T100941844",
+  "bead_id": "grove-39d",
+  "run_id": "run-grove-39d-20260328T100941844",
+  "session_id": "ses-run-grove-39d-20260328T100941844",
+  "contract": "SingleTask",
+  "created_at": "2026-03-28T10:09:41.846099170Z",
+  "token_budget": null,
+  "estimated_tokens": 203,
+  "prompt_bytes": 811,
+  "trimmed": false,
+  "retry_delta_summary": null,
+  "retrieval_query": "reduce OR assert OR Audit OR panic OR noise",
+  "retrieval_ranking_summary": [],
+  "sections": [
+    {
+      "ordinal": 1,
+      "kind": "StartupPrompt",
+      "heading": "Startup prompt",
+      "included": true,
+      "estimated_tokens": 4,
+      "char_count": 15,
+      "trim_reason": null,
+      "provenance": {
+        "source_ids": [],
+        "bullet_ids": [],
+        "checkpoint_id": null,
+        "handoff_run_id": null,
+        "archive_message_id": null,
+        "playbook_bullet_id": null
+      },
+      "preview": "$flywheel-swarm"
+    },
+    {
+      "ordinal": 2,
+      "kind": "Contract",
+      "heading": "Execution contract",
+      "included": true,
+      "estimated_tokens": 61,
+      "char_count": 241,
+      "trim_reason": null,
+      "provenance": {
+        "source_ids": [],
+        "bullet_ids": [],
+        "checkpoint_id": null,
+        "handoff_run_id": null,
+        "archive_message_id": null,
+        "playbook_bullet_id": null
+      },
+      "preview": "[EXECUTION CONTRACT]\nComplete this single Grove task end-to-end without entering…"
+    },
+    {
+      "ordinal": 3,
+      "kind": "Task",
+      "heading": "Task",
+      "included": true,
+      "estimated_tokens": 18,
+      "char_count": 70,
+      "trim_reason": null,
+      "provenance": {
+        "source_ids": [],
+        "bullet_ids": [],
+        "checkpoint_id": null,
+        "handoff_run_id": null,
+        "archive_message_id": null,
+        "playbook_bullet_id": null
+      },
+      "preview": "[TASK]\nTitle: Audit and reduce UBS panic/assert noise in Grove tests\n\n"
+    },
+    {
+      "ordinal": 4,
+      "kind": "EscalationContext",
+      "heading": "Escalation context (tier 0)",
+      "included": true,
+      "estimated_tokens": 13,
+      "char_count": 103,
+      "trim_reason": null,
+      "provenance": {
+        "source_ids": [],
+        "bullet_ids": [],
+        "checkpoint_id": null,
+        "handoff_run_id": null,
+        "archive_message_id": null,
+        "playbook_bullet_id": null
+      },
+      "preview": "[ESCALATION CONTEXT]\nTier: FirstAttempt (attempt 0)\nInitial attempt. Proceed nor…"
+    },
+    {
+      "ordinal": 5,
+      "kind": "Protocol",
+      "heading": "Grove protocol",
+      "included": true,
+      "estimated_tokens": 94,
+      "char_count": 374,
+      "trim_reason": null,
+      "provenance": {
+        "source_ids": [],
+        "bullet_ids": [],
+        "checkpoint_id": null,
+        "handoff_run_id": null,
+        "archive_message_id": null,
+        "playbook_bullet_id": null
+      },
+      "preview": "[GROVE PROTOCOL]\nEmit GROVE_RESULT, GROVE_ARTIFACTS, GROVE_LESSONS, GROVE_DECISI…"
+    }
+  ]
+}

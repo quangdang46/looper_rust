@@ -1,1 +1,1 @@
-/flywheel-swarm 
+$flywheel-swarm 

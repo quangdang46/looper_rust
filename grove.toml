@@ -1,6 +1,6 @@
 [runtime]
-provider = "claude"
-provider_bin = "claude"
+provider = "codex"
+provider_bin = "codex"
 default_model = "default"
 workspace_root = "."
 timeout_minutes = 60
