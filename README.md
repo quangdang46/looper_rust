@@ -34,7 +34,7 @@ You become the orchestrator. A human one. Manually chaining sessions, one at a t
 
 **Grove closes this loop.**
 
-Define your tasks with `br`. Type `grove run`. Walk away. Come back to completed work — sessions handled, context rotations managed, and native handoffs, transcript archive, and playbook memory carried forward automatically. Anything that failed or couldn't mirror back to `br` is flagged, not silently lost.
+Define your tasks with `br`. Type `grove run`. Walk away. Come back to completed work — sessions handled, context rotations managed, internal workflow phases advanced automatically, and native handoffs, transcript archive, and playbook memory carried forward automatically. Anything that failed or couldn't mirror back to `br` is flagged, not silently lost.
 
 ---
 
@@ -56,6 +56,12 @@ Grove didn't appear from nothing. The exit gate and circuit breaker come from [F
 
 Grove runs a continuous autonomous loop over your beads task graph. Each bead is dispatched to the configured provider runtime session. The coordinator can keep multiple sessions in flight concurrently up to `max_parallel`, while still enforcing file reservation safety and a single active leader lease. When context exhausts, grove checkpoints and spawns a fresh session automatically. Child beads inherit structured handoffs from parents.
 
+Ordinary `task` beads still run directly. Workflow beads, currently `feature` and `epic`, are handled internally as a multi-phase chain:
+
+`explore -> plan -> validate -> execute -> review -> compound`
+
+That phase chain is not a new CLI. It is internal behavior inside `grove run`. Intermediate workflow phases do not close the bead in `br`. Only terminal success after the final phase mirrors and closes the parent bead.
+
 ### The Loop
 
 ```
@@ -72,9 +78,11 @@ grove run
   │
   ├─ session A outputs GROVE_EXIT: true (+ completion indicators met)
   │     → persist handoff
+  │     → if bead is a workflow feature/epic, advance phase instead of closing early
+  │     → plan phase may create child execution beads in `br`
   │     → index transcript into grove's native archive
   │     → extract lessons into playbook
-  │     → mirror to br (`br comment add` + `br close`)
+  │     → only terminal workflow success mirrors to br (`br comment add` + `br close`)
   │     → child bead C (depends on A) becomes ready
   │     → next tick: grove dispatches C
   │
@@ -108,6 +116,19 @@ Loop 8: "All tasks complete"
 ```
 
 This prevents premature exits during productive iterations.
+
+### Internal Workflow Beads
+
+If a bead is a `feature` or `epic`, Grove treats it as workflow-managed work:
+
+1. `explore` clarifies scope and constraints.
+2. `plan` produces execution-ready decomposition.
+3. `validate` stress-tests the plan before coding.
+4. `execute` performs the actual implementation work.
+5. `review` audits the result and fixes obvious defects.
+6. `compound` captures durable lessons and final handoff notes.
+
+The important behavior is in `plan`: Grove can convert planned slices into real child `task` beads in `br`, add dependencies from the parent workflow bead to those children, then keep running until those children complete and the parent can resume. The user still only runs `grove run`.
 
 ### Circuit Breaker
 
@@ -192,6 +213,9 @@ br create "Set up database schema" --type task
 br create "Implement auth middleware" --type task
 # → bd-7f3a2c
 
+# Workflow beads also work. Grove will handle their internal phases automatically.
+br create "Ship auth system" --type feature
+
 br dep add bd-7f3a2c bd-e9b1d4   # auth depends on schema
 
 # Init grove with the default Claude runtime
@@ -256,7 +280,7 @@ Always make sure `am` (MCP Agent Mail) is running before using this workflow.
 
 After initialization, use `grove sync` to reconcile the local Grove bead cache with the current open bead set from `br` without resetting Grove-managed runtime state.
 
-Grove handles everything from here. When it finishes, your beads are closed and mirrored back to `br`. If a mirror fails, grove preserves the local result and flags it for retry — run `grove status` to see what landed and what needs attention.
+Grove handles everything from here. When it finishes, completed beads are mirrored back to `br`. For workflow beads, that mirror/close only happens after terminal success at the end of the internal phase chain. If a mirror fails, grove preserves the local result and flags it for retry — run `grove status` to see what landed and what needs attention.
 
 ---
 
@@ -315,6 +339,16 @@ GROVE_DECISIONS: ["Used RS256 for token signing"]
 GROVE_WARNINGS: ["Rate limiting not yet implemented"]
 GROVE_EXIT: true
 ```
+
+**Workflow planning output:**
+
+During workflow `plan`, Grove asks the provider to emit execution-ready child task candidates through `GROVE_DECISIONS` entries shaped like:
+
+```
+GROVE_DECISIONS: ["TASK: Implement auth persistence :: Add the storage layer for issued tokens"]
+```
+
+Grove can turn those planning decisions into real child `task` beads in `br` and wire the parent feature or epic to depend on them before continuing the run.
 
 **Checkpoint (context filling up):**
 
