@@ -13,10 +13,11 @@ use grove_bv::BvTriageOutput;
 use grove_config::GroveConfig;
 use grove_db::{Database, RecoveryCapsuleEvent};
 use grove_types::{
-    BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, DispatchDecisionRecord,
-    EventLogRecord, GroveBeadRecord, GroveBeadStatus, HandoffRecord, PlaybookBulletRecord,
-    PromptManifest, PromptMaterializationRecord, RecoveryCapsule, RecoveryCapsuleOutcome,
-    RelevantSnippet, RetrievalBundle, RunId, RunReport, SessionOutcome, TaskRunRecord, Timestamp,
+    BeadId, BulletId, CheckpointRecord, ClaudeSessionRecord, CleanupSnapshotRecord,
+    DispatchDecisionRecord, EventLogRecord, GroveBeadRecord, GroveBeadStatus, HandoffRecord,
+    PlaybookBulletRecord, PromptManifest, PromptMaterializationRecord, RecoveryCapsule,
+    RecoveryCapsuleOutcome, RelevantSnippet, RetrievalBundle, RunId, RunReport, SessionOutcome,
+    TaskRunRecord, Timestamp,
 };
 use serde::Serialize;
 use std::fs;
@@ -92,13 +93,32 @@ pub fn load_inspect_snapshot<C: BrClient>(
     });
     let runs = db.list_task_runs_for_bead(bead_id)?;
     let latest_run = runs.first();
+    let latest_cleanup_snapshot = db.latest_cleanup_snapshot_for_bead(bead_id)?;
     let latest_session = match latest_run {
         Some(run) => db.latest_session_for_run(&run.id)?.map(|session| {
-            let prompt_manifest = session
-                .prompt_manifest_path
+            let prompt_manifest_path = session.prompt_manifest_path.clone();
+            let prompt_manifest = prompt_manifest_path
                 .as_deref()
                 .and_then(|path| load_prompt_manifest(workspace_root, path));
-            SessionSummaryView::from_parts(session, None, prompt_manifest)
+            let transcript_available =
+                resolve_workspace_path(workspace_root, &session.transcript_path).is_file();
+            let prompt_manifest_available = prompt_manifest_path
+                .as_deref()
+                .map(|path| resolve_workspace_path(workspace_root, path).is_file())
+                .unwrap_or(false);
+            let transcript_cleaned = latest_cleanup_snapshot.is_some() && !transcript_available;
+            let prompt_manifest_cleaned = prompt_manifest_path.is_some()
+                && latest_cleanup_snapshot.is_some()
+                && !prompt_manifest_available;
+            SessionSummaryView::from_parts(
+                session,
+                None,
+                prompt_manifest,
+                transcript_available,
+                prompt_manifest_available,
+                transcript_cleaned,
+                prompt_manifest_cleaned,
+            )
         }),
         None => None,
     };
@@ -186,6 +206,7 @@ pub fn load_inspect_snapshot<C: BrClient>(
         latest_checkpoint,
         latest_recovery_capsule,
         latest_handoff,
+        latest_cleanup_snapshot,
         mirror_actions,
         retrieval_bundle,
         selected_playbook_bullets,
@@ -195,13 +216,17 @@ pub fn load_inspect_snapshot<C: BrClient>(
 }
 
 fn load_prompt_manifest(workspace_root: &str, path: &str) -> Option<PromptManifest> {
-    let manifest_path = if std::path::Path::new(path).is_absolute() {
+    let manifest_path = resolve_workspace_path(workspace_root, path);
+    let contents = fs::read_to_string(manifest_path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+fn resolve_workspace_path(workspace_root: &str, path: &str) -> std::path::PathBuf {
+    if std::path::Path::new(path).is_absolute() {
         std::path::PathBuf::from(path)
     } else {
         std::path::Path::new(workspace_root).join(path)
-    };
-    let contents = fs::read_to_string(manifest_path).ok()?;
-    serde_json::from_str(&contents).ok()
+    }
 }
 
 fn retrieval_bundle_from_prompt_provenance(
@@ -387,6 +412,7 @@ pub struct InspectSnapshot {
     pub latest_checkpoint: Option<CheckpointSummaryView>,
     pub latest_recovery_capsule: Option<RecoveryCapsuleView>,
     pub latest_handoff: Option<HandoffRecord>,
+    pub latest_cleanup_snapshot: Option<CleanupSnapshotRecord>,
     pub mirror_actions: Vec<MirrorActionView>,
     pub retrieval_bundle: Option<RetrievalBundle>,
     pub selected_playbook_bullets: Vec<PlaybookBulletRecord>,
@@ -425,6 +451,7 @@ impl InspectSnapshot {
             latest_checkpoint: self.latest_checkpoint,
             latest_recovery_capsule: self.latest_recovery_capsule,
             latest_handoff,
+            latest_cleanup_snapshot: self.latest_cleanup_snapshot,
             mirror_actions: self.mirror_actions,
             retrieval_summary,
             playbook_bullets,
@@ -449,6 +476,7 @@ pub struct BeadInspectView {
     pub latest_checkpoint: Option<CheckpointSummaryView>,
     pub latest_recovery_capsule: Option<RecoveryCapsuleView>,
     pub latest_handoff: Option<HandoffSummaryView>,
+    pub latest_cleanup_snapshot: Option<CleanupSnapshotRecord>,
     pub mirror_actions: Vec<MirrorActionView>,
     pub retrieval_summary: Option<RetrievalSummaryView>,
     pub playbook_bullets: Vec<PlaybookBulletView>,
@@ -521,6 +549,10 @@ pub struct SessionSummaryView {
     pub transcript_path: String,
     pub prompt_id: Option<String>,
     pub prompt_manifest_path: Option<String>,
+    pub transcript_available: bool,
+    pub prompt_manifest_available: bool,
+    pub transcript_cleaned: bool,
+    pub prompt_manifest_cleaned: bool,
     pub prompt_bytes: i32,
     pub estimated_input_tokens: i32,
     pub estimated_output_tokens: i32,
@@ -536,6 +568,10 @@ impl SessionSummaryView {
         session: ClaudeSessionRecord,
         outcome: Option<&SessionOutcome>,
         prompt_manifest: Option<PromptManifest>,
+        transcript_available: bool,
+        prompt_manifest_available: bool,
+        transcript_cleaned: bool,
+        prompt_manifest_cleaned: bool,
     ) -> Self {
         Self {
             session_id: session.id,
@@ -550,6 +586,10 @@ impl SessionSummaryView {
             transcript_path: session.transcript_path,
             prompt_id: session.prompt_id.as_ref().map(ToString::to_string),
             prompt_manifest_path: session.prompt_manifest_path,
+            transcript_available,
+            prompt_manifest_available,
+            transcript_cleaned,
+            prompt_manifest_cleaned,
             prompt_bytes: session.prompt_bytes,
             estimated_input_tokens: session.estimated_input_tokens,
             estimated_output_tokens: session.estimated_output_tokens,

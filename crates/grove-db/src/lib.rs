@@ -18,6 +18,7 @@ use grove_types::{
 };
 
 mod archive;
+mod cleanup;
 mod ops;
 mod playbook;
 
@@ -239,6 +240,11 @@ const MIGRATION_MANIFEST: &[Migration<'_>] = &[
         version: 13,
         name: "0013_multi_phase_handoffs.sql",
         sql: include_str!("../migrations/0013_multi_phase_handoffs.sql"),
+    },
+    Migration {
+        version: 14,
+        name: "0014_cleanup_snapshots.sql",
+        sql: include_str!("../migrations/0014_cleanup_snapshots.sql"),
     },
 ];
 

@@ -132,7 +132,7 @@ fn migrate_applies_manifest_once() -> Result<()> {
     db.migrate()?;
 
     let migrations = db.applied_migrations()?;
-    assert_eq!(migrations.len(), 13);
+    assert_eq!(migrations.len(), 14);
     assert_eq!(
         migrations[0],
         MigrationState {
@@ -222,6 +222,13 @@ fn migrate_applies_manifest_once() -> Result<()> {
         MigrationState {
             version: 13,
             name: "0013_multi_phase_handoffs.sql".into(),
+        }
+    );
+    assert_eq!(
+        migrations[13],
+        MigrationState {
+            version: 14,
+            name: "0014_cleanup_snapshots.sql".into(),
         }
     );
     Ok(())

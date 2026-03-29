@@ -47,3 +47,24 @@ pub struct IntegrityCheckRecord {
     pub findings_json: String,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupSnapshotRecord {
+    pub id: String,
+    pub bead_id: BeadId,
+    pub run_id: RunId,
+    pub session_id: SessionId,
+    pub provider: String,
+    pub model: String,
+    pub cleaned_artifact_paths: Vec<String>,
+    pub cleaned_artifact_kinds: Vec<String>,
+    pub deleted_bytes: i64,
+    pub continuity_summary: String,
+    pub next_bead_guidance: String,
+    pub lessons: Vec<String>,
+    pub decisions: Vec<String>,
+    pub warnings: Vec<String>,
+    pub prompt_summary: String,
+    pub transcript_tail_summary: String,
+    pub created_at: DateTime<Utc>,
+}

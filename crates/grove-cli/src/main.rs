@@ -36,6 +36,8 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 use std::{cmp, env, fs, io, io::IsTerminal, sync::mpsc, thread, time::Duration};
 
+mod clean;
+
 #[derive(Parser)]
 #[command(name = "grove")]
 #[command(about = "Autonomous orchestration for beads-backed provider work")]
@@ -71,6 +73,18 @@ enum Command {
     Retry {
         bead_id: String,
     },
+    Clean {
+        #[arg(long)]
+        bead: Option<String>,
+        #[arg(long, action = ArgAction::SetTrue)]
+        dry_run: bool,
+        #[arg(long, action = ArgAction::SetTrue)]
+        no_llm: bool,
+        #[arg(long)]
+        max_beads: Option<usize>,
+        #[arg(long, action = ArgAction::SetTrue)]
+        yes: bool,
+    },
     Run {
         #[arg(long, action = ArgAction::SetTrue)]
         live: bool,
@@ -96,6 +110,15 @@ fn main() -> Result<()> {
         Some(Command::Inspect { bead_id }) => handle_inspect(&BeadId::new(bead_id), cli.json),
         Some(Command::Log { bead_id }) => handle_log(&BeadId::new(bead_id), cli.json),
         Some(Command::Retry { bead_id }) => handle_retry(&BeadId::new(bead_id), cli.json),
+        Some(Command::Clean {
+            bead,
+            dry_run,
+            no_llm,
+            max_beads,
+            yes,
+        }) => run_json_command("clean", cli.json, || {
+            handle_clean(bead.as_deref(), dry_run, no_llm, max_beads, cli.json, yes)
+        }),
         Some(Command::Run { live }) => {
             run_json_command("run", cli.json, || handle_run(cli.json, live))
         }
@@ -107,7 +130,7 @@ fn main() -> Result<()> {
                         "ok": true,
                         "command": null,
                         "message": "Use `grove --help` to see available commands.",
-                        "available_commands": ["init", "migrate", "sync", "status", "inspect", "log", "retry", "run"],
+                        "available_commands": ["init", "migrate", "sync", "status", "inspect", "log", "retry", "clean", "run"],
                     }))?
                 );
             } else {
@@ -915,7 +938,7 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
 }
 
 fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
-    let (_loaded, db, _br) = open_runtime()?;
+    let (loaded, db, _br) = open_runtime()?;
 
     let runs = db
         .list_task_runs_for_bead(bead_id)
@@ -948,10 +971,26 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     let latest_session = db.latest_session_for_run(&latest_run.id)?;
     let latest_checkpoint = db.latest_checkpoint_for_bead(bead_id)?;
     let recovery_capsule = db.latest_recovery_capsule_for_bead(bead_id)?;
+    let cleanup_snapshot = db.latest_cleanup_snapshot_for_bead(bead_id)?;
     let transcript_tail = latest_session
         .as_ref()
-        .map(|session| read_transcript_tail(&session.transcript_path, 20))
+        .map(|session| {
+            let transcript_path = if std::path::Path::new(&session.transcript_path).is_absolute() {
+                std::path::PathBuf::from(&session.transcript_path)
+            } else {
+                loaded
+                    .paths
+                    .workspace_root()
+                    .as_std_path()
+                    .join(&session.transcript_path)
+            };
+            read_transcript_tail(&transcript_path.to_string_lossy(), 20)
+        })
         .transpose()?;
+    let transcript_tail = match (transcript_tail, cleanup_snapshot.as_ref()) {
+        (Some(None), Some(snapshot)) => Some(Some(clean::compact_summary_lines(snapshot))),
+        (other, _) => other,
+    };
 
     if json_mode {
         println!(
@@ -963,6 +1002,7 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
                 "latest_session": latest_session,
                 "latest_checkpoint": latest_checkpoint,
                 "recovery_capsule": recovery_capsule,
+                "cleanup_snapshot": cleanup_snapshot,
                 "transcript_tail": transcript_tail,
             }))?
         );
@@ -1060,6 +1100,13 @@ fn handle_log(bead_id: &BeadId, json_mode: bool) -> Result<()> {
         }
     }
 
+    if let Some(snapshot) = cleanup_snapshot.as_ref() {
+        println!("\nCleanup snapshot:");
+        println!("  cleaned at: {}", snapshot.created_at);
+        println!("  deleted bytes: {}", snapshot.deleted_bytes);
+        println!("  continuity summary: {}", snapshot.continuity_summary);
+    }
+
     Ok(())
 }
 
@@ -1132,6 +1179,28 @@ fn handle_retry(bead_id: &BeadId, json_mode: bool) -> Result<()> {
     println!("\nThe bead will be dispatched in the next `grove run` cycle.");
 
     Ok(())
+}
+
+fn handle_clean(
+    bead: Option<&str>,
+    dry_run: bool,
+    no_llm: bool,
+    max_beads: Option<usize>,
+    json_mode: bool,
+    yes: bool,
+) -> Result<()> {
+    let (loaded, db, _br) = open_runtime()?;
+    let bead_filter = bead.map(BeadId::new);
+    clean::handle_clean(
+        loaded,
+        db,
+        bead_filter.as_ref(),
+        dry_run,
+        no_llm,
+        max_beads,
+        json_mode,
+        yes,
+    )
 }
 
 fn run_startup_checks(
@@ -2785,6 +2854,8 @@ fn print_inspect_report(
                     );
                     println!("- exit code: {}", display_option(session.exit_code));
                     println!("- transcript: {}", session.transcript_path);
+                    println!("- transcript available: {}", session.transcript_available);
+                    println!("- transcript cleaned: {}", session.transcript_cleaned);
                     println!(
                         "- prompt id: {}",
                         display_option(session.prompt_id.as_deref())
@@ -2792,6 +2863,14 @@ fn print_inspect_report(
                     println!(
                         "- prompt manifest: {}",
                         display_option(session.prompt_manifest_path.as_deref())
+                    );
+                    println!(
+                        "- prompt manifest available: {}",
+                        session.prompt_manifest_available
+                    );
+                    println!(
+                        "- prompt manifest cleaned: {}",
+                        session.prompt_manifest_cleaned
                     );
                     if let Some(prompt) = session.prompt_provenance.as_ref() {
                         println!("- prompt contract: {}", prompt.contract);
@@ -2910,6 +2989,30 @@ fn print_inspect_report(
                     }
                     if !handoff.warnings.is_empty() {
                         println!("- warnings: {}", handoff.warnings.join(" | "));
+                    }
+                }
+                None => println!("- none"),
+            }
+
+            println!("\nLatest cleanup snapshot:");
+            match view.latest_cleanup_snapshot.as_ref() {
+                Some(snapshot) => {
+                    println!("- cleaned at: {}", snapshot.created_at);
+                    println!("- provider: {}", snapshot.provider);
+                    println!("- model: {}", snapshot.model);
+                    println!("- deleted bytes: {}", snapshot.deleted_bytes);
+                    println!("- continuity summary: {}", snapshot.continuity_summary);
+                    println!("- next bead guidance: {}", snapshot.next_bead_guidance);
+                    println!("- prompt summary: {}", snapshot.prompt_summary);
+                    println!(
+                        "- transcript tail summary: {}",
+                        snapshot.transcript_tail_summary
+                    );
+                    if !snapshot.cleaned_artifact_paths.is_empty() {
+                        println!(
+                            "- cleaned artifacts: {}",
+                            snapshot.cleaned_artifact_paths.join(", ")
+                        );
                     }
                 }
                 None => println!("- none"),

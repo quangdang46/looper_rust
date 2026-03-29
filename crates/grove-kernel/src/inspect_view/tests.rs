@@ -130,7 +130,8 @@ fn session_summary_extracts_protocol_result_and_exit_flag() -> TestResult {
         stderr_tail: Vec::new(),
     };
 
-    let view = SessionSummaryView::from_parts(session, Some(&outcome), None);
+    let view =
+        SessionSummaryView::from_parts(session, Some(&outcome), None, true, true, false, false);
 
     assert_eq!(
         view.result_summary.as_deref(),
@@ -253,6 +254,7 @@ fn inspect_snapshot_collects_view_sections() -> TestResult {
         latest_session: None,
         latest_checkpoint: None,
         latest_handoff: None,
+        latest_cleanup_snapshot: None,
         mirror_actions: vec![MirrorActionView {
             event_id: 1,
             action: "requested".to_owned(),

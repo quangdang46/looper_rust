@@ -15,7 +15,9 @@
 
 use grove_br::{BeadCacheStore, BrClient, BrDependencySnapshot, BrIssueSummary, sync_bead_cache};
 use grove_config::{DEFAULT_INIT_GROVE_TOML, GroveConfig, GrovePaths, validate_config};
-use grove_db::{Database, reservation_patterns_overlap};
+use grove_db::{
+    Database, HandoffWriteInput, RunFinishInput, RunStartInput, reservation_patterns_overlap,
+};
 use grove_kernel::{
     DispatchEligibilityContext, LocalSuppressionReason, dispatch_suppression_label,
     evaluate_dispatch_eligibility, validate_dependency_snapshot,
@@ -92,7 +94,7 @@ fn init_creates_database_with_migrations() -> TestResult {
     let applied_migrations = db.applied_migrations()?;
     assert_eq!(
         applied_migrations.len(),
-        13,
+        14,
         "should apply all current migrations"
     );
     assert_eq!(applied_migrations[0].version, 1);
@@ -123,8 +125,11 @@ fn init_creates_database_with_migrations() -> TestResult {
         applied_migrations[10].name,
         "0011_circuit_breaker_state.sql"
     );
-    assert_eq!(applied_migrations[12].version, 13);
     assert_eq!(applied_migrations[11].name, "0012_session_provider.sql");
+    assert_eq!(applied_migrations[12].version, 13);
+    assert_eq!(applied_migrations[12].name, "0013_multi_phase_handoffs.sql");
+    assert_eq!(applied_migrations[13].version, 14);
+    assert_eq!(applied_migrations[13].name, "0014_cleanup_snapshots.sql");
 
     // Verify tables exist by attempting to query them
     let conn = db.connection();
@@ -146,6 +151,7 @@ fn init_creates_database_with_migrations() -> TestResult {
         "reservations",
         "event_log",
         "mirror_outbox",
+        "cleanup_snapshots",
     ]);
 
     for table in expected_tables {
@@ -1958,6 +1964,140 @@ impl CliHarness {
         Ok(())
     }
 
+    fn seed_completed_bead_for_clean(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.seed_runtime_bead(GroveBeadStatus::Succeeded)?;
+
+        fs::create_dir_all(
+            self.workspace_root
+                .join(".grove/transcripts/grove-cli-test"),
+        )?;
+        fs::create_dir_all(self.workspace_root.join(".grove/prompts"))?;
+        fs::create_dir_all(
+            self.workspace_root
+                .join(".grove/checkpoints/grove-cli-test"),
+        )?;
+        fs::create_dir_all(self.workspace_root.join(".grove/logs"))?;
+
+        fs::write(
+            self.workspace_root
+                .join(".grove/transcripts/grove-cli-test/ses-clean.jsonl"),
+            concat!(
+                "{\"ts\":\"2026-03-17T00:00:00Z\",\"kind\":\"session_started\",\"session_id\":\"ses-clean\"}\n",
+                "{\"ts\":\"2026-03-17T00:00:01Z\",\"kind\":\"stdout\",\"line\":\"implemented cleanup\"}\n",
+                "{\"ts\":\"2026-03-17T00:00:02Z\",\"kind\":\"session_ended\",\"exit_code\":0}\n"
+            ),
+        )?;
+        fs::write(
+            self.workspace_root.join(".grove/prompts/prompt-clean.json"),
+            serde_json::to_string(&grove_types::PromptManifest {
+                prompt_id: grove_types::PromptId::new("prompt-clean"),
+                bead_id: grove_types::BeadId::new("grove-cli-test"),
+                run_id: grove_types::RunId::new("run-clean"),
+                session_id: Some(grove_types::SessionId::new("ses-clean")),
+                contract: grove_types::ExecutionContract::Implement,
+                created_at: "2026-03-17T00:00:00Z".parse()?,
+                token_budget: Some(200),
+                estimated_tokens: 120,
+                prompt_bytes: 512,
+                trimmed: false,
+                retry_delta_summary: None,
+                retrieval_query: None,
+                retrieval_ranking_summary: Vec::new(),
+                sections: vec![grove_types::PromptManifestSection {
+                    ordinal: 1,
+                    kind: grove_types::PromptSegmentKind::Task,
+                    heading: "Task".to_owned(),
+                    included: true,
+                    estimated_tokens: 20,
+                    char_count: 80,
+                    trim_reason: None,
+                    provenance: grove_types::PromptSectionProvenance::default(),
+                    preview: "[TASK] compact session history".to_owned(),
+                }],
+            })?,
+        )?;
+        fs::write(
+            self.workspace_root
+                .join(".grove/checkpoints/grove-cli-test/chk-clean.json"),
+            "{\"progress\":\"done\",\"next_step\":\"handoff\"}",
+        )?;
+        fs::write(
+            self.workspace_root.join(".grove/logs/runtime.jsonl"),
+            (0..10_050)
+                .map(|idx| format!("{{\"idx\":{idx}}}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )?;
+
+        let mut db = Database::open(&self.workspace_root.join(".grove/grove.db"))?;
+        db.migrate()?;
+        db.record_run_started(RunStartInput {
+            run_id: RunId::new("run-clean"),
+            bead_id: BeadId::new("grove-cli-test"),
+            attempt_no: 1,
+            started_at: "2026-03-17T00:00:00Z".parse()?,
+            escalation_tier: Default::default(),
+        })?;
+        db.record_run_finished(
+            &BeadId::new("grove-cli-test"),
+            RunFinishInput {
+                run_id: RunId::new("run-clean"),
+                status: grove_types::RunStatus::Succeeded,
+                failure_class: None,
+                failure_detail: None,
+                ended_at: "2026-03-17T00:05:00Z".parse()?,
+                retry_after: None,
+                circuit_breaker_state: None,
+            },
+        )?;
+        db.connection().execute(
+            "INSERT INTO claude_sessions(\
+                id, run_id, provider, external_session_id, ordinal_in_run, status, started_at, ended_at, prompt_id, prompt_manifest_path, prompt_bytes, estimated_input_tokens, estimated_output_tokens, exit_code, stop_reason, transcript_path\
+            ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            rusqlite::params![
+                "ses-clean",
+                "run-clean",
+                "claude",
+                1,
+                "Completed",
+                "2026-03-17T00:00:00Z",
+                "2026-03-17T00:05:00Z",
+                "prompt-clean",
+                ".grove/prompts/prompt-clean.json",
+                512,
+                120,
+                32,
+                0,
+                "Exit",
+                ".grove/transcripts/grove-cli-test/ses-clean.jsonl",
+            ],
+        )?;
+        db.connection().execute(
+            "UPDATE task_runs SET session_count = 1 WHERE id = ?1",
+            rusqlite::params!["run-clean"],
+        )?;
+        db.write_handoff(HandoffWriteInput {
+            bead_id: BeadId::new("grove-cli-test"),
+            run_id: RunId::new("run-clean"),
+            summary: "completed cleanup candidate".to_owned(),
+            artifacts: vec!["src/lib.rs".to_owned()],
+            lessons: vec!["Prefer compact handoffs".to_owned()],
+            decisions: vec!["Ship grove clean".to_owned()],
+            warnings: vec!["Raw files may be deleted".to_owned()],
+            completed_at: "2026-03-17T00:05:00Z".parse()?,
+        })?;
+        db.insert_source_record(&grove_types::SourceRecord {
+            id: grove_types::SourceId::new("transcript"),
+            source_path: camino::Utf8PathBuf::from(
+                ".grove/transcripts/grove-cli-test/ses-clean.jsonl",
+            ),
+            origin_host: None,
+            metadata_json: serde_json::json!({}),
+        })?;
+        db.record_ingest_watermark("transcript", "ses-clean", 3)?;
+        Ok(())
+    }
+
     fn run<I, S>(&self, args: I) -> Result<Output, Box<dyn std::error::Error>>
     where
         I: IntoIterator<Item = S>,
@@ -2089,6 +2229,92 @@ fn sync_preserves_runtime_state_and_refreshes_bead_cache() -> TestResult {
         "sync should preserve non-database Grove artifacts"
     );
 
+    Ok(())
+}
+
+#[test]
+fn clean_no_llm_removes_completed_artifacts_and_preserves_log_fallback() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+    harness.seed_completed_bead_for_clean()?;
+
+    let output = harness.run(["clean", "--no-llm", "--yes", "--json"])?;
+    assert!(output.status.success(), "{:?}", output);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(payload["candidates"][0]["bead_id"], "grove-cli-test");
+    assert!(payload["candidates"][0]["cleanup_snapshot_id"].is_string());
+
+    assert!(
+        !harness
+            .workspace_root
+            .join(".grove/transcripts/grove-cli-test/ses-clean.jsonl")
+            .exists()
+    );
+    assert!(
+        !harness
+            .workspace_root
+            .join(".grove/prompts/prompt-clean.json")
+            .exists()
+    );
+    assert!(
+        !harness
+            .workspace_root
+            .join(".grove/checkpoints/grove-cli-test/chk-clean.json")
+            .exists()
+    );
+
+    let log_output = harness.run(["log", "grove-cli-test", "--json"])?;
+    assert!(log_output.status.success(), "{:?}", log_output);
+    let log_payload: serde_json::Value = serde_json::from_slice(&log_output.stdout)?;
+    assert_eq!(
+        log_payload["cleanup_snapshot"]["continuity_summary"],
+        "completed cleanup candidate"
+    );
+    assert_eq!(
+        log_payload["transcript_tail"][0],
+        "Transcript was cleaned by `grove clean`."
+    );
+    Ok(())
+}
+
+#[test]
+fn clean_provider_assisted_uses_compaction_output() -> TestResult {
+    let harness = CliHarness::new()?;
+    harness.enable_beads()?;
+    harness.seed_completed_bead_for_clean()?;
+    write_executable(
+        &stub_path(&harness.bin_dir, "claude"),
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1-}" == "--version" ]]; then
+  echo "claude 1.0.0-test"
+  exit 0
+fi
+if [[ "${1-}" == "-p" ]]; then
+  echo '{"continuity_summary":"provider compact summary","next_bead_guidance":"use provider guidance","lessons":["lesson-a"],"decisions":["decision-a"],"warnings":["warning-a"],"prompt_summary":"prompt summary","transcript_tail_summary":"tail summary"}'
+  exit 0
+fi
+printf 'unexpected claude invocation: %s\n' "$*" >&2
+exit 1
+"#,
+    )?;
+
+    let output = harness.run(["clean", "--yes", "--json"])?;
+    assert!(output.status.success(), "{:?}", output);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(payload["candidates"][0]["bead_id"], "grove-cli-test");
+
+    let inspect_output = harness.run(["inspect", "grove-cli-test", "--json"])?;
+    assert!(inspect_output.status.success(), "{:?}", inspect_output);
+    let inspect_payload: serde_json::Value = serde_json::from_slice(&inspect_output.stdout)?;
+    assert_eq!(
+        inspect_payload["view"]["latest_cleanup_snapshot"]["continuity_summary"],
+        "provider compact summary"
+    );
+    assert_eq!(
+        inspect_payload["view"]["latest_cleanup_snapshot"]["next_bead_guidance"],
+        "use provider guidance"
+    );
     Ok(())
 }
 

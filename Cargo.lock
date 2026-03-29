@@ -535,6 +535,7 @@ dependencies = [
  "grove-types",
  "ratatui",
  "rusqlite",
+ "serde",
  "serde_json",
  "tempfile",
  "toml",

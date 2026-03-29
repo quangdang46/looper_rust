@@ -30,7 +30,8 @@ pub use event::{
 pub use handoff::HandoffRecord;
 pub use ids::{BeadId, BulletId, CheckpointId, PromptId, RunId, SessionId, SourceId, TickId};
 pub use ops::{
-    ConfigSnapshotRecord, DispatchDecisionRecord, IntegrityCheckRecord, PromptMaterializationRecord,
+    CleanupSnapshotRecord, ConfigSnapshotRecord, DispatchDecisionRecord, IntegrityCheckRecord,
+    PromptMaterializationRecord,
 };
 pub use playbook::{
     BulletMaturity, BulletScope, BulletState, BulletType, FeedbackEventRecord, FeedbackKind,
