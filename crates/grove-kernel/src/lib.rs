@@ -597,6 +597,14 @@ fn has_plan_approval_detour(lines: &[String]) -> bool {
 }
 
 fn unknown_failure_should_retry(outcome: &grove_types::SessionOutcome) -> bool {
+    // `GROVE_EXIT: false` is an explicit signal that the provider did not finish
+    // the task. Our contracts already require a matching checkpoint when that
+    // unfinished work should be resumed automatically, so a bare exit-false must
+    // not be promoted into an auto-retry loop.
+    if outcome.analysis.has_explicit_exit_false {
+        return false;
+    }
+
     outcome.session.exit_code.is_none()
         || outcome.analysis.repeated_error_fingerprint.is_some()
         || !matches!(outcome.analysis.probable_progress, ProgressSignal::None)
@@ -700,6 +708,10 @@ fn synthetic_checkpoint_payload_from_outcome(
     failure_class: Option<FailureClass>,
     failure_detail: Option<&str>,
 ) -> Option<grove_types::CheckpointPayload> {
+    if outcome.analysis.has_explicit_exit_false {
+        return None;
+    }
+
     if outcome.session.status != SessionStatus::Crashed
         && outcome.session.status != SessionStatus::UnknownFailure
     {

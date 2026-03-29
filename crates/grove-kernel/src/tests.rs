@@ -1038,6 +1038,68 @@ fn persisted_runner_records_unknown_failure_with_progress_as_waiting_to_retry() 
 
 #[cfg(unix)]
 #[test]
+fn persisted_runner_records_explicit_exit_false_without_checkpoint_as_failed() -> TestResult {
+    use std::{fs, io};
+    use tempfile::tempdir;
+
+    let dir = tempdir()?;
+    let workspace_dir = dir.path().join("workspace");
+    fs::create_dir_all(&workspace_dir)?;
+    let workspace_dir = camino::Utf8PathBuf::from_path_buf(workspace_dir)
+        .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+    let db_path = camino::Utf8PathBuf::from_path_buf(dir.path().join("grove.db"))
+        .map_err(|_| io::Error::other("db path must be valid UTF-8"))?;
+
+    let mut db = Database::open(&db_path)?;
+    db.migrate()?;
+    insert_bead_cache_row(&db, "grove-life", "Lifecycle bead")?;
+
+    let script_path = dir.path().join("fake-claude");
+    write_fake_claude_script(&script_path)?;
+    let backend = grove_session::CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+    let mut request = sample_session_request(workspace_dir);
+    request.env = vec![
+        (
+            "STDOUT_SCRIPT".to_owned(),
+            concat!(
+                "blocked by upstream dependency\n",
+                "GROVE_WARNINGS: upstream dependency still active\n",
+                "GROVE_RESULT: no safe unblocked implementation slice remains\n",
+                "GROVE_EXIT: false\n"
+            )
+            .to_owned(),
+        ),
+        ("STDERR_SCRIPT".to_owned(), String::new()),
+        ("EXIT_CODE".to_owned(), "0".to_owned()),
+    ];
+
+    let persisted = execute_persisted_single_task_session(
+        &mut db,
+        &backend,
+        request,
+        1,
+        &GroveConfig::default(),
+    )?;
+
+    assert_eq!(persisted.run.status, RunStatus::Failed);
+    assert_eq!(persisted.run.failure_class, Some(FailureClass::Unknown));
+    assert_eq!(
+        persisted.session.session.status,
+        SessionStatus::UnknownFailure
+    );
+    let bead = require_some(
+        db.get_bead_record(&BeadId::new("grove-life"))?,
+        "bead runtime should persist",
+    )?;
+    assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
+    assert_eq!(bead.last_failure_class, Some(FailureClass::Unknown));
+    assert!(persisted.checkpoint.is_none());
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
 fn persisted_runner_records_signaled_unknown_failure_as_waiting_to_retry() -> TestResult {
     use std::{fs, io};
     use tempfile::tempdir;
