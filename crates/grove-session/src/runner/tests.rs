@@ -1,10 +1,10 @@
 use super::*;
-use crate::{CliClaudeBackend, replay_transcript};
+use crate::{CliClaudeBackend, SessionLifecycleHooks, replay_transcript};
 use grove_types::{
-    FailureClass, IterationAnalysis, ProgressSignal, PromptManifest, PromptSegmentKind,
-    RuntimeProvider,
+    AgentActivity, FailureClass, IterationAnalysis, ProgressSignal, PromptManifest,
+    PromptSegmentKind, RuntimeProvider,
 };
-use std::{error::Error, fs, io, time::Duration};
+use std::{error::Error, fs, io, sync::Mutex, time::Duration};
 use tempfile::tempdir;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -14,6 +14,9 @@ fn write_fake_claude_script(path: &std::path::Path) -> TestResult {
     use std::os::unix::fs::PermissionsExt;
 
     let script = r#"#!/bin/sh
+if [ -n "$PRE_OUTPUT_SLEEP_SECS" ]; then
+    sleep "$PRE_OUTPUT_SLEEP_SECS"
+fi
 printf '%b' "$STDOUT_SCRIPT"
 printf '%b' "$STDERR_SCRIPT" >&2
 exit "${EXIT_CODE:-0}"
@@ -63,6 +66,28 @@ fn sample_request(workspace_dir: Utf8PathBuf) -> SingleTaskSessionRequest {
         escalation_tier: EscalationTier::FirstAttempt,
         mutation_strategy: None,
         idle_grace_period: Duration::from_secs(300),
+    }
+}
+
+#[cfg(unix)]
+#[derive(Default)]
+struct ActivityRecordingHooks {
+    changes: Mutex<Vec<(AgentActivity, Option<String>)>>,
+}
+
+#[cfg(unix)]
+impl SessionLifecycleHooks for ActivityRecordingHooks {
+    fn on_activity_changed(
+        &mut self,
+        activity: AgentActivity,
+        detail: Option<&str>,
+        _at: chrono::DateTime<chrono::Utc>,
+    ) -> anyhow::Result<()> {
+        self.changes
+            .lock()
+            .expect("lock activity changes")
+            .push((activity, detail.map(str::to_owned)));
+        Ok(())
     }
 }
 
@@ -241,6 +266,48 @@ fn execute_single_task_session_classifies_rate_limit_and_preserves_tails() -> Te
     assert_eq!(
         result.outcome.stderr_tail,
         vec!["ratelimit retry window still active".to_owned()]
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn delayed_first_output_still_records_idle_transition() -> TestResult {
+    let dir = tempdir()?;
+    let workspace_dir = dir.path().join("workspace");
+    fs::create_dir_all(&workspace_dir)?;
+    let workspace_dir = Utf8PathBuf::from_path_buf(workspace_dir)
+        .map_err(|_| io::Error::other("workspace dir must be valid UTF-8"))?;
+
+    let script_path = dir.path().join("fake-claude");
+    write_fake_claude_script(&script_path)?;
+    let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
+
+    let mut request = sample_request(workspace_dir);
+    request.idle_grace_period = Duration::from_millis(20);
+    request.env = vec![
+        ("PRE_OUTPUT_SLEEP_SECS".to_owned(), "0.05".to_owned()),
+        (
+            "STDOUT_SCRIPT".to_owned(),
+            "working through the task\nGROVE_EXIT: true\nall tasks complete\nimplementation complete\n"
+                .to_owned(),
+        ),
+        (
+            "STDERR_SCRIPT".to_owned(),
+            "permission denied opening sandboxed path\n".to_owned(),
+        ),
+        ("EXIT_CODE".to_owned(), "0".to_owned()),
+    ];
+
+    let mut hooks = ActivityRecordingHooks::default();
+    let _result = execute_single_task_session_with_hooks(&backend, request, &mut hooks)?;
+
+    let changes = hooks.changes.lock().expect("lock activity changes");
+    assert!(
+        changes.iter().any(|(activity, detail)| {
+            *activity == AgentActivity::Idle && detail.as_deref() == Some("stream_timeout")
+        }),
+        "delayed first output should still record an idle transition before subsequent activity",
     );
     Ok(())
 }

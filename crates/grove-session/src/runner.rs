@@ -328,6 +328,14 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
                 Ok(StreamMessage::Line(StreamSource::Stdout, line)) => {
                     let line = line.map_err(SingleTaskSessionRunnerError::ReadStdout)?;
                     let ts = Utc::now();
+                    if last_activity != AgentActivity::Idle
+                        && last_stream_activity_at.elapsed() >= request.idle_grace_period
+                    {
+                        hooks
+                            .on_activity_changed(AgentActivity::Idle, Some("stream_timeout"), ts)
+                            .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                        last_activity = AgentActivity::Idle;
+                    }
                     last_stream_activity_at = Instant::now();
                     transcript.append_stdout_line(line.clone(), ts)?;
                     match parser.parse_stdout_line(&line) {
@@ -360,6 +368,14 @@ pub fn execute_single_task_session_with_hooks<B: ClaudeBackend, H: SessionLifecy
                 Ok(StreamMessage::Line(StreamSource::Stderr, line)) => {
                     let line = line.map_err(SingleTaskSessionRunnerError::ReadStderr)?;
                     let ts = Utc::now();
+                    if last_activity != AgentActivity::Idle
+                        && last_stream_activity_at.elapsed() >= request.idle_grace_period
+                    {
+                        hooks
+                            .on_activity_changed(AgentActivity::Idle, Some("stream_timeout"), ts)
+                            .map_err(SingleTaskSessionRunnerError::LifecycleHook)?;
+                        last_activity = AgentActivity::Idle;
+                    }
                     last_stream_activity_at = Instant::now();
                     transcript.append_stderr_line(line.clone(), ts)?;
                     if let ParserLineKind::PlainStderr(text) = parser.parse_stderr_line(&line) {
