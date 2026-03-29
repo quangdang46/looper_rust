@@ -2,7 +2,7 @@
 
 use super::*;
 use grove_types::{BeadId, RunId, Timestamp};
-use std::{error::Error, fs, io::Error as IoError, time::Duration};
+use std::{error::Error, fs, io::Error as IoError};
 use tempfile::tempdir;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -20,7 +20,7 @@ fn write_fake_br_script(path: &std::path::Path, script: &str) -> TestResult {
     fs::rename(&temp_path, path)?;
     // Linux runners can intermittently report ETXTBSY when executing a freshly
     // replaced script immediately after rename.
-    std::thread::sleep(Duration::from_millis(25));
+    std::thread::sleep(std::time::Duration::from_millis(25));
     Ok(())
 }
 

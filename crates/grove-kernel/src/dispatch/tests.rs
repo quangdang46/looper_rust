@@ -5,11 +5,12 @@ use grove_br::{
     BeadCacheStore, BrCapability, BrCreateIssueInput, BrDependencySnapshot, BrError, BrIssueDetail,
     BrIssueSummary, BrVersion,
 };
+#[cfg(unix)]
 use grove_db::RunFinishInput;
 use grove_session::CliClaudeBackend;
 use grove_types::{
     BeadId, BeadPriority, BeadRef, CircuitBreakerState, CircuitState, GroveBeadRecord,
-    GroveBeadStatus, RunStatus, Timestamp,
+    GroveBeadStatus, Timestamp,
 };
 use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
@@ -758,7 +759,7 @@ fn dispatch_loop_prefers_runnable_blocker_before_exiting_blocked() -> TestResult
         &blocked.id,
         RunFinishInput {
             run_id: RunId::new("run-grove-blocked-1"),
-            status: RunStatus::Failed,
+            status: grove_types::RunStatus::Failed,
             failure_class: Some(FailureClass::Blocked),
             failure_detail: Some(
                 serde_json::json!({
@@ -813,7 +814,7 @@ fn dispatch_loop_prefers_runnable_blocker_before_exiting_blocked() -> TestResult
     assert_eq!(outcome.exit_reason, DispatchExitReason::MaxRunsReached);
     let runs = db.list_task_runs_for_bead(&BeadId::new("grove-parent"))?;
     assert_eq!(runs.len(), 1, "expected blocker bead to be dispatched once");
-    assert_eq!(runs[0].status, RunStatus::Succeeded);
+    assert_eq!(runs[0].status, grove_types::RunStatus::Succeeded);
     Ok(())
 }
 
@@ -890,7 +891,7 @@ fn dispatch_loop_skips_blocked_bead_and_runs_next_ready_bead() -> TestResult {
     );
     let runs = db.list_task_runs_for_bead(&BeadId::new("grove-next"))?;
     assert_eq!(runs.len(), 1, "expected second bead to be dispatched once");
-    assert_eq!(runs[0].status, RunStatus::Succeeded);
+    assert_eq!(runs[0].status, grove_types::RunStatus::Succeeded);
     Ok(())
 }
 
