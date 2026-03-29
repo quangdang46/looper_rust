@@ -596,11 +596,31 @@ fn has_plan_approval_detour(lines: &[String]) -> bool {
     })
 }
 
+fn explicit_exit_false_should_resume(outcome: &grove_types::SessionOutcome) -> bool {
+    outcome.session.status == SessionStatus::UnknownFailure
+        && outcome.analysis.has_explicit_exit_false
+        && !outcome.analysis.blocked_emitted
+        && (!matches!(outcome.analysis.probable_progress, ProgressSignal::None)
+            || outcome.protocol_events.iter().any(|event| {
+                matches!(
+                    event,
+                    grove_types::ProtocolEvent::Result { .. }
+                        | grove_types::ProtocolEvent::Artifacts { .. }
+                        | grove_types::ProtocolEvent::Lessons { .. }
+                        | grove_types::ProtocolEvent::Decisions { .. }
+                )
+            }))
+}
+
 fn unknown_failure_should_retry(outcome: &grove_types::SessionOutcome) -> bool {
+    if explicit_exit_false_should_resume(outcome) {
+        return true;
+    }
+
     // `GROVE_EXIT: false` is an explicit signal that the provider did not finish
-    // the task. Our contracts already require a matching checkpoint when that
-    // unfinished work should be resumed automatically, so a bare exit-false must
-    // not be promoted into an auto-retry loop.
+    // the task. Only auto-resume it when the session showed concrete progress and
+    // did not declare an explicit blocker. Otherwise keep the old loop-avoidance
+    // behavior and require a different recovery path.
     if outcome.analysis.has_explicit_exit_false {
         return false;
     }
@@ -713,7 +733,7 @@ fn synthetic_checkpoint_payload_from_outcome(
     failure_class: Option<FailureClass>,
     failure_detail: Option<&str>,
 ) -> Option<grove_types::CheckpointPayload> {
-    if outcome.analysis.has_explicit_exit_false {
+    if outcome.analysis.has_explicit_exit_false && !explicit_exit_false_should_resume(outcome) {
         return None;
     }
 
