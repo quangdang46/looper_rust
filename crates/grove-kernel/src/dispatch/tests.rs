@@ -19,6 +19,21 @@ use tempfile::tempdir;
 
 type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
+#[cfg(unix)]
+fn write_fake_provider_script(path: &std::path::Path, script: &str) -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_path = path.with_extension("tmp");
+    std::fs::write(&temp_path, script)?;
+    std::fs::File::open(&temp_path)?.sync_all()?;
+    let mut permissions = std::fs::metadata(&temp_path)?.permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&temp_path, permissions)?;
+    std::fs::rename(&temp_path, path)?;
+    std::thread::sleep(Duration::from_millis(25));
+    Ok(())
+}
+
 fn sample_bead(
     bead_id: &str,
     priority: BeadPriority,
@@ -466,7 +481,6 @@ fn select_best_candidate_excluding_skips_inflight_beads() -> TestResult {
 #[test]
 fn dispatch_loop_drains_inflight_workers_when_leader_lease_is_lost() -> TestResult {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     let dir = tempdir()?;
@@ -483,13 +497,10 @@ fn dispatch_loop_drains_inflight_workers_when_leader_lease_is_lost() -> TestResu
     db.set_grove_status(&BeadId::new("grove-a"), GroveBeadStatus::Ready)?;
 
     let script_path = dir.path().join("sleepy-claude");
-    fs::write(
+    write_fake_provider_script(
         &script_path,
         "#!/bin/sh\nsleep 0.1\nprintf 'GROVE_RESULT: ok\\nGROVE_ARTIFACTS: [\"src/lib.rs\"]\\nGROVE_EXIT: true\\nall tasks complete\\nimplementation complete\\n'\n",
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
     let br = TestBrClient::new(
@@ -676,7 +687,6 @@ fn headless_coordinator_releases_lease_when_dispatch_fails() -> TestResult {
 #[test]
 fn workflow_labeled_bead_advances_across_multiple_internal_phases() -> TestResult {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let dir = tempdir()?;
     let workspace_dir = dir.path().join("workspace");
@@ -695,13 +705,10 @@ fn workflow_labeled_bead_advances_across_multiple_internal_phases() -> TestResul
     db.set_grove_status(&workflow_bead.id, GroveBeadStatus::Ready)?;
 
     let script_path = dir.path().join("workflow-claude");
-    fs::write(
+    write_fake_provider_script(
         &script_path,
         "#!/bin/sh\nprintf 'GROVE_RESULT: phase complete\\nGROVE_LESSONS: [\"keep workflow moving\"]\\nGROVE_EXIT: true\\nimplementation complete\\n'\n",
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
     let br = TestBrClient::new(vec![workflow_bead.clone()], false, Duration::ZERO);
@@ -932,7 +939,6 @@ fn process_mirror_outbox_can_take_longer_than_short_lease_ttl() -> TestResult {
 #[test]
 fn dispatch_loop_persists_multiple_inflight_runs_up_to_parallel_limit() -> TestResult {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     let dir = tempdir()?;
@@ -951,13 +957,10 @@ fn dispatch_loop_persists_multiple_inflight_runs_up_to_parallel_limit() -> TestR
     db.set_grove_status(&BeadId::new("grove-b"), GroveBeadStatus::Ready)?;
 
     let script_path = dir.path().join("sleepy-claude");
-    fs::write(
+    write_fake_provider_script(
         &script_path,
         "#!/bin/sh\nsleep 0.2\nprintf 'GROVE_RESULT: ok\\nGROVE_ARTIFACTS: [\"src/lib.rs\"]\\nGROVE_EXIT: true\\nall tasks complete\\nimplementation complete\\n'\n",
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
     let br = TestBrClient::new(
@@ -1059,7 +1062,6 @@ fn dispatch_loop_exits_queue_empty_when_ready_beads_are_all_locally_suppressed()
 #[test]
 fn dispatch_loop_prefers_runnable_blocker_before_exiting_blocked() -> TestResult {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let dir = tempdir()?;
     let workspace_dir = dir.path().join("workspace");
@@ -1106,13 +1108,10 @@ fn dispatch_loop_prefers_runnable_blocker_before_exiting_blocked() -> TestResult
     db.set_grove_status(&blocker.id, GroveBeadStatus::Ready)?;
 
     let script_path = dir.path().join("blocker-claude");
-    fs::write(
+    write_fake_provider_script(
         &script_path,
         "#!/bin/sh\nprintf 'GROVE_RESULT: unblocked upstream bead\\nGROVE_ARTIFACTS: crates/grove-kernel/src/dispatch.rs\\nGROVE_EXIT: true\\n'\n",
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
     let br = TestBrClient::new(
@@ -1151,7 +1150,6 @@ fn dispatch_loop_prefers_runnable_blocker_before_exiting_blocked() -> TestResult
 #[test]
 fn dispatch_loop_skips_blocked_bead_and_runs_next_ready_bead() -> TestResult {
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
 
     let dir = tempdir()?;
     let workspace_dir = dir.path().join("workspace");
@@ -1172,13 +1170,10 @@ fn dispatch_loop_skips_blocked_bead_and_runs_next_ready_bead() -> TestResult {
     db.set_grove_status(&second.id, GroveBeadStatus::Ready)?;
 
     let script_path = dir.path().join("blocked-claude");
-    fs::write(
+    write_fake_provider_script(
         &script_path,
         "#!/bin/sh\nstate=\"$PWD/.grove/dispatch-state\"\nif [ ! -f \"$state\" ]; then\n  printf 'GROVE_BLOCKED: {\"reason\":\"waiting for upstream coordination\",\"blocked_by\":[\"grove-parent\"],\"next_action\":\"retry after grove-parent succeeds\"}\\nGROVE_RESULT: blocked on upstream coordination\\nGROVE_WARNINGS: waiting for unblock\\nGROVE_EXIT: false\\n'\n  : > \"$state\"\nelse\n  printf 'GROVE_RESULT: implemented next bead\\nGROVE_ARTIFACTS: crates/grove-kernel/src/dispatch.rs\\nGROVE_EXIT: true\\n'\nfi\n",
     )?;
-    let mut permissions = fs::metadata(&script_path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&script_path, permissions)?;
 
     let backend = CliClaudeBackend::new(script_path.to_string_lossy().into_owned());
     let br = TestBrClient::new(vec![first.clone(), second.clone()], false, Duration::ZERO);
