@@ -9,7 +9,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use camino::{Utf8Path, Utf8PathBuf};
 use grove_config::{LoadedConfig, build_provider_environment};
 use grove_db::{Database, RecoveryCapsuleEvent};
-use grove_kernel::lesson_ingest::ingest_lessons;
+use grove_kernel::{
+    ExecutionPolicyAction, PolicyVerdict, ProviderAction, evaluate_execution_policy,
+    lesson_ingest::ingest_lessons, trace_runtime_event,
+};
 use grove_session::build_provider_cli_args;
 use grove_types::{
     BeadId, CheckpointRecord, ClaudeSessionRecord, CleanupSnapshotRecord, GroveBeadRecord,
@@ -111,8 +114,12 @@ pub(super) fn handle_clean(
     mut db: Database,
     options: CleanOptions<'_>,
 ) -> Result<()> {
-    if !options.dry_run && !options.yes {
-        bail!("`grove clean` is mutating; re-run with `--yes` or inspect with `--dry-run`");
+    let clean_policy = evaluate_execution_policy(&ExecutionPolicyAction::WorkspaceClean {
+        dry_run: options.dry_run,
+        confirmed: options.yes,
+    });
+    if !clean_policy.verdict.permits_execution() {
+        bail!("{}", clean_policy.reason);
     }
 
     let report = execute_clean(
@@ -599,12 +606,33 @@ fn deterministic_cleanup_synthesis(
 fn run_provider_compaction(loaded: &LoadedConfig, prompt: &str) -> Result<CleanupSynthesis> {
     let current_env = env::vars().collect::<HashMap<_, _>>();
     let provider = loaded.config.runtime.provider;
+    let init_args = loaded.config.runtime.effective_init_args();
+    let launch_policy = evaluate_execution_policy(&ExecutionPolicyAction::ProviderLaunch {
+        provider,
+        provider_bin: loaded.config.runtime.provider_bin.clone(),
+        init_args: init_args.clone(),
+        action: ProviderAction::CleanupCompaction,
+    });
+    if !launch_policy.verdict.permits_execution() {
+        bail!("{}", launch_policy.reason);
+    }
+    if matches!(launch_policy.verdict, PolicyVerdict::AllowWithEscalation) {
+        trace_runtime_event(
+            "policy.provider_launch_escalated",
+            serde_json::json!({
+                "action": "cleanup_compaction",
+                "provider": provider.as_str(),
+                "provider_bin": loaded.config.runtime.provider_bin,
+                "reason": launch_policy.reason,
+            }),
+        );
+    }
     let env_vars = build_provider_environment(provider, &loaded.config.runtime, &current_env);
 
     let mut command = Command::new(&loaded.config.runtime.provider_bin);
     command.args(build_provider_cli_args(
         provider,
-        &loaded.config.runtime.effective_init_args(),
+        &init_args,
         &loaded.config.runtime.default_model,
         prompt,
     ));

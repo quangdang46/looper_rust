@@ -15,9 +15,10 @@ use grove_config::{
 use grove_db::Database;
 use grove_kernel::{
     BeadInspectView, DispatchBlockedSummary, DispatchExitReason, DispatchLoopConfig,
-    HeadlessCoordinatorRunOutcome, LeaderLeaseConfig, ShutdownSignal, StartupRecoveryReport,
-    WorkspaceStatusView, init_trace_logging, load_bead_inspect_view, load_workspace_status_view,
-    run_headless_coordinator, trace_runtime_event,
+    ExecutionPolicyAction, HeadlessCoordinatorRunOutcome, LeaderLeaseConfig, PolicyVerdict,
+    ProviderAction, ShutdownSignal, StartupRecoveryReport, WorkspaceStatusView,
+    evaluate_execution_policy, init_trace_logging, load_bead_inspect_view,
+    load_workspace_status_view, run_headless_coordinator, trace_runtime_event,
 };
 use grove_session::replay_transcript;
 use grove_types::{
@@ -680,11 +681,7 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
         .register_ctrlc()
         .context("register shutdown handler")?;
 
-    let backend = grove_session::CliClaudeBackend::new_for_provider_with_init_args(
-        loaded.config.runtime.provider,
-        loaded.config.runtime.provider_bin.clone(),
-        loaded.config.runtime.effective_init_args(),
-    );
+    let backend = build_provider_backend(&loaded, ProviderAction::TaskSession)?;
     let loop_config = DispatchLoopConfig {
         max_total_runs: None,
         max_poll_cycles: None,
@@ -960,29 +957,21 @@ fn handle_retry(bead_id: &BeadId, json_mode: bool) -> Result<()> {
         .with_context(|| format!("load bead record for {}", bead_id.as_str()))?
         .ok_or_else(|| anyhow!("bead {} not found in local cache", bead_id.as_str()))?;
 
-    // Only allow retry for Failed or Checkpointed beads.
-    match bead.grove_status {
-        GroveBeadStatus::Failed | GroveBeadStatus::Checkpointed => {}
-        other => {
-            bail!(
-                "bead {} has grove status {:?}, can only retry Failed or Checkpointed beads",
-                bead_id.as_str(),
-                other
-            );
-        }
-    }
-
     // Check br still reports this bead as ready (or at least open).
     let br_ready = br.ready().unwrap_or_default();
     let is_ready_in_br = br_ready.iter().any(|s| &s.id == bead_id);
+    let retry_policy = evaluate_execution_policy(&ExecutionPolicyAction::RetryReset {
+        bead_id: bead_id.clone(),
+        status: bead.grove_status,
+        failure_class: bead.last_failure_class,
+        ready_in_br: is_ready_in_br,
+    });
+    if !retry_policy.verdict.permits_execution() {
+        bail!("{}", retry_policy.reason);
+    }
 
     if json_mode {
-        let warning = (!is_ready_in_br).then(|| {
-            format!(
-                "bead {} is not reported as ready by br; proceeding with local retry",
-                bead_id.as_str()
-            )
-        });
+        let warning = (!is_ready_in_br).then(|| retry_policy.reason.clone());
         let now = chrono::Utc::now();
         db.reset_bead_for_retry(bead_id, &now)
             .with_context(|| format!("reset bead {} for retry", bead_id.as_str()))?;
@@ -1500,11 +1489,7 @@ fn run_dispatch_loop_with_live_ui(
     lease_config: &LeaderLeaseConfig,
     loop_config: &DispatchLoopConfig,
 ) -> Result<HeadlessCoordinatorRunOutcome> {
-    let backend = grove_session::CliClaudeBackend::new_for_provider_with_init_args(
-        loaded.config.runtime.provider,
-        loaded.config.runtime.provider_bin.clone(),
-        loaded.config.runtime.effective_init_args(),
-    );
+    let backend = build_provider_backend(loaded, ProviderAction::TaskSession)?;
     let mut worker_db = Database::open(loaded.paths.db_path())
         .with_context(|| format!("open database at {}", loaded.paths.db_path()))?;
     let br_for_thread = br.clone();
@@ -3102,4 +3087,39 @@ fn read_transcript_tail(path: &str, tail_lines: usize) -> Result<Option<Vec<Stri
     let lines = content.lines().map(ToOwned::to_owned).collect::<Vec<_>>();
     let start = lines.len().saturating_sub(tail_lines);
     Ok(Some(lines[start..].to_vec()))
+}
+
+fn build_provider_backend(
+    loaded: &LoadedConfig,
+    action: ProviderAction,
+) -> Result<grove_session::CliClaudeBackend> {
+    let init_args = loaded.config.runtime.effective_init_args();
+    let launch_policy = evaluate_execution_policy(&ExecutionPolicyAction::ProviderLaunch {
+        provider: loaded.config.runtime.provider,
+        provider_bin: loaded.config.runtime.provider_bin.clone(),
+        init_args: init_args.clone(),
+        action,
+    });
+    if !launch_policy.verdict.permits_execution() {
+        bail!("{}", launch_policy.reason);
+    }
+    if matches!(launch_policy.verdict, PolicyVerdict::AllowWithEscalation) {
+        trace_runtime_event(
+            "policy.provider_launch_escalated",
+            json!({
+                "action": action.summary(),
+                "provider": loaded.config.runtime.provider.as_str(),
+                "provider_bin": loaded.config.runtime.provider_bin,
+                "reason": launch_policy.reason,
+            }),
+        );
+    }
+
+    Ok(
+        grove_session::CliClaudeBackend::new_for_provider_with_init_args(
+            loaded.config.runtime.provider,
+            loaded.config.runtime.provider_bin.clone(),
+            init_args,
+        ),
+    )
 }

@@ -570,17 +570,23 @@ fn headless_coordinator_releases_lease_when_dispatch_fails() -> TestResult {
     )?;
     match outcome {
         crate::HeadlessCoordinatorRunOutcome::Completed(report) => {
-            panic!(
-                "expected dispatch failure, got successful outcome {:?}",
-                report.outcome.exit_reason
+            assert!(report.leader_release.is_some());
+            assert_eq!(
+                report.outcome.exit_reason,
+                DispatchExitReason::MaxRunsReached
             );
         }
         crate::HeadlessCoordinatorRunOutcome::Failed(failure) => {
-            assert!(failure.leader_release.is_some());
-            assert!(!failure.error.to_string().is_empty());
+            panic!(
+                "expected run to persist bead failure instead of aborting coordinator: {failure:?}"
+            );
         }
     }
 
+    let bead = db
+        .get_bead_record(&BeadId::new("grove-a"))?
+        .expect("bead should still exist");
+    assert_eq!(bead.grove_status, GroveBeadStatus::Failed);
     assert!(db.active_leader_lease(&chrono::Utc::now())?.is_none());
     Ok(())
 }

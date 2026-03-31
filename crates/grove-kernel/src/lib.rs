@@ -3,6 +3,7 @@ pub mod diary;
 pub mod dispatch;
 pub mod inspect_view;
 pub mod lesson_ingest;
+pub mod policy;
 pub mod reactions;
 pub mod scoring;
 pub mod status_view;
@@ -41,6 +42,9 @@ pub use dispatch::{
     DispatchExitReason, DispatchLoopConfig, DispatchLoopOutcome, ShutdownSignal, run_dispatch_loop,
 };
 pub use inspect_view::BeadInspectView;
+pub use policy::{
+    ExecutionPolicyAction, PolicyDecision, PolicyVerdict, ProviderAction, evaluate_execution_policy,
+};
 pub use status_view::WorkspaceStatusView;
 
 pub const CRATE_PURPOSE: &str = "Core Grove runtime domain and service boundaries.";
