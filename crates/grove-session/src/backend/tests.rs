@@ -1,6 +1,6 @@
 use super::{
     ClaudeBackend, CliSessionBackend, DEFAULT_MODEL_OMIT_FLAG, StartSessionRequest,
-    is_transient_spawn_error,
+    build_provider_cli_args, is_transient_spawn_error,
 };
 use camino::Utf8PathBuf;
 use grove_types::RuntimeProvider;
@@ -95,10 +95,9 @@ fn cli_backend_spawns_process_with_expected_contract() -> TestResult {
     assert_eq!(
         args,
         vec![
+            "--dangerously-skip-permissions",
             "-p",
             "write code while you sleep",
-            "--permission-mode",
-            "bypassPermissions",
             "--model",
             "sonnet"
         ]
@@ -151,13 +150,34 @@ fn cli_backend_omits_model_flag_when_default_sentinel() -> TestResult {
     assert_eq!(
         args,
         vec![
+            "--dangerously-skip-permissions",
             "-p",
-            "write code while you sleep",
-            "--permission-mode",
-            "bypassPermissions"
+            "write code while you sleep"
         ]
     );
     Ok(())
+}
+
+#[test]
+fn build_provider_cli_args_uses_provider_specific_start_flags() {
+    let codex_args = build_provider_cli_args(
+        RuntimeProvider::Codex,
+        &["exec".to_owned(), "--full-auto".to_owned()],
+        "gpt-5",
+        "ship it",
+    );
+    assert_eq!(
+        codex_args,
+        vec!["exec", "--full-auto", "--model", "gpt-5", "ship it"]
+    );
+
+    let claude_args = build_provider_cli_args(
+        RuntimeProvider::Claude,
+        &["--enable-auto-mode".to_owned()],
+        DEFAULT_MODEL_OMIT_FLAG,
+        "ship it",
+    );
+    assert_eq!(claude_args, vec!["--enable-auto-mode", "-p", "ship it"]);
 }
 
 #[test]

@@ -8,6 +8,17 @@ pub fn validate_config(config: &GroveConfig, paths: &GrovePaths) -> Result<(), C
         });
     }
 
+    if let Some(init_args) = &config.runtime.init_args {
+        for (index, flag) in init_args.iter().enumerate() {
+            if flag.trim().is_empty() {
+                return Err(ConfigError::Validation {
+                    field: format!("runtime.init_args[{index}]"),
+                    message: "must not be empty".to_owned(),
+                });
+            }
+        }
+    }
+
     ensure_range("checkpoint.warn_pct", config.checkpoint.warn_pct)?;
     ensure_range("checkpoint.rotate_pct", config.checkpoint.rotate_pct)?;
     ensure_range("checkpoint.hard_stop_pct", config.checkpoint.hard_stop_pct)?;

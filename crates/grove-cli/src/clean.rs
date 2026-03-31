@@ -10,10 +10,10 @@ use camino::{Utf8Path, Utf8PathBuf};
 use grove_config::{LoadedConfig, build_provider_environment};
 use grove_db::{Database, RecoveryCapsuleEvent};
 use grove_kernel::lesson_ingest::ingest_lessons;
-use grove_session::DEFAULT_MODEL_OMIT_FLAG;
+use grove_session::build_provider_cli_args;
 use grove_types::{
     BeadId, CheckpointRecord, ClaudeSessionRecord, CleanupSnapshotRecord, GroveBeadRecord,
-    HandoffRecord, RunStatus, RuntimeProvider, SessionStatus, TaskRunRecord,
+    HandoffRecord, RunStatus, SessionStatus, TaskRunRecord,
 };
 use serde::{Deserialize, Serialize};
 
@@ -602,29 +602,12 @@ fn run_provider_compaction(loaded: &LoadedConfig, prompt: &str) -> Result<Cleanu
     let env_vars = build_provider_environment(provider, &loaded.config.runtime, &current_env);
 
     let mut command = Command::new(&loaded.config.runtime.provider_bin);
-    match provider {
-        RuntimeProvider::Claude => {
-            command
-                .arg("-p")
-                .arg(prompt)
-                .arg("--permission-mode")
-                .arg("bypassPermissions");
-            if loaded.config.runtime.default_model != DEFAULT_MODEL_OMIT_FLAG {
-                command
-                    .arg("--model")
-                    .arg(&loaded.config.runtime.default_model);
-            }
-        }
-        RuntimeProvider::Codex => {
-            command.arg("exec").arg("--full-auto");
-            if loaded.config.runtime.default_model != DEFAULT_MODEL_OMIT_FLAG {
-                command
-                    .arg("--model")
-                    .arg(&loaded.config.runtime.default_model);
-            }
-            command.arg(prompt);
-        }
-    }
+    command.args(build_provider_cli_args(
+        provider,
+        &loaded.config.runtime.effective_init_args(),
+        &loaded.config.runtime.default_model,
+        prompt,
+    ));
 
     command.current_dir(loaded.paths.workspace_root().as_std_path());
     for (key, value) in env_vars {

@@ -23,6 +23,13 @@ pub struct RuntimeConfig {
     pub provider: RuntimeProvider,
     #[serde(alias = "claude_bin")]
     pub provider_bin: String,
+    #[serde(
+        alias = "startflag",
+        alias = "startflags",
+        alias = "start_flags",
+        alias = "init_flag"
+    )]
+    pub init_args: Option<Vec<String>>,
     /// Use `"default"` to let the selected provider pick the model (Grove omits the model flag).
     pub default_model: String,
     pub workspace_root: String,
@@ -33,15 +40,36 @@ pub struct RuntimeConfig {
 
 impl Default for RuntimeConfig {
     fn default() -> Self {
+        let provider = RuntimeProvider::Claude;
         Self {
-            provider: RuntimeProvider::Claude,
-            provider_bin: RuntimeProvider::Claude.default_bin().to_owned(),
+            provider,
+            provider_bin: provider.default_bin().to_owned(),
+            init_args: Some(
+                provider
+                    .default_init_args()
+                    .iter()
+                    .map(|flag| (*flag).to_owned())
+                    .collect(),
+            ),
             default_model: "default".to_owned(),
             workspace_root: ".".to_owned(),
             timeout_minutes: 60,
             startup_prompt_path: DEFAULT_STARTUP_PROMPT_PATH.to_owned(),
             env_passthrough: Vec::new(),
         }
+    }
+}
+
+impl RuntimeConfig {
+    #[must_use]
+    pub fn effective_init_args(&self) -> Vec<String> {
+        self.init_args.clone().unwrap_or_else(|| {
+            self.provider
+                .default_init_args()
+                .iter()
+                .map(|flag| (*flag).to_owned())
+                .collect()
+        })
     }
 }
 

@@ -1,6 +1,7 @@
 [runtime]
 provider = "codex"
 provider_bin = "codex"
+init_args = ["exec", "--full-auto"]
 default_model = "default"
 workspace_root = "."
 timeout_minutes = 60

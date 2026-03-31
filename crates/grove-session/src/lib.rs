@@ -19,7 +19,7 @@ pub use analyzer::{
 };
 pub use backend::{
     ClaudeBackend, CliClaudeBackend, CliSessionBackend, DEFAULT_MODEL_OMIT_FLAG, RunningSession,
-    SessionBackend, StartSessionRequest,
+    SessionBackend, StartSessionRequest, build_provider_cli_args,
 };
 pub use exit_policy::{ExitDecision, ExitPolicy};
 pub use grove_types::EscalationContext;

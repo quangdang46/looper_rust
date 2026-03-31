@@ -408,6 +408,7 @@ fn handle_init(
                 "skills_requested": skills,
                 "provider": loaded.config.runtime.provider.as_str(),
                 "provider_bin": loaded.config.runtime.provider_bin,
+                "init_args": loaded.config.runtime.effective_init_args(),
                 "bundled_skills": skills.then_some(
                     bundled_skill_results
                         .iter()
@@ -462,6 +463,10 @@ fn handle_init(
         "- provider: {} ({})",
         loaded.config.runtime.provider.as_str(),
         loaded.config.runtime.provider_bin
+    );
+    println!(
+        "- init args: {}",
+        render_init_args(&loaded.config.runtime.effective_init_args())
     );
     if skills {
         println!(
@@ -762,9 +767,10 @@ fn handle_run(json_mode: bool, live: bool) -> Result<()> {
         .register_ctrlc()
         .context("register shutdown handler")?;
 
-    let backend = grove_session::CliClaudeBackend::new_for_provider(
+    let backend = grove_session::CliClaudeBackend::new_for_provider_with_init_args(
         loaded.config.runtime.provider,
         loaded.config.runtime.provider_bin.clone(),
+        loaded.config.runtime.effective_init_args(),
     );
     let loop_config = DispatchLoopConfig {
         max_total_runs: None,
@@ -1678,9 +1684,10 @@ fn run_dispatch_loop_with_live_ui(
     lease_config: &LeaderLeaseConfig,
     loop_config: &DispatchLoopConfig,
 ) -> Result<Result<DispatchLoopOutcome>> {
-    let backend = grove_session::CliClaudeBackend::new_for_provider(
+    let backend = grove_session::CliClaudeBackend::new_for_provider_with_init_args(
         loaded.config.runtime.provider,
         loaded.config.runtime.provider_bin.clone(),
+        loaded.config.runtime.effective_init_args(),
     );
     let mut worker_db = Database::open(loaded.paths.db_path())
         .with_context(|| format!("open database at {}", loaded.paths.db_path()))?;
@@ -2103,6 +2110,7 @@ fn ensure_startup_prompt_file(paths: &GrovePaths, provider: RuntimeProvider) -> 
 
 fn render_default_config(provider: RuntimeProvider) -> String {
     let default_bin = provider.default_bin();
+    let init_args = render_init_args_toml(provider.default_init_args());
     DEFAULT_INIT_GROVE_TOML
         .replace(
             "provider = \"claude\"",
@@ -2111,6 +2119,10 @@ fn render_default_config(provider: RuntimeProvider) -> String {
         .replace(
             "provider_bin = \"claude\"",
             &format!("provider_bin = \"{default_bin}\""),
+        )
+        .replace(
+            "init_args = [\"--dangerously-skip-permissions\"]",
+            &format!("init_args = {init_args}"),
         )
         .trim_end()
         .to_owned()
@@ -2152,6 +2164,7 @@ fn handle_migrate(json_mode: bool, provider: &str) -> Result<()> {
                 "command": "migrate",
                 "provider": provider.as_str(),
                 "provider_bin": loaded.config.runtime.provider_bin,
+                "init_args": loaded.config.runtime.effective_init_args(),
                 "config_path": config_path.as_str(),
                 "startup_prompt_path": startup_path.as_str(),
                 "startup_prompt_updated": startup_updated,
@@ -2164,6 +2177,10 @@ fn handle_migrate(json_mode: bool, provider: &str) -> Result<()> {
         "Migrated Grove runtime to {} using `{}`.",
         provider.as_str(),
         loaded.config.runtime.provider_bin
+    );
+    println!(
+        "- init args: {}",
+        render_init_args(&loaded.config.runtime.effective_init_args())
     );
     if startup_updated {
         println!("- rewrote startup prompt: {}", startup_path);
@@ -2200,6 +2217,10 @@ fn migrate_workspace_provider(config_path: &Utf8Path, provider: RuntimeProvider)
 fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> String {
     let mut lines = raw.lines().map(str::to_owned).collect::<Vec<_>>();
     let had_trailing_newline = raw.ends_with('\n');
+    let init_args_line = format!(
+        "init_args = {}",
+        render_init_args_toml(provider.default_init_args())
+    );
 
     let runtime_start =
         if let Some(index) = lines.iter().position(|line| line.trim() == "[runtime]") {
@@ -2211,6 +2232,7 @@ fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> Strin
             lines.push("[runtime]".to_owned());
             lines.push(format!("provider = \"{}\"", provider.as_str()));
             lines.push(format!("provider_bin = \"{}\"", provider.default_bin()));
+            lines.push(init_args_line);
             return render_lines(lines, had_trailing_newline);
         };
     let runtime_body_start = runtime_start + 1;
@@ -2226,6 +2248,7 @@ fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> Strin
 
     let mut provider_line_index = None;
     let mut provider_bin_line_index = None;
+    let mut init_args_line_index = None;
     let mut claude_bin_line_index = None;
 
     for (offset, line) in lines[runtime_body_start..runtime_end].iter().enumerate() {
@@ -2233,6 +2256,9 @@ fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> Strin
         match assignment_key(line) {
             Some("provider") => provider_line_index = Some(index),
             Some("provider_bin") => provider_bin_line_index = Some(index),
+            Some("init_args") | Some("init_flag") | Some("startflag") => {
+                init_args_line_index = Some(index)
+            }
             Some("claude_bin") => claude_bin_line_index = Some(index),
             _ => {}
         }
@@ -2248,6 +2274,7 @@ fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> Strin
         );
         provider_line_index = Some(runtime_body_start);
         provider_bin_line_index = provider_bin_line_index.map(|index| index + 1);
+        init_args_line_index = init_args_line_index.map(|index| index + 1);
         claude_bin_line_index = claude_bin_line_index.map(|index| index + 1);
     }
 
@@ -2260,12 +2287,29 @@ fn rewrite_runtime_provider_block(raw: &str, provider: RuntimeProvider) -> Strin
             insert_at,
             format!("provider_bin = \"{}\"", provider.default_bin()),
         );
+        init_args_line_index = init_args_line_index.map(|index| index + 1);
     }
 
     if let Some(index) = claude_bin_line_index
         && provider_bin_line_index.is_some()
     {
         lines.remove(index);
+        if let Some(init_args_index) = init_args_line_index
+            && init_args_index > index
+        {
+            init_args_line_index = Some(init_args_index - 1);
+        }
+    }
+
+    let init_args_insert_at = provider_bin_line_index
+        .or(claude_bin_line_index)
+        .or(provider_line_index)
+        .map_or(runtime_body_start, |index| index + 1);
+    if let Some(index) = init_args_line_index {
+        let indent = leading_whitespace(&lines[index]);
+        lines[index] = format!("{indent}{init_args_line}");
+    } else {
+        lines.insert(init_args_insert_at, init_args_line);
     }
 
     render_lines(lines, had_trailing_newline)
@@ -2296,6 +2340,23 @@ fn render_lines(lines: Vec<String>, had_trailing_newline: bool) -> String {
         rendered.push('\n');
     }
     rendered
+}
+
+fn render_init_args(flags: &[String]) -> String {
+    if flags.is_empty() {
+        "(none)".to_owned()
+    } else {
+        flags.join(" ")
+    }
+}
+
+fn render_init_args_toml(flags: &[&str]) -> String {
+    let quoted = flags
+        .iter()
+        .map(|flag| format!("\"{flag}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{quoted}]")
 }
 
 fn maybe_update_startup_prompt(path: &Utf8Path, provider: RuntimeProvider) -> Result<bool> {

@@ -12,6 +12,8 @@ pub const DEFAULT_INIT_GROVE_TOML: &str = r#"# Grove orchestration configuration
 provider = "claude"
 # Executable name or path for the selected provider CLI (must be on PATH unless you use an absolute path).
 provider_bin = "claude"
+# Provider startup args/subcommands prepended before Grove-managed prompt/model arguments.
+init_args = ["--dangerously-skip-permissions"]
 # Model passed to the selected provider. Use "default" to omit the model flag and let the CLI pick.
 default_model = "default"
 # Directory Grove treats as the project root (relative to this file, or absolute).

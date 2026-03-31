@@ -764,6 +764,7 @@ fn init_tolerates_missing_beads_and_prints_guidance() -> TestResult {
     );
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Initialized grove workspace."));
+    assert!(stdout.contains("- init args: --dangerously-skip-permissions"));
     assert!(stdout.contains(
         "No .beads directory detected yet; run `br init` before `grove status` or `grove run`."
     ));
@@ -1040,6 +1041,10 @@ fn init_json_emits_machine_readable_output() -> TestResult {
     assert!(payload["config_path"].as_str().is_some());
     assert!(payload["startup_prompt_path"].as_str().is_some());
     assert_eq!(payload["skills_requested"], true);
+    assert_eq!(
+        payload["init_args"],
+        serde_json::json!(["--dangerously-skip-permissions"])
+    );
     let bundled_skills = payload["bundled_skills"]
         .as_array()
         .expect("bundled skills array");
@@ -1069,6 +1074,7 @@ fn migrate_preserves_existing_config_order() -> TestResult {
     let original = r#"[runtime]
 provider = "claude"
 provider_bin = "claude"
+init_args = ["--dangerously-skip-permissions"]
 default_model = "default"
 workspace_root = "."
 timeout_minutes = 60
@@ -1127,6 +1133,7 @@ persist_jsonl = true
     let expected = r#"[runtime]
 provider = "codex"
 provider_bin = "codex"
+init_args = ["exec", "--full-auto"]
 default_model = "default"
 workspace_root = "."
 timeout_minutes = 60
@@ -1209,6 +1216,7 @@ persist_jsonl = true
     assert!(!migrated.contains("claude_bin ="));
     assert!(migrated.contains("provider = \"codex\""));
     assert!(migrated.contains("provider_bin = \"codex\""));
+    assert!(migrated.contains("init_args = [\"exec\", \"--full-auto\"]"));
     assert!(migrated.contains("default_model = \"default\""));
     assert!(migrated.contains("\n[logging]\n"));
 
@@ -2290,7 +2298,7 @@ if [[ "${1-}" == "--version" ]]; then
   echo "claude 1.0.0-test"
   exit 0
 fi
-if [[ "${1-}" == "-p" ]]; then
+if [[ " $* " == *" -p "* ]]; then
   echo '{"continuity_summary":"provider compact summary","next_bead_guidance":"use provider guidance","lessons":["lesson-a"],"decisions":["decision-a"],"warnings":["warning-a"],"prompt_summary":"prompt summary","transcript_tail_summary":"tail summary"}'
   exit 0
 fi

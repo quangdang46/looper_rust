@@ -27,6 +27,7 @@ pub trait ClaudeBackend: Send + Sync {
 pub struct CliSessionBackend {
     provider: RuntimeProvider,
     provider_bin: String,
+    init_args: Vec<String>,
 }
 
 pub trait SessionBackend: ClaudeBackend {}
@@ -43,9 +44,27 @@ impl CliSessionBackend {
 
     #[must_use]
     pub fn new_for_provider(provider: RuntimeProvider, provider_bin: impl Into<String>) -> Self {
+        Self::new_for_provider_with_init_args(
+            provider,
+            provider_bin,
+            provider
+                .default_init_args()
+                .iter()
+                .map(|flag| (*flag).to_owned())
+                .collect(),
+        )
+    }
+
+    #[must_use]
+    pub fn new_for_provider_with_init_args(
+        provider: RuntimeProvider,
+        provider_bin: impl Into<String>,
+        init_args: Vec<String>,
+    ) -> Self {
         Self {
             provider,
             provider_bin: provider_bin.into(),
+            init_args,
         }
     }
 }
@@ -70,29 +89,43 @@ pub const DEFAULT_MODEL_OMIT_FLAG: &str = "default";
 const SPAWN_RETRY_ATTEMPTS: usize = 5;
 const SPAWN_RETRY_DELAY: Duration = Duration::from_millis(25);
 
-impl ClaudeBackend for CliSessionBackend {
-    fn start(&self, req: StartSessionRequest) -> Result<RunningSession> {
-        let provider = req.provider;
-        let mut command = Command::new(&self.provider_bin);
-        match provider {
-            RuntimeProvider::Claude => {
-                command
-                    .arg("-p")
-                    .arg(&req.prompt)
-                    .arg("--permission-mode")
-                    .arg("bypassPermissions");
-                if req.model != DEFAULT_MODEL_OMIT_FLAG {
-                    command.arg("--model").arg(&req.model);
-                }
-            }
-            RuntimeProvider::Codex => {
-                command.arg("exec").arg("--full-auto");
-                if req.model != DEFAULT_MODEL_OMIT_FLAG {
-                    command.arg("--model").arg(&req.model);
-                }
-                command.arg(&req.prompt);
+#[must_use]
+pub fn build_provider_cli_args(
+    provider: RuntimeProvider,
+    init_args: &[String],
+    model: &str,
+    prompt: &str,
+) -> Vec<String> {
+    let mut args = init_args.to_vec();
+    match provider {
+        RuntimeProvider::Claude => {
+            args.push("-p".to_owned());
+            args.push(prompt.to_owned());
+            if model != DEFAULT_MODEL_OMIT_FLAG {
+                args.push("--model".to_owned());
+                args.push(model.to_owned());
             }
         }
+        RuntimeProvider::Codex => {
+            if model != DEFAULT_MODEL_OMIT_FLAG {
+                args.push("--model".to_owned());
+                args.push(model.to_owned());
+            }
+            args.push(prompt.to_owned());
+        }
+    }
+    args
+}
+
+impl ClaudeBackend for CliSessionBackend {
+    fn start(&self, req: StartSessionRequest) -> Result<RunningSession> {
+        let mut command = Command::new(&self.provider_bin);
+        command.args(build_provider_cli_args(
+            self.provider,
+            &self.init_args,
+            &req.model,
+            &req.prompt,
+        ));
         command
             .current_dir(req.working_dir.as_std_path())
             .stdin(Stdio::null())

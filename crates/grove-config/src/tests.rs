@@ -51,6 +51,10 @@ fn env_provider_override_resets_provider_bin_to_provider_default() -> TestResult
     )?;
     assert_eq!(loaded.config.runtime.provider, RuntimeProvider::Codex);
     assert_eq!(loaded.config.runtime.provider_bin, "codex");
+    assert_eq!(
+        loaded.config.runtime.effective_init_args(),
+        vec!["exec".to_owned(), "--full-auto".to_owned()]
+    );
     Ok(())
 }
 
@@ -71,6 +75,42 @@ fn env_provider_bin_override_wins_over_provider_default() -> TestResult {
     )?;
     assert_eq!(loaded.config.runtime.provider, RuntimeProvider::Codex);
     assert_eq!(loaded.config.runtime.provider_bin, "/tmp/custom-codex");
+    Ok(())
+}
+
+#[test]
+fn legacy_startflag_alias_still_deserializes() -> TestResult {
+    let loaded = load_with_text(
+        "[runtime]\nstartflag = [\"--dangerously-skip-permissions\"]\n",
+        &HashMap::new(),
+    )?;
+    assert_eq!(
+        loaded.config.runtime.effective_init_args(),
+        vec!["--dangerously-skip-permissions".to_owned()]
+    );
+    Ok(())
+}
+
+#[test]
+fn env_init_args_override_wins_over_provider_defaults() -> TestResult {
+    let loaded = load_with_text(
+        "",
+        &HashMap::from([
+            (
+                String::from("GROVE_RUNTIME__PROVIDER"),
+                String::from("codex"),
+            ),
+            (
+                String::from("GROVE_RUNTIME__INIT_ARGS"),
+                String::from("exec,--ask-for-approval=never"),
+            ),
+        ]),
+    )?;
+    assert_eq!(loaded.config.runtime.provider, RuntimeProvider::Codex);
+    assert_eq!(
+        loaded.config.runtime.effective_init_args(),
+        vec!["exec".to_owned(), "--ask-for-approval=never".to_owned()]
+    );
     Ok(())
 }
 

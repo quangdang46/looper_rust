@@ -71,12 +71,16 @@ pub fn apply_env_overrides(
 ) -> Result<(), ConfigError> {
     let mut provider_override = None;
     let mut provider_bin_override = None;
+    let mut init_args_override = None;
     let mut legacy_claude_bin_override = None;
 
     for (key, value) in env {
         match key.as_str() {
             "GROVE_RUNTIME__PROVIDER" => provider_override = Some(parse_provider_env(key, value)?),
             "GROVE_RUNTIME__PROVIDER_BIN" => provider_bin_override = Some(value.clone()),
+            "GROVE_RUNTIME__INIT_ARGS"
+            | "GROVE_RUNTIME__INIT_FLAG"
+            | "GROVE_RUNTIME__STARTFLAG" => init_args_override = Some(parse_csv(value)),
             "GROVE_RUNTIME__CLAUDE_BIN" => legacy_claude_bin_override = Some(value.clone()),
             "GROVE_RUNTIME__DEFAULT_MODEL" => config.runtime.default_model = value.clone(),
             "GROVE_RUNTIME__WORKSPACE_ROOT" => config.runtime.workspace_root = value.clone(),
@@ -173,6 +177,13 @@ pub fn apply_env_overrides(
     if let Some(provider) = provider_override {
         config.runtime.provider = provider;
         config.runtime.provider_bin = provider.default_bin().to_owned();
+        config.runtime.init_args = Some(
+            provider
+                .default_init_args()
+                .iter()
+                .map(|flag| (*flag).to_owned())
+                .collect(),
+        );
     }
 
     if let Some(provider_bin) = provider_bin_override {
@@ -181,6 +192,10 @@ pub fn apply_env_overrides(
         && matches!(config.runtime.provider, RuntimeProvider::Claude)
     {
         config.runtime.provider_bin = legacy_claude_bin;
+    }
+
+    if let Some(init_args) = init_args_override {
+        config.runtime.init_args = Some(init_args);
     }
 
     Ok(())

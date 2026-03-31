@@ -27,6 +27,14 @@ impl RuntimeProvider {
     }
 
     #[must_use]
+    pub const fn default_init_args(self) -> &'static [&'static str] {
+        match self {
+            Self::Claude => &["--dangerously-skip-permissions"],
+            Self::Codex => &["exec", "--full-auto"],
+        }
+    }
+
+    #[must_use]
     pub const fn skill_invocation(self) -> &'static str {
         match self {
             Self::Claude => "/skill",

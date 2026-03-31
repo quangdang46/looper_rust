@@ -368,7 +368,7 @@ GROVE_EXIT: false
 
 Besides `grove.toml`, Grove also uses a user-owned startup prompt file. By default it lives at `.grove/startup_prompt.md`, but you can override that path with `runtime.startup_prompt_path` in `grove.toml`. The file is created by `grove init`, can be edited freely, and is injected into every new provider session before task-specific context. It is separate from `.grove/prompts/`, which stores Grove-generated rendered prompt manifests for dispatched sessions.
 
-Claude and Codex share the same schema. The provider-specific keys are `runtime.provider`, `runtime.provider_bin`, and usually `runtime.default_model`.
+Claude and Codex share the same schema. The provider-specific keys are `runtime.provider`, `runtime.provider_bin`, `runtime.init_args`, and usually `runtime.default_model`.
 
 ```toml
 # grove.toml
@@ -376,6 +376,7 @@ Claude and Codex share the same schema. The provider-specific keys are `runtime.
 [runtime]
 provider = "claude"         # or "codex"
 provider_bin = "claude"     # selected provider CLI binary/path
+init_args = ["--dangerously-skip-permissions"]  # provider-specific startup args/subcommands
 default_model = "default"   # omit the provider model flag; use a concrete name to force it
 workspace_root = "."
 timeout_minutes = 60
@@ -443,6 +444,7 @@ For Codex/OpenAI workspaces, set the runtime block like this:
 [runtime]
 provider = "codex"
 provider_bin = "codex"
+init_args = ["exec", "--full-auto"]
 default_model = "default"   # or set an explicit OpenAI model name
 workspace_root = "."
 timeout_minutes = 60
@@ -458,8 +460,8 @@ Authentication is provider-aware:
 
 Provider command behavior is also different:
 
-- Claude runs `claude -p ...` and only adds `--model <name>` when `default_model` is not `"default"`.
-- Codex runs `codex exec --full-auto ...` and only adds `--model <name>` when `default_model` is not `"default"`.
+- Claude runs `claude <init_args...> -p ...` and only adds `--model <name>` when `default_model` is not `"default"`.
+- Codex runs `codex <init_args...> ...` and only adds `--model <name>` when `default_model` is not `"default"`.
 
 ---
 
