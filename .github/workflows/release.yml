@@ -31,12 +31,12 @@ jobs:
             archive-suffix: linux-aarch64
             archive-ext: tar.gz
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             use-cross: false
             archive-suffix: macos-x86_64
             archive-ext: tar.gz
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-14
             use-cross: false
             archive-suffix: macos-aarch64
             archive-ext: tar.gz
