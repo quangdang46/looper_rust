@@ -1,0 +1,24 @@
+[package]
+name = "looper-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Looper CLI binary with 35+ subcommands"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+looper-config = { path = "../looper-config" }
+clap.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true

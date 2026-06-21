@@ -1,0 +1,21 @@
+[package]
+name = "looper-service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Loop, Run, and Project lifecycle business logic"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+looper-config = { path = "../looper-config" }
+looper-storage = { path = "../looper-storage" }
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+serde.workspace = true
+uuid.workspace = true

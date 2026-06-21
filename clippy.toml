@@ -1,0 +1,11 @@
+# Keep clippy from getting too creative — strict, no nonsense.
+allowed_duplicated_crates = ["serde"]
+disallowed_methods = [
+    { path = "std::process::Command::new", reason = "Use tokio::process::Command for async safety" },
+]
+doc_validity = "warn"
+extra_constraints = "warn"
+large_enum_variant = 200
+too_many_arguments = false
+type_complexity = 25
+cognitive_complexity = 25

@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/looper-types",
+    "crates/looper-config",
+    "crates/looper-storage",
+    "crates/looper-service",
+    "crates/looper-github",
+    "crates/looper-git",
+    "crates/looper-agent",
+    "crates/looper-scheduler",
+    "crates/looper-runner",
+    "crates/looper-api",
+    "crates/looper-webhook",
+    "crates/looper-infra",
+    "crates/looperd",
+    "crates/looper-cli",
+    "crates/looper-net",
+    "crates/diffanchor",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["quangdang46"]
+repository = "https://github.com/quangdang46/looper"
+description = "Autonomous AI dev team for your GitHub repos — Rust port"
+
+[workspace.lints]
+rust.unused_crate_dependencies = "warn"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging / observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+tracing-appender = "0.2"
+
+# Database
+rusqlite = { version = "0.33", features = ["bundled"] }
+refinery = { version = "0.9", features = ["rusqlite"] }
+
+# Git
+git2 = "0.20"
+
+# HTTP / API
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# IDs, time, text
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+directories = "6"
+
+# Async helpers
+futures = "0.3"
+
+# Config file watch
+notify = "7"

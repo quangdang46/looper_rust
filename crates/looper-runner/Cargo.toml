@@ -1,0 +1,29 @@
+[package]
+name = "looper-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Planner, Reviewer, Fixer, Worker, Coordinator — runner state machines"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+looper-config = { path = "../looper-config" }
+looper-storage = { path = "../looper-storage" }
+looper-service = { path = "../looper-service" }
+looper-github = { path = "../looper-github" }
+looper-git = { path = "../looper-git" }
+looper-agent = { path = "../looper-agent" }
+looper-scheduler = { path = "../looper-scheduler" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+regex.workspace = true

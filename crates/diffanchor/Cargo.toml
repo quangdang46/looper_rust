@@ -1,0 +1,17 @@
+[package]
+name = "diffanchor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Diff parsing and anchor validation for review comments"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+serde.workspace = true
+thiserror.workspace = true
+regex.workspace = true

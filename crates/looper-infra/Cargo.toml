@@ -1,0 +1,28 @@
+[package]
+name = "looper-infra"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Daemon bootstrap, runtime lifecycle, shell execution, and notifications"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+looper-config = { path = "../looper-config" }
+looper-storage = { path = "../looper-storage" }
+looper-service = { path = "../looper-service" }
+looper-scheduler = { path = "../looper-scheduler" }
+looper-runner = { path = "../looper-runner" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-appender.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
