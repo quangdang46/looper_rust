@@ -1,0 +1,50 @@
+# ~/.hermes/cron/looper-qa.yaml
+# Hermes scheduled job definition.
+#
+# Apply with `looper-qa.sh --apply-cron`, or manually:
+#   hermes cron create "*/15 * * * *" \
+#     --name looper-qa \
+#     --skill looper-qa \
+#     --workdir ~/Projects \
+#     --deliver local \
+#     "$(awk '/^prompt:/{flag=1; next} /^[^ ]/ && flag {flag=0} flag' ~/.hermes/cron/looper-qa.yaml)"
+#
+# Remove:
+#   hermes cron remove --name looper-qa
+# (or `looper-qa.sh --remove`)
+#
+# Inspect:
+#   hermes cron list
+#   looper-qa.sh --status
+
+schedule: "*/15 * * * *"     # every 15 minutes
+name: looper-qa
+skills:
+  - looper-qa
+workdir: ~/Projects
+deliver: local               # don't notify; the GitHub review is the source of truth
+repeat: null                 # infinite
+
+# Self-contained prompt. The agent has no memory of previous runs.
+# Spell out the full workflow, repo targets, and labels.
+prompt: |
+  Run one Looper QA cycle. Read ~/.hermes/skills/looper-qa/SKILL.md for the
+  full workflow, and follow references/review-template.md, ui-test-template.md,
+  and test-suites.md as needed.
+
+  Output exactly one line on stdout, then exit:
+
+      [SILENT]
+      QA PASSED: owner/repo#PR
+      QA FAILED: owner/repo#PR
+      QA ERROR:  owner/repo#PR: <reason>
+
+  Target repos: ${LOOPER_QA_REPOS:-"nexu-io/looper"}.
+
+  If no PR carries the looper:qa label AND no looper:spec-ready PR is
+  unverified, output [SILENT] and exit 0. Do not post any GitHub comment
+  or label change in the silent case.
+
+  On failure, post a gh pr review --request-changes with a structured body
+  and update the label to looper:qa-failed so the Looper Fixer loop picks
+  it up on the next tick.

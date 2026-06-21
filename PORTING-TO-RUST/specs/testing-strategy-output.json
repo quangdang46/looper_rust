@@ -1,0 +1,420 @@
+{
+  "testing_layers": {
+    "layer_1_unit_tests": {
+      "description": "Per-crate, per-module pure logic tests: state machines, parsing, validation, data structures. Never touches network/filesystem/SQLite directly (except temp SQLite for storage-layer unit tests).",
+      "crate_behaviors": {
+        "looper-core": {
+          "frameworks": ["#[test]", "rstest", "insta"],
+          "behaviors": [
+            "LoopStatus state machine: exhaustively validate all 90 possible transitions (25 valid, 65 invalid)",
+            "RunStatus state machine: exhaustively validate all 49 possible transitions (7 valid, 42 invalid)",
+            "IsActiveLoopStatus / IsConflictingActiveLoopStatus / IsTerminalRunStatus classification",
+            "LoopTargetKey deterministic construction for project/issue/PR targets",
+            "AssertLoopTypeMatchesTarget for all 4 loop types vs 3 target types (12 combinations)",
+            "AssertUniqueActiveLoop conflict detection including the concurrent project-worker exemption",
+            "AssertStepBelongsToLoopType for all 4 runner step lists (10 + 6 + 6 + 10 steps)",
+            "ResumePolicy normalization default selection per failure kind (4 kinds -> 6 policies)",
+            "SuppressesAutonomousRecovery / ShouldRestartFromDiscover / IsManualIntervention",
+            "Lifecycle ActionSource / BranchProvenance decisions"
+          ],
+          "estimated_lines": 3500,
+          "go_mapping": "internal/domain/domain_test.go (108 lines), internal/lifecycle/lifecycle_test.go (154 lines)"
+        },
+        "looper-core (config)": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "All 300+ validation rules (port range 1-65535, auth modes, scheduler intervals, label patterns, non-empty checks, unique project IDs)",
+            "Partial merge from 3 layers (defaults -> file -> env -> CLI) with precedence ordering",
+            "Format roundtrip consistency: serialize to TOML/YAML/JSON, parse back, verify equality",
+            "Env var binding across all 30+ environment variables with snake_case to camelCase mapping",
+            "Deprecated env/CLI warning detection",
+            "Protected instruction phrase blocking",
+            "Default config generation across all sections"
+          ],
+          "estimated_lines": 3000,
+          "go_mapping": "internal/config/config_test.go (4403 lines across 6 test files)"
+        },
+        "looper-core (disclosure, diffanchor)": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "Disclosure stamp construction per channel (git commit, PR body, issue comment, review comment)",
+            "Disclosure stamp stripping and detection (has_markdown_stamp, strip_markdown_stamp)",
+            "Diffanchor parse() returning Index of ranges from diff text",
+            "Diffanchor validate() for valid/invalid anchors (line, side, start_line boundary conditions)",
+            "Diffanchor fallback_body / fallback_location for invalid anchors"
+          ],
+          "estimated_lines": 800,
+          "go_mapping": "internal/disclosure/disclosure_test.go (259 lines), internal/diffanchor/diffanchor_test.go (217 lines)"
+        },
+        "looper-core (recovery)": {
+          "frameworks": ["#[test]"],
+          "behaviors": [
+            "Recovery pipeline phase edge cases: orphan agent cleanup, expired lock release, stale run interruption, loop normalization",
+            "Heartbeat staleness detection (30 min threshold)",
+            "Recovery decision predicates"
+          ],
+          "estimated_lines": 600,
+          "go_mapping": "Part of internal/runtime/* (9052 lines across 9 test files)"
+        },
+        "looper-storage": {
+          "frameworks": ["#[test]", "rstest", "tempfile::TempDir", "rusqlite"],
+          "behaviors": [
+            "SQLite migration framework: run all embedded migrations, verify schema version matches",
+            "Each repository method with in-memory SQLite: queues, loops, runs, projects, worktrees, agent_executions, event_logs, webhook_forwarders, webhook_tunnel_hooks, locks",
+            "Queue priority ordering: items dequeued in correct priority order",
+            "Lock acquire/release/expiry with TTL",
+            "Unique constraint violations and upsert behavior (CreateOrGetActiveByDedupe)",
+            "Seq counter atomic increment",
+            "OneRunningRunPerLoop constraint"
+          ],
+          "estimated_lines": 2500,
+          "go_mapping": "internal/storage/migrate_test.go, repositories_test.go, db_test.go, webhook_*_test.go (3601 lines across 7 test files)"
+        },
+        "looper-github": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "JSON response parsing for all gh CLI command outputs (PR list, PR view, issue detail, review threads)",
+            "PR list JSON field extraction (author, labels, review decisions, merge state)",
+            "Gateway helper functions: parse_repo, extract_author, extract_label_names, is_transient_error",
+            "Review idempotency marker parsing and verification",
+            "Review submit request body construction",
+            "Discovery cache TTL invalidation",
+            "Transient error pattern matching",
+            "Label color normalization and label init logic"
+          ],
+          "estimated_lines": 1500,
+          "go_mapping": "internal/infra/github/gateway_test.go, discovery_snapshot_test.go (2943 lines across 3 test files)"
+        },
+        "looper-git": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "buildWorktreeDirectoryName with various branch/PR/detached inputs",
+            "sanitizeBranchName with special characters",
+            "AssertWritableBranch with protected branch list",
+            "pushConflictErrorPattern / missingWorktreeErrorPattern regex matching",
+            "Worktree directory naming conventions",
+            "Unsafe git env var filtering (16 keys)",
+            "IsAgentSetupFailureMessage pattern matching"
+          ],
+          "estimated_lines": 500,
+          "go_mapping": "internal/infra/git/gateway_test.go (1196 lines)"
+        },
+        "looper-agent": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "resolveCommand for all 5 vendors (claude-code, codex, opencode, cursor-cli, hermes)",
+            "Args construction for each vendor: fresh spawn vs native resume variants",
+            "Model flag positioning (prepend, insert after exec/run)",
+            "Prompt flag handling (--print, -z, inline, -p, stdin mode)",
+            "Native session ID extraction from stdout/stderr",
+            "Environment variable construction (PWD override, unsafe git keys filtered, LOOPER_PROMPT)",
+            "Completion marker parsing (normal, invalid JSON, missing, template detection)",
+            "Timeout classification (idle vs max_runtime vs none)",
+            "finalStatus determination for exit code + timeout + kill combinations"
+          ],
+          "estimated_lines": 2000,
+          "go_mapping": "internal/agent/executor_test.go, prompt_test.go (1276 lines across 2 test files)"
+        },
+        "looper-core (network policy)": {
+          "frameworks": ["#[test]", "rstest"],
+          "behaviors": [
+            "Network policy EvaluateWorker / EvaluateReviewer claim decisions off vs routed mode",
+            "ParseTargetLabel / TargetLabelForNode / CollectTargetLabels / HasExactTarget / PlanExactTarget",
+            "matchLocalIdentity: numeric match, login fallback, priority ordering"
+          ],
+          "estimated_lines": 400,
+          "go_mapping": "internal/networkpolicy/policy_test.go (47 lines)"
+        }
+      },
+      "subtotal_estimated_lines": 14800
+    },
+    "layer_2_integration_tests": {
+      "description": "Cross-crate tests with mock IO: fake GitHub gateway, fake git runner, in-memory SQLite, mocked shell commands. These verify that services, runners, and the scheduler coordinate correctly without needing real GitHub API or agent binaries.",
+      "crates_and_frameworks": "All crates; tokio::test, wiremock (HTTP mock), tempfile::TempDir, rusqlite",
+      "service_layer": {
+        "frameworks": ["#[tokio::test]", "mockall or manual mock traits"],
+        "behaviors": [
+          "LoopService.Create: type-target validation, project existence check, active loop conflict detection, concurrent project worker exemption, seq allocation",
+          "LoopService.TransitionStatus: all 25 valid transitions + invalid transitions rejected, next_run_at cleared on pause/terminal, set on queued/running",
+          "LoopService.Pause: cancel active queue items, validate transition, clear schedule",
+          "LoopService.Terminate: same pattern as Pause but terminal",
+          "LoopService.Resume: paused -> queued transition, immediate scheduling",
+          "RunService.Start: one-running-run check, loop status forced to running, step validation, event log entries",
+          "RunService.RecordStep: step metadata update, heartbeat tracking, event log",
+          "RunService.Complete: status transition validation, ended_at set, event log differentiation (completed vs failed)",
+          "ProjectService.Add: ID collision, repo auto-detect, worktree discovery, PR snapshot (async + full mode), reviewer auto-merge validation",
+          "ProjectService.Remove: archive, terminate loops, cancel queue items, config-managed rejection",
+          "ProjectService.SyncConfigured: upsert projects from config, preserve created_at, non-destructive (does not delete unlisted)"
+        ],
+        "estimated_lines": 4000,
+        "go_mapping": "internal/loops/service_test.go (334 lines), internal/runs/service_test.go (107 lines), internal/projects/service_test.go (1369 lines)"
+      },
+      "scheduler_and_runners": {
+        "frameworks": ["#[tokio::test]", "wiremock", "mockall"],
+        "behaviors": [
+          "Scheduler tick cycle: pre-claim, discovery per project per role, post-claim, slot calculation, stale-run reconciliation",
+          "Claim priority ordering: non-long-term-retry items first, then long-term-retry items filling remaining slots",
+          "Webhook event routing to correct runner lane (pull_request -> reviewer+fixer, check_run -> fixer, push -> fixer)",
+          "Planner runner: step pipeline (discover -> prepare-worktree -> write-spec -> publish -> notify) with mock agent and mock git/github",
+          "Reviewer runner: step pipeline (discover -> filter -> claim -> snapshot -> review -> publish) with mock agent, thread resolution",
+          "Fixer runner: all 10 steps including collect-fixes, resolve-comments, recheck loop",
+          "Worker runner: all 6 steps (prepare-work -> prepare-worktree -> plan -> execute -> validate -> open-pr)",
+          "Coordinator tick pipeline: merge-watch, dependency graph, dispatch (human-gated + autonomous), triage decisions",
+          "Runner error classification and retry/fallback behavior per failure kind",
+          "Resume policy adherence on runner re-execution (replay, advance, restart, rerun)"
+        ],
+        "estimated_lines": 5000,
+        "go_mapping": "internal/runtime/scheduler_test.go, runtime_test.go (9052 lines), internal/reviewer/runner_integration_test.go, internal/coordinator/runner_integration_test.go"
+      },
+      "coordinator_submodules": {
+        "frameworks": ["#[test]", "rstest", "mockall"],
+        "behaviors": [
+          "Triage Decide: valid/out-of-scope/unclear dispositions, label validation (exactly one per category, allowed list), max_per_tick limiting, comment posting with delayed labels",
+          "Dispatch (human-gated): slash command parsing (/plan, /implement) with code fence/blockquote filtering, permission checking, dependency gate, reaction handling",
+          "Dispatch (autonomous): hold label veto, delay gate, label presence detection, silent no-op on blockers, sub-issue ordering",
+          "DependencyGraph.build: ready_set calculation, blocker state classification (closed+completed, closed+not_planned, open, unreachable), cycle detection (DFS back-edge, dedup, canonicalization)",
+          "MergeWatch.Classify: all 8 action kinds (Merged, StillPending, Indeterminate, Conflict, RedCI, BranchProtectionChanged, HumanDisabledAutoMerge, TransientError), prior marker normalization, retry budget, indeterminate deadline"
+        ],
+        "estimated_lines": 2500,
+        "go_mapping": "internal/coordinator/depgraph/depgraph_test.go, dispatch/*.go tests, mergewatch/mergewatch_test.go, triage/*.go tests (total 557 lines in Go, but Rust tests should be more exhaustive)"
+      },
+      "runtime_and_recovery": {
+        "frameworks": ["#[tokio::test]", "mockall", "tempfile"],
+        "behaviors": [
+          "Daemon bootstrap: config load, tool path validation, directory ensure, logger creation, startup sequencing",
+          "CompleteStartup pipeline: validate coordinator gates, run 5-phase recovery, start subsystems",
+          "Stale run reconciliation (startup mode vs live mode, heartbeat threshold)",
+          "Orphan agent cleanup: match PID to stored command, uncertain state handling, SIGTERM/SIGKILL escalation",
+          "Expired lock release",
+          "Loop normalization: manual_intervention -> paused, running/queued without queue item -> terminal",
+          "Deferred reviewer auto-recovery: retry policy, login timeout handling",
+          "Worktree cleanup: Plan() logic (cross-reference loops/runs/queue, retention windows, maxPerTick, orphan handling) and Run() execution (inspectCandidate, dry-run, safety validation)",
+          "WorktreeCleanup edge cases: dirty worktree, unsafe path, already cleaned, project archived",
+          "Webhook tunneling: tunnel mode lifecycle, adoption, reconciliation"
+        ],
+        "estimated_lines": 3000,
+        "go_mapping": "internal/runtime/webhook_*_test.go, worktree_cleanup_test.go, internal/worktreecleanup/service_test.go (total ~4000 lines across 12 test files)"
+      },
+      "network": {
+        "frameworks": ["#[tokio::test]", "wiremock"],
+        "behaviors": [
+          "Network client join/heartbeat/leave lifecycle with mock loopernet server",
+          "Coordinator lease acquire/renew/expire/handoff/revalidate with fencing token",
+          "Identity drift detection",
+          "Node capabilities computation from config",
+          "Event subscription (SSE stream)",
+          "Webhook forwarding between nodes"
+        ],
+        "estimated_lines": 1500,
+        "go_mapping": "internal/network/client/*.go tests, internal/network/cloud/*.go tests (total 785+ lines)"
+      },
+      "api": {
+        "frameworks": ["#[tokio::test]", "axum testing utilities", "reqwest"],
+        "behaviors": [
+          "All API route handlers respond with correct status codes and envelope format",
+          "Auth middleware (no auth, Bearer token, misconfigured, loopback exemption for webhook)",
+          "Endpoint pagination and filtering",
+          "Error response codes for each endpoint",
+          "SSE log streaming endpoint",
+          "Health check endpoint",
+          "Version endpoint"
+        ],
+        "estimated_lines": 2500,
+        "go_mapping": "internal/api/handler_test.go (6682 lines)"
+      },
+      "subtotal_estimated_lines": 18500
+    },
+    "layer_3_e2e_tests": {
+      "description": "Binary-level E2E tests: build and exercise the actual looperd, looper, and loopernet binaries against fake GitHub, fake agent, and temp directories. These verify that the full system boots, discovers, claims, runs, and completes without any real external services.",
+      "crates_and_frameworks": "looperd, looper-cli, looper-net; assert_cmd, predicates, wiremock (full HTTP mock of GitHub API), tempfile, insta",
+      "fake_github_server": {
+        "description": "An axum-based mock HTTP server that serves the subset of GitHub REST and GraphQL endpoints that looper uses. Handles gh CLI --json fields, pagination, review submission, label management, and issue/PR CRUD.",
+        "endpoints_to_mock": [
+          "/repos/*/pulls (gh pr list --json)",
+          "/repos/*/pulls/* (gh pr view --json, PR detail)",
+          "/repos/*/pulls/*/reviews (gh api review submission)",
+          "/repos/*/issues/* (gh issue view, issue CRUD)",
+          "/repos/*/labels (label management)",
+          "/graphql (review threads, auto-merge, blocking, sub-issues)",
+          "/user (gh auth status, current user)",
+          "repos/*/git/refs (branch creation)",
+          "repos/*/git/commits (commit comparison)"
+        ]
+      },
+      "fake_agent_binary": {
+        "description": "A small Rust test binary that accepts the same CLI interface as an agent vendor (claude-code, codex, etc.) but simulates agent behavior: reads prompt from --print or stdin, delays, writes a completion marker to stdout, and exits with configurable exit codes.",
+        "behaviors": [
+          "Accepts --print <prompt> and --model flags matching each vendor's convention",
+          "Optionally writes __LOOPER_RESULT__={\"summary\":\"...\"} on stdout",
+          "Optionally writes to files in the working directory to simulate code changes",
+          "Respects SIGTERM for graceful shutdown testing",
+          "Exits with configurable code (0 success, non-zero failure)",
+          "Simulates native resume via --resume <sessionID> flag"
+        ]
+      },
+      "test_scenarios": [
+        "Daemon start/stop lifecycle: looperd boots, configures from env+config, waits for signal, shuts down cleanly",
+        "CLI daemon install/status/stop: looper daemon install with test config, looper status verifies health, looper daemon stop cleanly terminates",
+        "Full planner scenario: looperd discovers labeled issue -> planner enqueues -> agent runs -> spec PR created -> worktree cleaned",
+        "Full reviewer scenario: looperd discovers draft PR -> reviewer enqueues -> agent reviews -> review submitted -> auto-merge enabled",
+        "Full fixer scenario: looperd discovers PR with review comments -> fixer enqueues -> agent repairs -> fix pushed -> threads resolved",
+        "Full worker scenario: looperd discovers labeled issue -> worker enqueues -> agent implements -> PR created -> labels added",
+        "Coordinator triage + dispatch: looperd discovers untriaged issue -> coordinator triages -> human dispatches via /plan -> planner enqueued",
+        "Webhook delivery: push event -> fixer discovers PR for base branch update -> fixer enqueued",
+        "Network join/leave: looper net join with mock loopernet server -> heartbeat loop -> looper net leave -> cleanup",
+        "Recovery after crash: start daemon, kill it mid-run, restart, verify recovery pipeline marks runs as interrupted and re-queues work",
+        "Stale run reconciliation: simulate a run stuck in 'running' with no heartbeat -> trigger reconcile -> run interrupted, loop re-queued",
+        "Upgrade flow: looper upgrade --check with mock GitHub release API -> download, verify checksum, swap binary",
+        "Config migration: migrate from JSON config to TOML with migrate-preview and migrate-paths"
+      ],
+      "estimated_lines": 4000,
+      "go_mapping": "internal/e2e/*_test.go (2565 lines), internal/e2e/harness/** (273+ lines), internal/e2e/githubcontract/* (321 lines)"
+    },
+    "layer_4_snapshot_tests": {
+      "description": "Golden/snapshot tests that capture and compare output against approved reference files. Auto-updated with an INSTA_UPDATE=always flag.",
+      "crates_and_frameworks": "All CLI/API crates; insta (cargo-insta)",
+      "snapshot_scopes": [
+        {
+          "area": "CLI help output",
+          "tools": ["insta"],
+          "behaviors": [
+            "All top-level command help text (looper --help)",
+            "All subcommand help texts (looper status --help, looper daemon --help, etc.)",
+            "All --json flag output shapes",
+            "Error message formats for missing args, bad flags, invalid config"
+          ],
+          "estimated_lines": 800,
+          "go_mapping": "internal/cliapp/golden_test.go (15846 lines across 24 test files)"
+        },
+        {
+          "area": "API response envelopes",
+          "tools": ["insta"],
+          "behaviors": [
+            "JSON envelope format consistency across all endpoints",
+            "Error code/message for each error type (route_not_found, unauthorized, validation_failed, internal_error)",
+            "Health/status/version response shapes",
+            "Pagination response shape"
+          ],
+          "estimated_lines": 500,
+          "go_mapping": "pkg/api/envelope_test.go + handler_test.go portions"
+        },
+        {
+          "area": "Config roundtrip",
+          "tools": ["insta"],
+          "behaviors": [
+            "Default config serialized to TOML/YAML/JSON, then parsed back and compared",
+            "Each config section individually serialized and snapshot-tested",
+            "Config validation error messages (each rule produces expected message format)",
+            "Partial config merge snapshot: show merged result from N partial layers"
+          ],
+          "estimated_lines": 600,
+          "go_mapping": "internal/config/format_roundtrip_test.go, config_test.go"
+        },
+        {
+          "area": "Resume policy and checkpoint JSON",
+          "tools": ["insta"],
+          "behaviors": [
+            "Normalized resume policies per failure kind (snapshot the default selection)",
+            "Checkpoint JSON serialization format",
+            "Loop/Run record JSON serialization"
+          ],
+          "estimated_lines": 300,
+          "go_mapping": "Part of domain/loops/runs tests"
+        },
+        {
+          "area": "Network protocol messages",
+          "tools": ["insta"],
+          "behaviors": [
+            "All protocol message types serialized to JSON (JoinRequest, HeartbeatRequest, NodeStatusResponse, CoordinatorLease, etc.)",
+            "Error response formats"
+          ],
+          "estimated_lines": 300,
+          "go_mapping": "internal/network/protocol/protocol_test.go (85 lines)"
+        }
+      ],
+      "subtotal_estimated_lines": 2500
+    },
+    "layer_5_property_fuzz_tests": {
+      "description": "Property-based and fuzz tests that discover edge cases by generating random inputs and asserting invariants hold.",
+      "crates_and_frameworks": "looper-core, looper-storage; proptest, bolero or cargo-fuzz",
+      "property_tests": [
+        {
+          "target": "LoopStatus state machine",
+          "framework": "proptest",
+          "strategy": "Generate arbitrary sequences of LoopStatus transition attempts. Assert reachable states respect the transition matrix. No sequence should panic or produce an invalid LoopStatus enum value."
+        },
+        {
+          "target": "RunStatus state machine",
+          "framework": "proptest",
+          "strategy": "Same as LoopStatus but for runs. Assert that only queued->running->{success,failed,cancelled,interrupted,parse_failed} paths exist."
+        },
+        {
+          "target": "Queue priority ordering under concurrent operations",
+          "framework": "proptest",
+          "strategy": "Generate random sequences of enqueue, claim, complete, release operations with mixed priorities. Assert that items are always dequeued in correct priority order, no item is lost, and the queue size invariant holds."
+        },
+        {
+          "target": "Config merge (random partial configs)",
+          "framework": "proptest",
+          "strategy": "Generate 2-5 random PartialConfig structs with nested Options, merge them, and assert: (a) any explicit field overrides None, (b) no None fields remain in output (defaults filled), (c) validated config passes basic sanity checks."
+        },
+        {
+          "target": "Config validation rules",
+          "framework": "proptest",
+          "strategy": "Generate random Config objects and feed them through validation. Assert validation either succeeds or produces errors with non-empty path + message. No panics. All enum fields only accept valid variants."
+        },
+        {
+          "target": "Diffanchor parse + validate roundtrip",
+          "framework": "proptest",
+          "strategy": "Generate random diff text and random anchors. Assert that parse doesn't panic, validate returns a non-empty reason for invalid anchors, and fallback_body always produces a non-empty string."
+        },
+        {
+          "target": "Network policy combinations",
+          "framework": "proptest",
+          "strategy": "Generate random ProjectPolicy (mode, node identity, target labels, user lists). Assert ClaimDecision.allowed is consistent: routed mode with matching target label + user match always returns allowed; no match or wrong mode always returns not-allowed."
+        },
+        {
+          "target": "Coordinator dependency graph",
+          "framework": "proptest",
+          "strategy": "Generate random blocked_by relationships among N tracked issues. Assert that ready_set, cycle detection, and blocker classification are consistent: an issue is ready iff no unsatisfied blockers, a cycle contains at least 2 nodes, unreachable nodes are never in ready_set."
+        },
+        {
+          "target": "MergeWatch classify exhaustiveness",
+          "framework": "proptest",
+          "strategy": "Generate random PRSnapshots and PriorWatchMarkers. Assert classify always returns a valid WatchActionKind, retries_left never exceeds budget.transient_retries, and exhausted is set when retries_left reaches 0."
+        }
+      ],
+      "subtotal_estimated_lines": 3500
+    }
+  },
+  "total_estimated_test_lines": 42300,
+  "test_frameworks_recommended": [
+    "builtin #[test] and #[tokio::test] for standard unit/integration tests",
+    "rstest for table-driven tests with fixtures (replaces Go table-driven patterns)",
+    "insta for snapshot/golden testing (replaces Go golden-file patterns)",
+    "mockall or handwritten mock traits for fake GitHub/git/shell adapters",
+    "wiremock or httpmock for HTTP-level mocks of GitHub API and loopernet endpoints",
+    "tempfile::TempDir for SQLite test databases and temp directories",
+    "proptest for property-based testing",
+    "bolero or cargo-fuzz for fuzz testing",
+    "assert_cmd + predicates for binary E2E testing of CLI apps",
+    "cargo-insta (insta CLI) for managing snapshot update/review workflow"
+  ],
+  "critical_test_areas": [
+    "LoopStatus + RunStatus state machine transition exhaustiveness (every valid and invalid transition must be tested; this is the core domain invariant that prevents data corruption)",
+    "Config validation rules and layer merge (300+ rules; mis-validated config causes silent runtime misbehavior or crashes)",
+    "Coordinator depgraph cycle detection (DFS back-edge algorithm correctness is load-bearing for issue dispatch correctness in projects with dependency chains)",
+    "One-active-loop-per-type-and-target invariant (concurrent project workers exemption; incorrect enforcement causes duplicate work or lost work)",
+    "Agent executor command construction for all 5 vendors x 2 modes (fresh + resume), including env var security (16 unsafe git keys filtered)",
+    "Runner step pipeline state machine (each runner's step sequence, checkpoint persistence, resume policy adherence, error classification and retry)",
+    "Scheduler claim priority ordering (non-retry items must be claimed before retry items; misordering starves retry items or wastes slots)",
+    "Recovery pipeline stale-run detection (startup mode vs live mode heartbeat threshold; incorrect detection causes false interrupts of healthy runs or leaves zombie runs)",
+    "Worktree cleanup Plan cross-reference logic (wrong reference detection causes active worktrees to be cleaned or orphan worktrees to accumulate)",
+    "MergeWatch classify: Indeterminate deadline exceeded leads to BranchProtectionChanged; transient errors decrement retries; head SHA changes reset prior; merged PR triggers cleanup",
+    "Review submission with inline anchors (normalization, quality gate, disclosure stripping; incorrect submission produces malformed GitHub reviews)",
+    "GitHub gateway: all 30+ gh CLI commands must parse their expected JSON fields correctly; transient error detection regex must match real GitHub error strings",
+    "Network policy claim decisions: routed mode requires exact target label + user match; off mode allows everything; incorrect policy evaluation causes unauthorized work claims",
+    "SQLite migration framework: all migrations must be idempotent, forward-only, and produce the correct schema version; failed migration must prevent startup"
+  ],
+  "testing_effort_estimate_weeks": 12
+}
