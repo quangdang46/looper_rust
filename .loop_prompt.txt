@@ -19,6 +19,22 @@ looper_rust/
 │       └── (legacy specs)
 ├── .beads/issues.jsonl        # 20 beads to implement
 ├── crates/                    # Where you create the Rust crates
+│   ├── looper-types/          # Phase 1 — zero deps
+│   ├── looper-config/         # Phase 2
+│   ├── looper-storage/        # Phase 3
+│   ├── looper-service/        # Phase 4
+│   ├── looper-github/         # Phase 5a
+│   ├── looper-git/            # Phase 5b
+│   ├── looper-agent/          # Phase 5c
+│   ├── looper-scheduler/      # Phase 6
+│   ├── looper-runner/         # Phase 7
+│   ├── looper-api/            # Phase 8a
+│   ├── looper-webhook/        # Phase 8b
+│   ├── looper-infra/          # Phase 8c — bootstrap, runtime, notifications
+│   ├── looperd/               # Phase 9a — daemon binary
+│   ├── looper-cli/            # Phase 9b — CLI binary
+│   └── looper-net/            # Phase 9c — loopernet cloud binary
+├── .loop_prompt.txt           # ← You are reading this file
 └── Cargo.toml                 # Workspace root
 ```
 
@@ -45,6 +61,28 @@ Read the spec FIRST before implementing any crate:
 - Tests: `specs/module-testing-strategy.md`
 - Edge cases: `specs/module-edge-cases.md`
 
+## Cross-Cutting Guidance (Apply Throughout)
+
+Apply these patterns progressively — don't wait for a dedicated phase:
+
+**Observability & Error Handling** (`specs/module-observability-error-handling.md`):
+- Use `thiserror` for per-crate error types
+- Add `From` impls for cross-crate error conversion
+- Use `tracing` crate for logging (not `eprintln`/`println`)
+- Span propagation for async context
+
+**Security & Concurrency** (`specs/module-security-concurrency.md`):
+- Bearer token auth for API (implement in API phase)
+- Strip unsafe env vars (agent executor phase)
+- tokio async throughout (not std threads)
+- CancellationToken for shutdown coordination
+- File lock for single daemon instance
+
+**Rate Limiting & Degradation** (`specs/module-rate-limit-degradation.md`):
+- RetryPolicy with exponential backoff
+- FailureKind + FailureBoundary classification
+- Graceful degradation for each failure scenario
+
 ## Implementation Order (CRITICAL — follow exactly)
 
 Dependency graph — each crate depends on the ones before it:
@@ -67,9 +105,8 @@ Phase 8c: looper-infra                      [P4]
 Phase 9a: looperd (daemon binary)           [P4]
 Phase 9b: looper-cli (CLI binary)           [P4]
 Phase 9c: looper-net (cloud binary)         [P4]
-Phase 10: Cross-cutting concerns            [P4]
+Phase 10: diffanchor utility                [P4]
 Phase 11: cargo clippy fix                  [P4]
-Phase 12: diffanchor utility                [P4]
 ```
 
 ## Beads Reference (track progress)
