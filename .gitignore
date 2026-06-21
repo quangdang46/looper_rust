@@ -1,0 +1,8 @@
+# bv (beads viewer) local config and caches
+.bv/
+
+# Rust build artifacts
+target/
+
+# Legacy Go codebase — no longer maintained
+legacy/
