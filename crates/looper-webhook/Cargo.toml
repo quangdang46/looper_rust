@@ -11,13 +11,12 @@ description = "GitHub webhook forwarder, event routing, and tunnel management"
 workspace = true
 
 [dependencies]
-looper-types = { path = "../looper-types" }
-looper-config = { path = "../looper-config" }
+looper-storage = { path = "../looper-storage" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tokio.workspace = true
-reqwest.workspace = true
 uuid.workspace = true
 chrono.workspace = true
+async-trait.workspace = true
