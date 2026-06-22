@@ -11,15 +11,11 @@ description = "Tick loop, queue claim, discovery, and recovery pipeline"
 workspace = true
 
 [dependencies]
-looper-types = { path = "../looper-types" }
 looper-storage = { path = "../looper-storage" }
 looper-service = { path = "../looper-service" }
-looper-github = { path = "../looper-github" }
-looper-git = { path = "../looper-git" }
-looper-agent = { path = "../looper-agent" }
-tokio.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
-uuid.workspace = true
-serde.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
