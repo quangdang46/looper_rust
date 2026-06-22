@@ -1,5 +1,3 @@
-//! CLI commands for diagnostics
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum DiagnosticsCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &DiagnosticsCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("diagnostics command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &DiagnosticsCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        DiagnosticsCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }

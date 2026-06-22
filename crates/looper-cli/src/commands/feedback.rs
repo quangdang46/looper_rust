@@ -1,5 +1,3 @@
-//! CLI commands for feedback
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum FeedbackCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &FeedbackCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("feedback command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &FeedbackCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        FeedbackCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }

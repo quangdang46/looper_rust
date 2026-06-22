@@ -1,5 +1,3 @@
-//! CLI commands for webhook
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum WebhookCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &WebhookCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("webhook command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &WebhookCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        WebhookCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }

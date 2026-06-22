@@ -1,5 +1,3 @@
-//! CLI commands for netadmin
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum NetadminCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &NetadminCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("netadmin command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &NetadminCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        NetadminCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }

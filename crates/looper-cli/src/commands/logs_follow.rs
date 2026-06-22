@@ -1,5 +1,3 @@
-//! CLI commands for logs_follow
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum LogsFollowCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &LogsFollowCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("logs_follow command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &LogsFollowCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        LogsFollowCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }

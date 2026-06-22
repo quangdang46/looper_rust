@@ -1,5 +1,3 @@
-//! CLI commands for prompt
-
 use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -10,7 +8,12 @@ pub enum PromptCommand {
     Status,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &PromptCommand, _json: bool) -> Result<(), CliError> {
-    output::print_ok(_json, &format!("prompt command"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &PromptCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        PromptCommand::Status => {
+            let s = client.health().await?;
+            output::print_output(json, &s);
+        }
+    }
     Ok(())
 }
