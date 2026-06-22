@@ -22,4 +22,4 @@ pub use types::{
 };
 pub use forwarder::{WebhookForwarder, Options as ForwarderOptions};
 pub use routing::{route_event, RoutingDecision, is_failing_conclusion};
-pub use tunnel::{is_tunnel_healthy, get_tunnel_health, TunnelHealth};
+pub use tunnel::{GhWebhookClient, GitHubHook, derive_tunnel_secret, classify_forwarder_exit, ExitClass, should_disable_tunnel};
