@@ -11,12 +11,9 @@ description = "Git worktree management and safety"
 workspace = true
 
 [dependencies]
-looper-types = { path = "../looper-types" }
 looper-storage = { path = "../looper-storage" }
 serde.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 chrono.workspace = true
-git2.workspace = true
 tokio.workspace = true
-regex.workspace = true
+uuid.workspace = true
