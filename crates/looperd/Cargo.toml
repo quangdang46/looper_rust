@@ -14,13 +14,19 @@ workspace = true
 looper-config = { path = "../looper-config" }
 looper-infra = { path = "../looper-infra" }
 looper-storage = { path = "../looper-storage" }
-looper-service = { path = "../looper-service" }
-looper-scheduler = { path = "../looper-scheduler" }
-looper-runner = { path = "../looper-runner" }
 looper-api = { path = "../looper-api" }
-looper-webhook = { path = "../looper-webhook" }
-tokio.workspace = true
+looper-runner = { path = "../looper-runner" }
+looper-scheduler = { path = "../looper-scheduler" }
+looper-service = { path = "../looper-service" }
+looper-github = { path = "../looper-github" }
+looper-agent = { path = "../looper-agent" }
+looper-git = { path = "../looper-git" }
+tokio = { workspace = true, features = ["process", "signal", "rt", "macros"] }
+chrono = { workspace = true }
 clap.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-thiserror.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+async-trait.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+rusqlite.workspace = true
