@@ -11,7 +11,3 @@ description = "Diff parsing and anchor validation for review comments"
 workspace = true
 
 [dependencies]
-looper-types = { path = "../looper-types" }
-serde.workspace = true
-thiserror.workspace = true
-regex.workspace = true
