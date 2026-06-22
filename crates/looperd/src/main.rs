@@ -298,9 +298,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 1. Load config
-    let config = looper_config::ConfigLoader::new()
-        .load()
-        .map_err(|e| format!("config load: {e}"))?;
+    let config = {
+        let loader = looper_config::ConfigLoader::new();
+        let loader = match &args.config {
+            Some(path) => loader.with_config_path(std::path::PathBuf::from(path)),
+            None => loader,
+        };
+        loader.load()
+    }.map_err(|e| format!("config load: {e}"))?;
 
     // 2. Validate tool paths
     bootstrap::validate_tools(&config).map_err(|e| format!("tool validation: {e}"))?;

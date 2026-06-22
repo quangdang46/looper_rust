@@ -31,48 +31,48 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         // Projects
         .route("/api/projects", get(routes::list_projects).post(routes::add_project))
         .route(
-            "/api/projects/:name",
+            "/api/projects/{name}",
             get(routes::get_project)
                 .put(routes::update_project)
                 .delete(routes::remove_project),
         )
-        .route("/api/projects/:name/sync", post(routes::sync_project))
+        .route("/api/projects/{name}/sync", post(routes::sync_project))
         // Loops
         .route(
-            "/api/projects/:name/loops",
+            "/api/projects/{name}/loops",
             get(routes::list_loops).post(routes::create_loop),
         )
-        .route("/api/projects/:name/loops/:seq", get(routes::get_loop))
-        .route("/api/projects/:name/loops/:seq/pause", post(routes::pause_loop))
-        .route("/api/projects/:name/loops/:seq/resume", post(routes::resume_loop))
-        .route("/api/projects/:name/loops/:seq/terminate", post(routes::terminate_loop))
+        .route("/api/projects/{name}/loops/{seq}", get(routes::get_loop))
+        .route("/api/projects/{name}/loops/{seq}/pause", post(routes::pause_loop))
+        .route("/api/projects/{name}/loops/{seq}/resume", post(routes::resume_loop))
+        .route("/api/projects/{name}/loops/{seq}/terminate", post(routes::terminate_loop))
         // Runs
         .route(
-            "/api/projects/:name/loops/:seq/runs",
+            "/api/projects/{name}/loops/{seq}/runs",
             get(routes::list_runs).post(routes::start_run),
         )
         .route(
-            "/api/projects/:name/loops/:seq/runs/:run_id",
+            "/api/projects/{name}/loops/{seq}/runs/{run_id}",
             get(routes::get_run),
         )
         .route(
-            "/api/projects/:name/loops/:seq/runs/:run_id/cancel",
+            "/api/projects/{name}/loops/{seq}/runs/{run_id}/cancel",
             post(routes::cancel_run),
         )
         // Queue
-        .route("/api/projects/:name/queue", get(routes::list_queue))
-        .route("/api/projects/:name/queue/enqueue", post(routes::enqueue))
-        .route("/api/projects/:name/queue/:item_id", delete(routes::dequeue))
+        .route("/api/projects/{name}/queue", get(routes::list_queue))
+        .route("/api/projects/{name}/queue/enqueue", post(routes::enqueue))
+        .route("/api/projects/{name}/queue/{item_id}", delete(routes::dequeue))
         // Events
-        .route("/api/projects/:name/events", get(routes::list_events))
-        .route("/api/projects/:name/events/stream", get(routes::project_events_stream))
+        .route("/api/projects/{name}/events", get(routes::list_events))
+        .route("/api/projects/{name}/events/stream", get(routes::project_events_stream))
         .route("/api/events/stream", get(routes::global_events_stream))
         // Locks
         .route("/api/locks", get(routes::list_locks).post(routes::acquire_lock))
-        .route("/api/locks/:lock_id", delete(routes::release_lock))
+        .route("/api/locks/{lock_id}", delete(routes::release_lock))
         // Config
         .route("/api/config", get(routes::get_config))
-        .route("/api/projects/:name/agent-config", get(routes::get_agent_config))
+        .route("/api/projects/{name}/agent-config", get(routes::get_agent_config))
         // CORS
         .layer(CorsLayer::permissive())
         .with_state(state);
