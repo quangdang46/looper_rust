@@ -25,3 +25,6 @@ thiserror.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+tokio-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
