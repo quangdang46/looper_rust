@@ -7,3 +7,4 @@ target/
 # Legacy Go codebase — no longer maintained
 legacy/
 .omo/run-continuation/
+invocations.jsonl

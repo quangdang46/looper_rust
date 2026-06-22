@@ -17,6 +17,7 @@ members = [
     "crates/looper-cli",
     "crates/looper-net",
     "crates/diffanchor",
+    "crates/looper-e2e",
 ]
 
 [workspace.package]

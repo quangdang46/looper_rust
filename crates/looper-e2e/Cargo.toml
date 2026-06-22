@@ -1,0 +1,45 @@
+[package]
+name = "looper-e2e"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "End-to-end (E2E) test harness for Looper"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-types = { path = "../looper-types" }
+looper-config = { path = "../looper-config" }
+looper-storage = { path = "../looper-storage" }
+looper-service = { path = "../looper-service" }
+looper-github = { path = "../looper-github" }
+looper-git = { path = "../looper-git" }
+looper-agent = { path = "../looper-agent" }
+looper-scheduler = { path = "../looper-scheduler" }
+looper-runner = { path = "../looper-runner" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+tempfile.workspace = true
+regex.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+nix.workspace = true
+
+[[bin]]
+name = "fake-gh"
+path = "src/bin/fake-gh/main.rs"
+
+[[bin]]
+name = "fake-agent"
+path = "src/bin/fake-agent/main.rs"
+
+[[bin]]
+name = "fake-osascript"
+path = "src/bin/fake-osascript/main.rs"
