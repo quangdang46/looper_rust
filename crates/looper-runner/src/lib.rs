@@ -5,6 +5,7 @@
 use {looper_config as _, looper_types as _, tokio as _, uuid as _};
 
 pub mod coordinator;
+pub mod depgraph;
 pub mod dispatch;
 pub mod error;
 pub mod fixer;
