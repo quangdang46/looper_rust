@@ -15,5 +15,4 @@ serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
 chrono.workspace = true
-thiserror.workspace = true
 lazy_static = "1"

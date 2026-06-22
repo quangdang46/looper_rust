@@ -131,7 +131,7 @@ impl FakeGH {
 // ---------------------------------------------------------------------------
 
 /// A single comment on a review thread.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GHThreadComment {
     /// Comment ID.
     pub id: String,
@@ -165,7 +165,7 @@ pub struct GHThreadComment {
 }
 
 /// A review thread (group of comments on the same line).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GHThread {
     /// Thread ID.
     pub id: String,
@@ -184,7 +184,7 @@ pub struct GHThread {
 }
 
 /// A pull request as represented in the fake-gh state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GHPullRequest {
     /// PR number.
     pub number: i64,
@@ -284,7 +284,7 @@ pub struct GHPullRequest {
 }
 
 /// Complete state of the fake-gh server, serialised to JSON.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GHState {
     /// Pre-defined command responses.
     #[serde(default, skip_serializing_if = "Option::is_none")]

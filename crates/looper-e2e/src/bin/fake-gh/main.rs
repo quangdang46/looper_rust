@@ -229,7 +229,7 @@ fn main() {
     let _ = std::fs::create_dir_all(&artifact_dir);
 
     // Read stdin (only if piped, not if running interactively).
-    let mut stdin_buf: Vec<u8> = if std::io::stdin().is_terminal() {
+    let stdin_buf: Vec<u8> = if std::io::stdin().is_terminal() {
         Vec::new()
     } else {
         let mut buf = Vec::new();

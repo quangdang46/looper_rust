@@ -12,7 +12,7 @@ pub enum TakeoverCommand {
     Status { run_id: String },
 }
 
-pub async fn handle(client: &DaemonAPIClient, cmd: &TakeoverCommand, json: bool) -> Result<(), CliError> {
+pub async fn handle(_client: &DaemonAPIClient, cmd: &TakeoverCommand, json: bool) -> Result<(), CliError> {
     match cmd {
         TakeoverCommand::Claim { run_id } => {
             output::print_ok(json, &format!("Takeover claim initiated for run {run_id}"));

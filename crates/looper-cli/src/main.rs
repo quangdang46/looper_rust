@@ -93,6 +93,38 @@ pub enum Command {
     // -- Takeover --
     #[command(subcommand)]
     Takeover(commands::takeover::TakeoverCommand),
+
+    // -- Run Stats --
+    #[command(subcommand)]
+    RunStats(commands::run_stats::RunStatsCommand),
+
+    // -- Logs Follow --
+    #[command(subcommand)]
+    LogsFollow(commands::logs_follow::LogsFollowCommand),
+
+    // -- Netadmin --
+    #[command(subcommand)]
+    Netadmin(commands::netadmin::NetadminCommand),
+
+    // -- Labels --
+    #[command(subcommand)]
+    Labels(commands::labels::LabelsCommand),
+
+    // -- Prompt --
+    #[command(subcommand)]
+    Prompt(commands::prompt::PromptCommand),
+
+    // -- Feedback --
+    #[command(subcommand)]
+    Feedback(commands::feedback::FeedbackCommand),
+
+    // -- Webhook --
+    #[command(subcommand)]
+    Webhook(commands::webhook::WebhookCommand),
+
+    // -- Diagnostics --
+    #[command(subcommand)]
+    Diagnostics(commands::diagnostics::DiagnosticsCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -215,6 +247,38 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::Takeover(cmd) => {
             commands::ensure_daemon(client).await?;
             commands::takeover::handle(client, cmd, json).await
+        }
+        Command::RunStats(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::run_stats::handle(client, cmd, json).await
+        }
+        Command::LogsFollow(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::logs_follow::handle(client, cmd, json).await
+        }
+        Command::Netadmin(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::netadmin::handle(client, cmd, json).await
+        }
+        Command::Labels(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::labels::handle(client, cmd, json).await
+        }
+        Command::Prompt(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::prompt::handle(client, cmd, json).await
+        }
+        Command::Feedback(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::feedback::handle(client, cmd, json).await
+        }
+        Command::Webhook(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::webhook::handle(client, cmd, json).await
+        }
+        Command::Diagnostics(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::diagnostics::handle(client, cmd, json).await
         }
     }
 }

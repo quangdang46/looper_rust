@@ -70,15 +70,7 @@ impl Default for Actions {
     }
 }
 
-impl Actions {
-    fn from_bools(has_commits: bool, pushed: bool, has_pr: bool) -> Self {
-        Self {
-            commit: action_source_from_bool(has_commits),
-            push: action_source_from_bool(pushed),
-            pr: action_source_from_bool(has_pr),
-        }
-    }
-}
+impl Actions {}
 
 /// Complete lifecycle state for a run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

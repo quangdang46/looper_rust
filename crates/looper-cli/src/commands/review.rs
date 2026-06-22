@@ -1,7 +1,6 @@
 //! Review commands: submit review, get review status.
 
 use clap::Subcommand;
-
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
 use crate::output;
@@ -18,9 +17,9 @@ pub enum ReviewCommand {
     Status { pr: i64 },
 }
 
-pub async fn handle(client: &DaemonAPIClient, cmd: &ReviewCommand, json: bool) -> Result<(), CliError> {
+pub async fn handle(_client: &DaemonAPIClient, cmd: &ReviewCommand, json: bool) -> Result<(), CliError> {
     match cmd {
-        ReviewCommand::Submit { pr, body, event } => {
+        ReviewCommand::Submit { pr, .. } => {
             output::print_ok(json, &format!("Review submitted for PR #{pr}"));
             Ok(())
         }

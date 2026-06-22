@@ -6,7 +6,6 @@
 
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
-use std::time::Duration;
 
 use looper_storage::repos::Repositories;
 
