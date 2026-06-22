@@ -4,7 +4,9 @@ pub mod locks;
 pub mod loops;
 pub mod projects;
 pub mod queue;
+pub mod review;
 pub mod runs;
+pub mod takeover;
 
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;

@@ -85,6 +85,14 @@ pub enum Command {
     // -- Auto-upgrade --
     #[command(subcommand)]
     Autoupgrade(AutoupgradeCommand),
+
+    // -- Review --
+    #[command(subcommand)]
+    Review(commands::review::ReviewCommand),
+
+    // -- Takeover --
+    #[command(subcommand)]
+    Takeover(commands::takeover::TakeoverCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -200,6 +208,14 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::ConfigLocal(cmd) => run_config_local(cmd, json),
         Command::Daemon(cmd) => run_daemon(cmd, json).await,
         Command::Autoupgrade(cmd) => run_autoupgrade(cmd, json).await,
+        Command::Review(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::review::handle(client, cmd, json).await
+        }
+        Command::Takeover(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::takeover::handle(client, cmd, json).await
+        }
     }
 }
 
