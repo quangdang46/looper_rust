@@ -1,0 +1,509 @@
+# =============================================================================
+# Looper Daemon Configuration
+# =============================================================================
+#
+# This file defines the full configuration surface for the Looper autonomous
+# loop daemon. All fields shown here use their Rust default values — you can
+# omit any section or field and the daemon will fall through to the built-in
+# default (and then to environment variable overrides).
+#
+# The daemon discovers config in this priority order:
+#   1. $LOOPER_CONFIG/<file>  (env var, highest priority)
+#   2. $XDG_CONFIG_HOME/looper/<file>
+#   3. Platform config dir (e.g. ~/.config/looper/ on Linux)
+#   4. ~/.looper/<file>  (legacy)
+#
+# Supported file formats (in preference order):
+#   looper.toml, looper.yaml, looper.yml, looper.json
+#
+# Equivalent CLI flags that override config values at runtime:
+#   --host, --port, --log-level, --data-dir, etc.
+# =============================================================================
+
+
+# =============================================================================
+# [server]  — HTTP API server
+# =============================================================================
+#
+# Configures the REST/SSE API server that accepts loop requests, exposes
+# health endpoints, and serves the webhook listener.
+[server]
+# Bind address for the API server.
+host = "127.0.0.1"
+
+# TCP port to listen on.
+port = 7391
+
+# Path to TLS certificate file (optional — omit for plain HTTP).
+# tls-cert = "/etc/looper/cert.pem"
+
+# Path to TLS private key file (optional — omit for plain HTTP).
+# tls-key = "/etc/looper/key.pem"
+
+# Allowed CORS origins. Each entry is an origin URI.
+# Set to ["*"] to allow all origins (use with caution in production).
+allowed-origins = ["http://localhost:7391"]
+
+# Maximum number of seconds to wait while reading the request body.
+read-timeout-secs = 30
+
+# Maximum number of seconds to wait while writing the response.
+write-timeout-secs = 60
+
+# Maximum allowed request body size in megabytes.
+max-body-size-mb = 10
+
+# Enable CORS middleware. When false, CORS headers are not set.
+cors-enabled = true
+
+
+# =============================================================================
+# [daemon]  — Daemon lifecycle settings
+# =============================================================================
+#
+# Controls how the looperd process manages itself: restart policy, PID file,
+# log file, and maximum restart attempts before giving up.
+[daemon]
+# Deployment mode: "local" (single machine) or "cloud" (distributed).
+mode = "local"
+
+# Path to the PID file (optional — platform default if omitted).
+# pid-file = "/var/run/looper.pid"
+
+# Path to the daemon log file (optional — stderr if omitted).
+# log-file = "/var/log/looper/daemon.log"
+
+# Maximum number of consecutive restarts before the daemon gives up.
+max-restarts = 5
+
+# Delay in seconds between automatic restarts.
+restart-delay-secs = 5
+
+# Restart policy: "always", "on-failure", or "never".
+restart-policy = "on-failure"
+
+
+# =============================================================================
+# [storage]  — Database / persistence
+# =============================================================================
+#
+# Backend configuration for storing loops, runs, results, and metadata.
+# By default Looper uses an embedded SQLite database.
+[storage]
+# Storage backend: "sqlite", "postgres", or "memory".
+backend = "sqlite"
+
+# Path to the database file (for sqlite) or base path (for postgres).
+# Default (sqlite): ~/.local/share/looper/looper.db (platform-dependent).
+# path = "/var/lib/looper/looper.db"
+
+# Full connection string for postgres.
+# Overrides `path` when backend = "postgres".
+# Example: connection-string = "postgres://user:pass@localhost:5432/looper"
+# connection-string = ""
+
+# Number of connections in the database connection pool.
+pool-size = 4
+
+# Query timeout in seconds.
+timeout-secs = 30
+
+# Path to SQL migration files. When set, the daemon runs pending migrations
+# on startup. Defaults to an embedded migration set if omitted.
+# migration-dir = "/etc/looper/migrations"
+
+# Enable SQLite WAL mode for better concurrent read performance.
+wal-enabled = true
+
+# Retry queries that fail with SQLITE_BUSY instead of propagating the error.
+retry-on-busy = true
+
+
+# =============================================================================
+# [scheduler]  — Loop execution scheduler
+# =============================================================================
+#
+# The scheduler manages the queue of pending loops and dispatches them to
+# available workers.
+[scheduler]
+# Scheduling policy: "fifo", "priority", "round-robin", or "weighted".
+policy = "fifo"
+
+# Maximum number of concurrent loop workers (runs in parallel).
+max-workers = 4
+
+# Maximum number of queued loop requests waiting for a worker slot.
+queue-capacity = 256
+
+# How often (in milliseconds) the scheduler polls for new work.
+poll-interval-ms = 1000
+
+# How long (in seconds) a claimed loop can run before being considered
+# stalled and eligible for reassignment.
+claim-timeout-secs = 300
+
+# Grace period (in seconds) for workers to finish during shutdown.
+graceful-shutdown-secs = 30
+
+# Retry configuration for scheduled loops that fail.
+[scheduler.retry]
+# Maximum number of retry attempts per loop.
+max-attempts = 3
+
+# Base delay before the first retry, in seconds.
+base-delay-secs = 5
+
+# Maximum delay before any retry, in seconds (caps exponential backoff).
+max-delay-secs = 300
+
+# Multiplier applied to the delay after each attempt (exponential backoff).
+multiplier = 2.0
+
+# Add random jitter (±25%) to retry delays to avoid thundering herd.
+jitter = true
+
+
+# =============================================================================
+# [agent]  — AI agent / LLM vendor settings
+# =============================================================================
+#
+# Controls which AI vendors are used for loop execution, model selection,
+# timeouts, and parallelism.
+[agent]
+# Default LLM vendor: "claude", "open_ai", "gemini", "grok", "deep_seek",
+# or "custom".
+default-vendor = "claude"
+
+# Per-agent request timeout in seconds.
+timeout-secs = 120
+
+# Maximum retries per agent call on transient failure.
+max-retries = 3
+
+# Maximum number of agent runs to execute in parallel.
+parallel-runs = 1
+
+# Override model name for the default vendor.
+# Example: model = "claude-sonnet-4-20250514"
+# model = ""
+
+# Model temperature (0.0 — deterministic, 2.0 — creative).
+# Leave unset to use the vendor default.
+# temperature = 0.7
+
+# Maximum tokens in the model response.
+# Leave unset to use the vendor default.
+# max-tokens = 8192
+
+# Restrict allowed vendors. When empty, all vendors are permitted.
+# Example: allowed-vendors = ["claude", "gemini"]
+allowed-vendors = []
+
+
+# =============================================================================
+# [logging]  — Structured logging
+# =============================================================================
+#
+# Controls log level, output format, destination, and file rotation.
+[logging]
+# Minimum log level: "trace", "debug", "info", "warn", "error".
+level = "info"
+
+# Log format: "text" (human-readable), "json" (structured), or "compact".
+format = "text"
+
+# Log output destination: "stdout", "stderr", "file", or "syslog".
+output = "stdout"
+
+# Path to the log file when output = "file".
+# file-path = "/var/log/looper/looper.log"
+
+# Maximum number of rotated log files to retain.
+max-files = 7
+
+# Maximum size of a single log file in megabytes before rotation.
+max-size-mb = 100
+
+# Log rotation strategy: "daily", "hourly", "size-based", or "never".
+rotation = "daily"
+
+
+# =============================================================================
+# [notifications]  — Event notifications
+# =============================================================================
+#
+# Configure how the daemon notifies users about loop results, failures,
+# and other events.
+[notifications]
+# Master toggle for all notification channels.
+enabled = true
+
+# Minimum priority that triggers a notification: "low", "normal", "high",
+# or "urgent".
+min-priority = "normal"
+
+# Active notification channels. Options: "log", "desktop", "email",
+# "webhook", "slack". Repeat the key for multiple channels.
+channels = ["log"]
+
+# Generic webhook URL for outbound notifications.
+# webhook-url = "https://hooks.example.com/looper"
+
+# Slack incoming webhook URL.
+# slack-webhook = "https://hooks.slack.com/services/T00/B00/xxx"
+
+# SMTP connection string for email notifications.
+# email-smtp = "smtp://user:pass@smtp.example.com:587"
+
+# Enable macOS/Windows/Linux desktop toast notifications.
+desktop-notifications = false
+
+
+# =============================================================================
+# [disclosure]  — AI disclosure / attribution stamps
+# =============================================================================
+#
+# Controls how Looper marks generated content as AI-produced, including
+# disclosure stamps on loop outputs.
+[disclosure]
+# Disclosure format: "markdown", "html", or "text".
+format = "markdown"
+
+# Include code snippets in disclosure output.
+include-code = true
+
+# Include diffs in disclosure output.
+include-diffs = true
+
+# Include metadata (vendor, model, timestamp) in disclosure output.
+include-metadata = true
+
+# Case-sensitive phrases that are redacted from disclosure output.
+protected-phrases = []
+
+# Maximum length of disclosure output in characters (None = unlimited).
+# max-length = 10000
+
+# Disclosure stamp configuration (watermark / footer).
+[disclosure.stamp]
+# Enable the disclosure stamp on loop outputs.
+enabled = true
+
+# Prefix string prepended to disclosure stamps.
+prefix = "ai-generated"
+
+# Include the ISO-8601 timestamp in the stamp.
+include-timestamp = true
+
+# Include a hash of the active config in the stamp.
+include-config-hash = true
+
+
+# =============================================================================
+# [tools]  — Built-in tool execution
+# =============================================================================
+#
+# Controls how Looper executes tools (shell commands, file operations, etc.)
+# on behalf of agents.
+[tools]
+# Tool execution runtime: "host" (native), "docker", "nix", or "container".
+runtime = "host"
+
+# Allow tools to make network requests.
+allow-network = true
+
+# Default timeout per tool invocation in seconds.
+timeout-secs = 300
+
+# Enable tool result caching to avoid redundant executions.
+cache-enabled = true
+
+# Directory for the tool cache. Default: platform cache dir.
+# cache-dir = "/var/cache/looper/tools"
+
+# Glob patterns for paths tools are allowed to access.
+# When empty, all paths are allowed (subject to denied-paths).
+allowed-paths = []
+
+# Glob patterns for paths tools are forbidden from accessing.
+# These take precedence over allowed-paths.
+denied-paths = []
+
+# Docker runtime options (only used when runtime = "docker").
+[tools.docker]
+# Docker image name for tool execution.
+image = "looper/tools"
+# Image tag.
+tag = "latest"
+# Additional volume mounts in docker run -v format.
+volumes = []
+# Docker network mode.
+network = "host"
+
+# Nix runtime options (only used when runtime = "nix").
+[tools.nix]
+# Nix packages to make available in the sandbox.
+packages = []
+# Extra nix-path entry (e.g. "nixpkgs=/path/to/nixpkgs").
+# extra-nix-path = ""
+
+
+# =============================================================================
+# [package]  — Package metadata
+# =============================================================================
+#
+# Identifies the installed Looper package. Used for update checks and
+# telemetry.
+[package]
+# Package name.
+name = "looper"
+
+# Installed version (semver).
+version = "0.1.0"
+
+# Package registry URL for update checks.
+# registry = "https://registry.looper.dev"
+
+# Local installation directory for binary assets.
+# install-dir = "/usr/local/lib/looper"
+
+
+# =============================================================================
+# [defaults]  — Platform directory defaults
+# =============================================================================
+#
+# Override the platform-detected home, config, data, cache, and log
+# directories. All fields are optional — when unset, the daemon uses
+# platform-appropriate defaults (see defaults.rs).
+[defaults]
+# Root home directory. Default: $HOME
+# home-dir = "/home/user"
+
+# Config directory. Default: ~/.config/looper (Linux)
+# config-dir = "/etc/looper"
+
+# Data directory (for databases, state). Default: ~/.local/share/looper
+# data-dir = "/var/lib/looper"
+
+# Cache directory. Default: ~/.cache/looper
+# cache-dir = "/var/cache/looper"
+
+# Log directory. Default: ~/.local/share/looper/log
+# log-dir = "/var/log/looper"
+
+# Preferred text editor for interactive operations.
+# editor = "vim"
+
+# Preferred shell for command execution.
+# shell = "/bin/bash"
+
+
+# =============================================================================
+# [instructions]  — Agent instructions
+# =============================================================================
+#
+# Controls how agent instruction files are loaded, validated, and served
+# to AI models.
+[instructions]
+# Base directory for instruction files. When set, instructions paths in
+# role configs are resolved relative to this directory.
+# base-path = "/etc/looper/instructions"
+
+# File encoding for instruction files.
+encoding = "utf-8"
+
+# Maximum instruction file size in kilobytes.
+max-size-kb = 1024
+
+# Allowed file extensions for instruction files.
+allowed-extensions = [".md", ".txt"]
+
+
+# =============================================================================
+# [roles]  — Multi-agent role configuration
+# =============================================================================
+#
+# Each role configures a distinct agent personality with its own model,
+# instructions, timeout, and parallelism. Roles are used by the loop
+# orchestrator to assign sub-tasks to specialized agents.
+[roles]
+
+# Planner: decomposes loop goals into execution plans.
+[roles.planner]
+enabled = true
+# model = "claude-sonnet-4-20250514"
+# instructions-path = "planner.md"
+timeout-secs = 300
+max-retries = 3
+parallel-tasks = 1
+# max-tokens = 4096
+# temperature = 0.3
+
+# Reviewer: validates agent outputs before they are applied.
+[roles.reviewer]
+enabled = true
+# model = "claude-sonnet-4-20250514"
+# instructions-path = "reviewer.md"
+timeout-secs = 300
+max-retries = 3
+parallel-tasks = 1
+# max-tokens = 4096
+# temperature = 0.2
+
+# Worker: executes individual tasks within a loop.
+[roles.worker]
+enabled = true
+# model = "claude-sonnet-4-20250514"
+# instructions-path = "worker.md"
+timeout-secs = 300
+max-retries = 3
+parallel-tasks = 1
+# max-tokens = 8192
+# temperature = 0.5
+
+# Fixer: applies fixes suggested by the reviewer.
+[roles.fixer]
+enabled = true
+# model = "claude-sonnet-4-20250514"
+# instructions-path = "fixer.md"
+timeout-secs = 300
+max-retries = 3
+parallel-tasks = 1
+# max-tokens = 4096
+# temperature = 0.4
+
+# Coordinator: manages multi-agent conversation and handoffs.
+[roles.coordinator]
+enabled = true
+# model = "claude-opus-4-20250514"
+# instructions-path = "coordinator.md"
+timeout-secs = 300
+max-retries = 3
+parallel-tasks = 1
+# max-tokens = 4096
+# temperature = 0.3
+
+
+# =============================================================================
+# [[projects]]  — Registered project configurations
+# =============================================================================
+#
+# Multiple projects can be registered. Each project has its own loop
+# type, schedule, and working path. Repeat the [[projects]] section for
+# each project.
+#
+# Example:
+#   [[projects]]
+#   name = "my-app"
+#   path = "/home/user/projects/my-app"
+#   default-loop-type = "fix"
+#   schedule = "0 6 * * 1-5"
+#   enabled = true
+#
+# Projects can also be registered at runtime via the API.
+[[projects]]
+# name = ""
+# path = ""
+# default-loop-type = ""
+# schedule = ""
+# enabled = true
