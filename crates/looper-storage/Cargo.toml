@@ -11,8 +11,6 @@ description = "SQLite storage layer with migrations, repositories, event log, an
 workspace = true
 
 [dependencies]
-looper-types = { path = "../looper-types" }
-looper-config = { path = "../looper-config" }
 rusqlite.workspace = true
 refinery.workspace = true
 serde.workspace = true
@@ -21,3 +19,6 @@ chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,265 @@
+-- Initial schema for looper-storage
+-- Combined from Go migrations 0001-0017 final state
+
+CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    base_branch TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    CHECK (archived IN (0, 1))
+);
+CREATE INDEX IF NOT EXISTS idx_projects_archived ON projects (archived);
+
+CREATE TABLE IF NOT EXISTS loops (
+    id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
+    project_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT,
+    repo TEXT,
+    pr_number INTEGER,
+    status TEXT NOT NULL,
+    config_json TEXT,
+    metadata_json TEXT,
+    last_run_at TEXT,
+    next_run_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    CHECK (target_type IN ('project', 'pull_request', 'issue')),
+    CHECK (pr_number IS NULL OR pr_number > 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_loops_seq ON loops (seq);
+CREATE INDEX IF NOT EXISTS idx_loops_status ON loops (status);
+CREATE INDEX IF NOT EXISTS idx_loops_target ON loops (target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_loops_repo_pr ON loops (repo, pr_number);
+CREATE INDEX IF NOT EXISTS idx_loops_next_run_at ON loops (next_run_at);
+
+CREATE TABLE IF NOT EXISTS counters (
+    name TEXT PRIMARY KEY,
+    value INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    loop_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    current_step TEXT,
+    last_completed_step TEXT,
+    checkpoint_json TEXT,
+    summary TEXT,
+    error_message TEXT,
+    started_at TEXT NOT NULL,
+    last_heartbeat_at TEXT,
+    ended_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (loop_id) REFERENCES loops (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_runs_loop_id_started_at ON runs (loop_id, started_at DESC, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs (status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_one_running_per_loop ON runs (loop_id) WHERE status = 'running';
+
+CREATE TABLE IF NOT EXISTS locks (
+    key TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    reason TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_locks_expires_at ON locks (expires_at);
+
+CREATE TABLE IF NOT EXISTS event_logs (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    project_id TEXT,
+    loop_id TEXT,
+    run_id TEXT,
+    entity_type TEXT,
+    entity_id TEXT,
+    correlation_id TEXT,
+    causation_id TEXT,
+    actor_type TEXT,
+    actor_id TEXT,
+    actor_display_name TEXT,
+    payload_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL,
+    FOREIGN KEY (loop_id) REFERENCES loops (id) ON DELETE SET NULL,
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_event_logs_entity_created_at ON event_logs (entity_type, entity_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_event_logs_type_created_at ON event_logs (event_type, created_at);
+
+CREATE TABLE IF NOT EXISTS pull_request_snapshots (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    pr_number INTEGER NOT NULL,
+    head_sha TEXT NOT NULL,
+    base_sha TEXT,
+    title TEXT,
+    body TEXT,
+    author TEXT,
+    diff_ref TEXT,
+    checks_summary TEXT,
+    unresolved_thread_count INTEGER,
+    review_state TEXT,
+    payload_json TEXT,
+    captured_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    CHECK (pr_number > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_pull_request_snapshots_repo_pr ON pull_request_snapshots (repo, pr_number, captured_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_executions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    loop_id TEXT,
+    run_id TEXT,
+    vendor TEXT NOT NULL,
+    status TEXT NOT NULL,
+    pid INTEGER,
+    command_json TEXT,
+    cwd TEXT,
+    summary TEXT,
+    parse_status TEXT,
+    completion_signal TEXT,
+    heartbeat_count INTEGER NOT NULL DEFAULT 0,
+    last_heartbeat_at TEXT,
+    output_json TEXT,
+    error_message TEXT,
+    native_session_id TEXT,
+    native_resume_mode TEXT,
+    native_resume_status TEXT,
+    native_resume_error TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL,
+    FOREIGN KEY (loop_id) REFERENCES loops (id) ON DELETE SET NULL,
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_executions_status ON agent_executions (status);
+CREATE INDEX IF NOT EXISTS idx_agent_executions_run ON agent_executions (run_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_executions_loop_native_resume ON agent_executions (loop_id, native_session_id, started_at DESC);
+
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    loop_id TEXT,
+    run_id TEXT,
+    entity_type TEXT,
+    entity_id TEXT,
+    channel TEXT NOT NULL,
+    level TEXT NOT NULL,
+    title TEXT NOT NULL,
+    subtitle TEXT,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL,
+    dedupe_key TEXT,
+    error_message TEXT,
+    payload_json TEXT,
+    sent_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE SET NULL,
+    FOREIGN KEY (loop_id) REFERENCES loops (id) ON DELETE SET NULL,
+    FOREIGN KEY (run_id) REFERENCES runs (id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_entity_created_at ON notifications (entity_type, entity_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_dedupe ON notifications (channel, dedupe_key, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    repo_path TEXT NOT NULL,
+    worktree_path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT,
+    status TEXT NOT NULL,
+    head_sha TEXT,
+    metadata_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    cleaned_at TEXT,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_worktrees_project_status ON worktrees (project_id, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_project_branch ON worktrees (project_id, branch);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worktrees_path ON worktrees (worktree_path);
+
+CREATE TABLE IF NOT EXISTS queue_items (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    loop_id TEXT,
+    type TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    repo TEXT,
+    pr_number INTEGER,
+    dedupe_key TEXT NOT NULL,
+    priority INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    available_at TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT -1,
+    claimed_by TEXT,
+    claimed_at TEXT,
+    started_at TEXT,
+    finished_at TEXT,
+    lock_key TEXT,
+    payload_json TEXT,
+    last_error TEXT,
+    last_error_kind TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+    FOREIGN KEY (loop_id) REFERENCES loops (id) ON DELETE CASCADE,
+    CHECK (pr_number IS NULL OR pr_number > 0),
+    CHECK (priority > 0),
+    CHECK (attempts >= 0),
+    CHECK (max_attempts = -1 OR max_attempts > 0),
+    CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'manual_intervention')),
+    CHECK (last_error_kind IS NULL OR last_error_kind IN ('retryable_transient', 'retryable_after_resume', 'non_retryable', 'manual_intervention'))
+);
+CREATE INDEX IF NOT EXISTS idx_queue_items_status_available_priority ON queue_items (status, available_at, priority, created_at);
+CREATE INDEX IF NOT EXISTS idx_queue_items_loop_status ON queue_items (loop_id, status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_queue_items_type_repo_pr_status ON queue_items (type, repo, pr_number, status, available_at);
+CREATE INDEX IF NOT EXISTS idx_queue_items_dedupe_status ON queue_items (dedupe_key, status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_queue_items_one_active_dedupe ON queue_items (dedupe_key) WHERE type IN ('reviewer', 'fixer') AND status IN ('queued', 'running');
+
+CREATE TABLE IF NOT EXISTS webhook_forwarders (
+    repo TEXT PRIMARY KEY,
+    pid INTEGER NOT NULL,
+    process_start INTEGER NOT NULL,
+    fingerprint TEXT NOT NULL,
+    endpoint TEXT NOT NULL,
+    events TEXT NOT NULL,
+    gh_path TEXT NOT NULL,
+    daemon_id TEXT NOT NULL,
+    spawned_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS webhook_tunnel_hooks (
+    repo TEXT PRIMARY KEY,
+    hook_id INTEGER NOT NULL,
+    managed_url TEXT NOT NULL,
+    secret_ref TEXT NOT NULL,
+    last_ping_at INTEGER,
+    consecutive_disables INTEGER NOT NULL DEFAULT 0,
+    last_disable_at INTEGER,
+    orphaned INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
