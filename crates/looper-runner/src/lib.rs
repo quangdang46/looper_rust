@@ -14,6 +14,7 @@ pub mod lifecycle;
 pub mod merge_watch;
 pub mod planner;
 pub mod reviewer;
+pub mod reviewer_criteria;
 pub mod types;
 pub mod worker;
 
