@@ -1,1 +1,36 @@
+#![allow(clippy::type_complexity)]
 //! Loop, Run, and Project lifecycle business logic.
+//!
+//! This crate provides the service layer that sits between the API handlers
+//! and the storage layer.  It encodes domain business rules, state-machine
+//! transitions, event log integration, and project lifecycle management.
+//!
+//! # Services
+//!
+//! - [`LoopService`](loop_service::LoopService) — Create, transition, pause,
+//!   terminate, resume loops.  Policy helpers for failure recovery decisions.
+//! - [`RunService`](run_service::RunService) — Start, step-record, complete
+//!   runs.  Enforces the one-running-run-per-loop invariant.  Emits event log
+//!   entries.
+//! - [`ProjectService`](project_service::ProjectService) — Add, remove, list,
+//!   sync projects.  Handles ID normalization, reviewer auto-merge validation,
+//!   and discovery of worktrees / pull requests.
+
+#[allow(unused_imports)]
+use {serde as _, uuid as _};
+
+pub mod error;
+pub mod loop_service;
+pub mod project_service;
+pub mod run_service;
+
+pub use error::{Result, ServiceError};
+pub use loop_service::{
+    CreateInput, LoopService, PauseInput, PauseResult, TerminateInput, TerminateResult,
+    TransitionInput,
+};
+pub use project_service::{
+    AddInput, AddResult, BranchProtection, ProjectService, ProjectServiceCallbacks,
+    PullRequestEntry, RepositorySettings, SnapshotMode, WorktreeEntry, CallbackResult,
+};
+pub use run_service::{CompleteInput, RecordStepInput, RunService, StartInput};
