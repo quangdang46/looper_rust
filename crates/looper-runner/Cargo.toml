@@ -27,3 +27,4 @@ tracing.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 regex.workspace = true
+lazy_static = "1"
