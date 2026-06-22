@@ -1,0 +1,19 @@
+[package]
+name = "looper-release"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Release manifest builder — artifact collection, SHA256, version compatibility"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+lazy_static = "1"

@@ -18,6 +18,7 @@ members = [
     "crates/looper-net",
     "crates/diffanchor",
     "crates/looper-e2e",
+    "crates/looper-release",
 ]
 
 [workspace.package]
