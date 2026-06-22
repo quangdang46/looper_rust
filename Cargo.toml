@@ -73,6 +73,15 @@ directories = "6"
 
 # Async helpers
 futures = "0.3"
+tokio-stream = "0.1"
+async-trait = "0.1"
+
+# Unix process group signals
+nix = "0.29"
 
 # Config file watch
 notify = "7"
+
+# File system utilities
+tempfile = "3"
+which = "7"
