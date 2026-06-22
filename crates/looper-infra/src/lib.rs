@@ -18,6 +18,7 @@ pub mod circuit_breaker;
 pub mod daemon_lock;
 pub mod error;
 pub mod notifications;
+pub mod recovery;
 pub mod runtime;
 pub mod worktree_cleanup;
 
