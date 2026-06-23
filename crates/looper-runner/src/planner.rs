@@ -459,22 +459,13 @@ impl PlannerScheduler for Planner {
                             protected_branches: vec![],
                         },
                     );
-                    // Use project's local checkout path for filesystem operations,
-                    // NOT item.repo (which is GitHub owner/repo format).
+                    // Use CWD for filesystem operations. item.repo is the GitHub
+                    // owner/repo identifier (quangdang46/test-looper) and is NOT a
+                    // valid filesystem path. The daemon's CWD is the checkout dir.
                     let wt_base: String = if !local_path.is_empty() {
                         local_path.clone()
-                    } else if !project_id.is_empty() {
-                        // Try to resolve from repos DB for proper filesystem path
-                        self.repos.0.lock().ok()
-                            .and_then(|g| g.projects.get_by_id(&project_id).ok().flatten())
-                            .and_then(|p| {
-                                let rp = &p.repo_path;
-                                if !rp.is_empty() && !rp.contains('/') && !rp.starts_with('.'){
-                                    None
-                                } else if !rp.is_empty() { Some(rp.clone()) }
-                                else { None }
-                            })
-                            .unwrap_or_else(|| ".".to_string())
+                    } else if let Ok(cwd) = std::env::current_dir() {
+                        cwd.to_string_lossy().to_string()
                     } else {
                         ".".to_string()
                     };
@@ -506,10 +497,12 @@ impl PlannerScheduler for Planner {
                     // When a git gateway is available, create the worktree on disk
                     if let Some(ref git) = self.git {
                         let branch_name = format!("planner/{loop_id}");
-                        let effective_path = if local_path.is_empty() {
-                            item.repo.clone().unwrap_or_default()
-                        } else {
+                        let effective_path = if !local_path.is_empty() {
                             local_path.clone()
+                        } else if let Ok(cwd) = std::env::current_dir() {
+                            cwd.to_string_lossy().to_string()
+                        } else {
+                            ".".to_string()
                         };
                         let branch = branch_name.clone();
                         let wt_input = looper_git::CreateWorktreeInput {
@@ -564,10 +557,12 @@ impl PlannerScheduler for Planner {
                                 protected_branches: vec![],
                             },
                         );
-                        let effective_path = if local_path.is_empty() {
-                            item.repo.clone().unwrap_or_default()
-                        } else {
+                        let effective_path = if !local_path.is_empty() {
                             local_path.clone()
+                        } else if let Ok(cwd) = std::env::current_dir() {
+                            cwd.to_string_lossy().to_string()
+                        } else {
+                            ".".to_string()
                         };
                         let worktree_abs_path = format!("{}/.looper/worktrees/{}", effective_path, worktree_dir);
                         let input = looper_agent::executor::StartInput {
@@ -610,10 +605,12 @@ impl PlannerScheduler for Planner {
                     // When a git gateway is available, commit + push the
                     // branch so `gh pr create` has commits to reference.
                     if let Some(ref git) = self.git {
-                        let effective_path = if local_path.is_empty() {
-                            item.repo.clone().unwrap_or_default()
-                        } else {
+                        let effective_path = if !local_path.is_empty() {
                             local_path.clone()
+                        } else if let Ok(cwd) = std::env::current_dir() {
+                            cwd.to_string_lossy().to_string()
+                        } else {
+                            ".".to_string()
                         };
                         let branch = format!("planner/{loop_id}");
                         let wt_input = looper_git::CreateWorktreeInput {
@@ -802,10 +799,12 @@ impl PlannerScheduler for Planner {
                     protected_branches: vec![],
                 },
             );
-            let effective_path = if local_path.is_empty() {
-                item.repo.clone().unwrap_or_default()
-            } else {
+            let effective_path = if !local_path.is_empty() {
                 local_path.clone()
+            } else if let Ok(cwd) = std::env::current_dir() {
+                cwd.to_string_lossy().to_string()
+            } else {
+                ".".to_string()
             };
             let worktree_path = format!("{}/.looper/worktrees/{}", effective_path, wt_dir);
             let _ = self.tokio_handle.block_on(git.cleanup_worktree(
