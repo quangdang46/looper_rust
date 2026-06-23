@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use crate::defaults::discover_config_file;
 use crate::env::load_env_overrides;
 use crate::error::ConfigError;
+use crate::normalize::normalize;
 use crate::partial::Merge;
 use crate::partial::PartialConfig;
 use crate::types::Config;
 use crate::validate::validate_config;
+
+use tracing;
 
 /// Builder for the config loading pipeline.
 ///
@@ -82,10 +85,16 @@ impl ConfigLoader {
         // 3. CLI overrides (highest precedence)
         partial.merge(self.cli_overrides);
 
-        // 4. Resolve partial → full config (filling defaults)
+        // 4. Normalize (deprecation warnings + legacy field migration)
+        let normalize_issues = normalize(&mut partial);
+        if !normalize_issues.is_valid() {
+            tracing::warn!("config normalization found warnings");
+        }
+
+        // 5. Resolve partial → full config (filling defaults)
         let config: Config = partial.into();
 
-        // 5. Validate
+        // 6. Validate
         let validation = validate_config(&config);
         if let Err(e) = validation.into_result() {
             tracing::warn!("config validation issues found");

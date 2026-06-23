@@ -34,9 +34,11 @@ use looper_storage::record::{
 use looper_types::RunStatus;
 
 use looper_github::gateway::Gateway;
-use looper_github::types::{CreatePullRequestInput, ListOpenIssuesInput};
+use looper_github::types::{
+    CreatePullRequestInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewPullRequestInput,
+};
 
-use crate::types::worker_steps;
+use crate::types::{worker_steps, SpecPRInfo, spec_labels};
 
 /// Worker runner state machine.
 pub struct Worker {
@@ -69,6 +71,67 @@ impl Worker {
             agent,
             git,
         }
+    }
+
+    /// Find the planner-created spec PR that references a given issue number.
+    ///
+    /// Returns `None` when the issue has no planner spec PR, or when the
+    /// GitHub gateway is unavailable / the query fails.  Non-fatal — the
+    /// worker falls back to implementing from the issue body directly.
+    fn find_spec_pr_for_issue(
+        &self,
+        repo: &str,
+        issue_number: i64,
+    ) -> Option<looper_github::types::PullRequestDetail> {
+        let gateway = self.github.as_ref()?;
+        // Planner spec PRs have the `looper:spec-reviewing` or `looper:spec-ready`
+        // label.  Search both in one pass by listing without a filter, then
+        // checking labels in-memory.
+        let open_prs = gateway
+            .list_open_pull_requests(ListOpenPullRequestsInput {
+                repo: repo.to_string(),
+                cwd: ".".to_string(),
+                limit: 50,
+                label: String::new(),
+                labels: vec![],
+                author: String::new(),
+                base_ref_name: String::new(),
+                timeout: None,
+            })
+            .ok()?;
+
+        // Only consider PRs with spec-phase labels.
+        let spec_prs: Vec<_> = open_prs
+            .into_iter()
+            .filter(|pr| {
+                pr.labels
+                    .iter()
+                    .any(|l| l == spec_labels::SPEC_REVIEWING || l == spec_labels::SPEC_READY)
+            })
+            .collect();
+
+        for pr in &spec_prs {
+            let detail = gateway
+                .view_pull_request(ViewPullRequestInput {
+                    repo: repo.to_string(),
+                    pr_number: pr.number,
+                    cwd: ".".to_string(),
+                })
+                .ok()?;
+
+            // Check if the PR body references the target issue number
+            let body_ref = format!("#{}", issue_number);
+            if detail.body.contains(&body_ref)
+                || detail.title.contains(&body_ref)
+                || detail.body.contains(&format!("issue #{}", issue_number))
+                || detail.body.contains(&format!("Fixes #{}", issue_number))
+                || detail.body.contains(&format!("Closes #{}", issue_number))
+                || detail.body.contains(&format!("Resolves #{}", issue_number))
+            {
+                return Some(detail);
+            }
+        }
+        None
     }
 
     fn execute_pipeline(&self, item: &QueueItemRecord) -> Result<(), String> {
@@ -241,6 +304,55 @@ impl Worker {
                             tracing::warn!("Worker execute event: {e}");
                         }
                     }
+
+                    // --- Read planner spec context if available ---
+                    let spec_context: String = {
+                        let repo = item.repo.as_deref().unwrap_or("");
+                        let issue_num: i64 = item.target_id.parse().unwrap_or(0);
+                        if !repo.is_empty() && issue_num > 0 {
+                            match self.find_spec_pr_for_issue(repo, issue_num) {
+                                Some(pr_detail) => {
+                                    let info = SpecPRInfo::parse(
+                                        &pr_detail.body,
+                                        &pr_detail.labels,
+                                        &pr_detail.reviews,
+                                        pr_detail.number,
+                                    );
+                                    let spec_path = info.spec_path;
+                                    tracing::info!(
+                                        "Worker: found planner spec PR #{} for issue #{} (path={}, phase={:?})",
+                                        pr_detail.number, issue_num, spec_path, info.phase
+                                    );
+                                    format!(
+                                        "\nPlanner spec PR #{} (phase: {:?}) spec_path: {}\nPR body:\n{}",
+                                        pr_detail.number, info.phase, spec_path, pr_detail.body
+                                    )
+                                }
+                                None => {
+                                    tracing::info!("Worker: no planner spec PR found for issue #{}", issue_num);
+                                    String::new()
+                                }
+                            }
+                        } else {
+                            String::new()
+                        }
+                    };
+                    // Store spec context in checkpoint so OPEN_PR can use it
+                    if let Ok(guard) = self.repos.0.lock() {
+                        let mut r = match guard.runs.get_by_id(&run.id).map_err(|e| e.to_string()) {
+                            Ok(Some(rr)) => rr,
+                            _ => run.clone(),
+                        };
+                        if !spec_context.is_empty() {
+                            r.checkpoint_json = Some(
+                                serde_json::json!({"planner_spec_context": spec_context})
+                                    .to_string(),
+                            );
+                        }
+                        let _ = guard.runs.upsert(&r);
+                        drop(guard);
+                    }
+
                     // Execute via agent
                     if let Some(ref agent) = self.agent {
                         let input = looper_agent::executor::StartInput {
@@ -251,10 +363,19 @@ impl Worker {
                             project_id: item.project_id.clone().unwrap_or_default(),
                             run_id: run.id.clone(),
                             working_directory: String::new(),
-                            prompt: format!(
-                                "Execute the planned implementation for this task in repo {}. Write the actual code changes needed.",
-                                item.repo.as_deref().unwrap_or("unknown")
-                            ),
+                            prompt: if spec_context.is_empty() {
+                                format!(
+                                    "Execute the planned implementation for this task in repo {}. Write the actual code changes needed.",
+                                    item.repo.as_deref().unwrap_or("unknown")
+                                )
+                            } else {
+                                format!(
+                                    "Execute the planned implementation for this task in repo {}. \
+                                     Write the actual code changes needed.\n\n\
+                                     Below is the spec context from the planner:\n{spec_context}",
+                                    item.repo.as_deref().unwrap_or("unknown")
+                                )
+                            },
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent execution started for run {}", run.id),
@@ -392,12 +513,33 @@ impl Worker {
                         }
                         // Create pull request via GitHub
                         if let Some(ref github) = self.github {
+                            // Recover spec context from checkpoint
+                            let spec_section = {
+                                let guard = self.repos.0.lock().ok();
+                                guard.as_ref().and_then(|g| {
+                                    g.runs.get_by_id(&run.id).ok().flatten()
+                                }).and_then(|r| r.checkpoint_json)
+                                    .and_then(|json| {
+                                        serde_json::from_str::<serde_json::Value>(&json).ok()
+                                    })
+                                    .and_then(|v| {
+                                        v.get("planner_spec_context")
+                                            .and_then(|c| c.as_str())
+                                            .map(|s| format!("\n### Spec Context\n{}\n", s))
+                                    })
+                                    .unwrap_or_default()
+                            };
+                            let body = format!(
+                                "Automated work loop execution.\n\n\
+                                 Issue: #{}\n{spec_section}",
+                                item.target_id,
+                            );
                             match github.create_pull_request(CreatePullRequestInput {
                                 repo: item.repo.clone().unwrap_or_default(),
                                 head_branch: format!("worker/{loop_id}"),
                                 base_branch: "main".to_string(),
                                 title: format!("Auto: Work from loop {loop_id}"),
-                                body: "Automated work loop execution.".to_string(),
+                                body,
                                 cwd: ".".to_string(),
                             }) {
                                 Ok(pr) => tracing::info!("PR #{} created for run {}", pr.number, run.id),

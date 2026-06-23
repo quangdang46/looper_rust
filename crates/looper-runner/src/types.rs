@@ -77,6 +77,73 @@ impl SpecPhase {
 }
 
 // ---------------------------------------------------------------------------
+// Spec-PR parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Information parsed from a spec PR's body, labels, and review state.
+///
+/// Used by the Worker to discover planner-created spec context when
+/// implementing an issue.
+#[derive(Debug, Clone)]
+pub struct SpecPRInfo {
+    /// Which phase the spec PR is in (reviewing / ready / needs-human / unknown).
+    pub phase: SpecPhase,
+    /// Path to the spec file extracted from the PR body via `Spec:` regex.
+    pub spec_path: String,
+    /// True when any review carries CHANGES_REQUESTED state.
+    pub has_changes_requested: bool,
+    /// True when review is clean: no CHANGES_REQUESTED and phase is not NeedsHuman.
+    pub review_clean: bool,
+    /// PR number on GitHub (set after construction for convenience).
+    pub pr_number: i64,
+    /// Full PR body text for inline spec reference.
+    pub body: String,
+}
+
+impl SpecPRInfo {
+    /// Parse a spec PR's metadata from its body, labels, and review data.
+    ///
+    /// Extracts:
+    /// - Spec path from `Spec:` line in PR body via case-insensitive regex
+    ///   `/Spec:\s*(.+)$/im`
+    /// - PR phase from labels using [`SpecPhase::from_labels`]
+    /// - Review state from raw review JSON hashmaps
+    pub fn parse(
+        body: &str,
+        labels: &[String],
+        reviews: &[std::collections::HashMap<String, serde_json::Value>],
+        pr_number: i64,
+    ) -> Self {
+        // Extract spec path via regex /Spec:\s*(.+)$/im
+        let spec_re = regex::Regex::new(r"(?im)^Spec:\s*(.+)$").unwrap();
+        let spec_path = spec_re
+            .captures(body)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
+
+        let phase = SpecPhase::from_labels(labels);
+
+        let has_changes_requested = reviews.iter().any(|r| {
+            r.get("state")
+                .and_then(|v| v.as_str())
+                == Some("CHANGES_REQUESTED")
+        });
+
+        let review_clean = !has_changes_requested && phase != SpecPhase::NeedsHuman;
+
+        Self {
+            phase,
+            spec_path,
+            has_changes_requested,
+            review_clean,
+            pr_number,
+            body: body.to_string(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Step constants — each runner's pipeline
 // ---------------------------------------------------------------------------
 

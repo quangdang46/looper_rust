@@ -153,8 +153,14 @@ pub enum DaemonCommand {
     Status,
     /// Tail daemon logs
     Logs { n: Option<usize> },
-    /// Install daemon (launchd service)
-    Install,
+    /// Install daemon as a system service (launchd on macOS, systemd on Linux)
+    Install {
+        /// Download a specific version from GitHub releases (e.g. v0.1.0)
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Uninstall daemon: stop, remove service config, delete binary
+    Uninstall,
 }
 
 #[derive(Debug, Subcommand)]
@@ -314,60 +320,9 @@ async fn run_daemon(cmd: &DaemonCommand, _json: bool) -> Result<(), CliError> {
         DaemonCommand::Restart => looper_cli::daemon::restart().await,
         DaemonCommand::Status => looper_cli::daemon::status().await,
         DaemonCommand::Logs { n } => looper_cli::daemon::logs(*n).await,
-        DaemonCommand::Install => install_daemon().await,
+        DaemonCommand::Install { version } => looper_cli::daemon::install(version.clone()).await,
+        DaemonCommand::Uninstall => looper_cli::daemon::uninstall().await,
     }
-}
-
-#[allow(clippy::disallowed_methods)]
-async fn install_daemon() -> Result<(), CliError> {
-    let bin = std::env::current_exe()
-        .map_err(|e| CliError::daemon_lifecycle(format!("cannot find binary: {e}")))?;
-    let home = std::env::var("HOME")
-        .map_err(|_| CliError::daemon_lifecycle("$HOME not set"))?;
-
-    let plist_dir = format!("{home}/Library/LaunchAgents");
-    std::fs::create_dir_all(&plist_dir)?;
-
-    let plist_path = format!("{plist_dir}/io.looper.daemon.plist");
-    let bin_display = bin.display();
-    let plist = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>io.looper.daemon</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{bin_display}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>{home}/.local/share/looper/daemon.log</string>
-    <key>StandardErrorPath</key>
-    <string>{home}/.local/share/looper/daemon.log</string>
-</dict>
-</plist>"#
-    );
-
-    std::fs::write(&plist_path, &plist)
-        .map_err(|e| CliError::daemon_lifecycle(format!("cannot write plist: {e}")))?;
-
-    let status = std::process::Command::new("launchctl")
-        .args(["load", "-w", &plist_path])
-        .status()
-        .map_err(|e| CliError::daemon_lifecycle(format!("cannot load launchd job: {e}")))?;
-
-    if status.success() {
-        println!("Installed launchd service at {plist_path}");
-    } else {
-        return Err(CliError::daemon_lifecycle("launchctl load failed"));
-    }
-    Ok(())
 }
 
 async fn run_autoupgrade(cmd: &AutoupgradeCommand, _json: bool) -> Result<(), CliError> {

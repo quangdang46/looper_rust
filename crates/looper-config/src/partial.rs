@@ -119,6 +119,10 @@ pub struct PartialServerConfig {
     pub write_timeout_secs: Option<u64>,
     pub max_body_size_mb: Option<u64>,
     pub cors_enabled: Option<bool>,
+    /// Deprecated in v0.2.0 — use `logging.format` instead.
+    /// Automatically migrated by [`normalize`].
+    #[serde(skip_serializing)]
+    pub log_format: Option<crate::enums::LogFormat>,
 }
 
 partial_default_impl!(PartialServerConfig {
@@ -131,6 +135,7 @@ partial_default_impl!(PartialServerConfig {
     write_timeout_secs,
     max_body_size_mb,
     cors_enabled,
+    log_format,
 });
 
 partial_merge_impl!(PartialServerConfig {
@@ -143,6 +148,7 @@ partial_merge_impl!(PartialServerConfig {
     write_timeout_secs,
     max_body_size_mb,
     cors_enabled,
+    log_format,
 });
 
 // ---------------------------------------------------------------------------
@@ -158,6 +164,9 @@ pub struct PartialDaemonConfig {
     pub max_restarts: Option<u32>,
     pub restart_delay_secs: Option<u64>,
     pub restart_policy: Option<DaemonRestartPolicy>,
+    /// Deprecated in v0.2.0 — auto-upgrade is now always enabled.
+    #[serde(skip_serializing)]
+    pub auto_upgrade: Option<bool>,
 }
 
 partial_default_impl!(PartialDaemonConfig {
@@ -167,6 +176,7 @@ partial_default_impl!(PartialDaemonConfig {
     max_restarts,
     restart_delay_secs,
     restart_policy,
+    auto_upgrade,
 });
 
 partial_merge_impl!(PartialDaemonConfig {
@@ -176,6 +186,7 @@ partial_merge_impl!(PartialDaemonConfig {
     max_restarts,
     restart_delay_secs,
     restart_policy,
+    auto_upgrade,
 });
 
 // ---------------------------------------------------------------------------
@@ -294,6 +305,9 @@ pub struct PartialAgentConfig {
     pub temperature: Option<f64>,
     pub max_tokens: Option<u32>,
     pub allowed_vendors: Option<Vec<AgentVendor>>,
+    /// Deprecated in v0.3.0 — use `model` instead.
+    #[serde(skip_serializing)]
+    pub command: Option<String>,
 }
 
 partial_default_impl!(PartialAgentConfig {
@@ -305,6 +319,7 @@ partial_default_impl!(PartialAgentConfig {
     temperature,
     max_tokens,
     allowed_vendors,
+    command,
 });
 
 partial_merge_impl!(PartialAgentConfig {
@@ -316,6 +331,7 @@ partial_merge_impl!(PartialAgentConfig {
     temperature,
     max_tokens,
     allowed_vendors,
+    command,
 });
 
 // ---------------------------------------------------------------------------
@@ -368,6 +384,9 @@ pub struct PartialNotificationsConfig {
     pub slack_webhook: Option<String>,
     pub email_smtp: Option<String>,
     pub desktop_notifications: Option<bool>,
+    /// Legacy alias; deserialized from `webhook-url` via serde.
+    #[serde(skip_serializing)]
+    pub legacy_webhook_url: Option<String>,
 }
 
 partial_default_impl!(PartialNotificationsConfig {
@@ -378,6 +397,7 @@ partial_default_impl!(PartialNotificationsConfig {
     slack_webhook,
     email_smtp,
     desktop_notifications,
+    legacy_webhook_url,
 });
 
 partial_merge_impl!(PartialNotificationsConfig {
@@ -388,6 +408,7 @@ partial_merge_impl!(PartialNotificationsConfig {
     slack_webhook,
     email_smtp,
     desktop_notifications,
+    legacy_webhook_url,
 });
 
 // ---------------------------------------------------------------------------
@@ -465,6 +486,9 @@ pub struct PartialToolsConfig {
     pub denied_paths: Option<Vec<String>>,
     pub docker: Option<PartialDockerConfig>,
     pub nix: Option<PartialNixConfig>,
+    /// Deprecated in v0.3.0 — use `runtime` instead.
+    #[serde(skip_serializing)]
+    pub allow_docker: Option<bool>,
 }
 
 partial_default_impl!(PartialToolsConfig {
@@ -477,6 +501,7 @@ partial_default_impl!(PartialToolsConfig {
     denied_paths,
     docker,
     nix,
+    allow_docker,
 });
 
 partial_merge_impl!(PartialToolsConfig {
@@ -489,6 +514,7 @@ partial_merge_impl!(PartialToolsConfig {
     denied_paths,
     docker,
     nix,
+    allow_docker,
 });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use looper_github::types::{EnableAutoMergeInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
+use looper_github::types::{ClosePullRequestInput, EnableAutoMergeInput, IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
@@ -183,22 +183,28 @@ impl CoordinatorScheduler for Coordinator {
                             pr_number: pr_summary.number,
                             cwd: ".".to_string(),
                         }) {
-                            // Find linked issue number in PR body
-                            let issue_num = pr_detail.body.lines().find_map(|line| {
-                                let line = line.trim();
-                                if line.starts_with("##") {
-                                    return None;
-                                }
-                                if let Some(num_str) = line.strip_prefix("Fixes #")
-                                    .or_else(|| line.strip_prefix("Closes #"))
-                                    .or_else(|| line.strip_prefix("Resolves #"))
-                                    .or_else(|| line.strip_prefix("issue #"))
-                                {
-                                    num_str.split_whitespace().next().and_then(|s| s.parse::<i64>().ok())
-                                } else {
-                                    None
-                                }
-                            });
+                            // Find linked issue number from PR title ([N] title) or body
+                            let issue_num = pr_detail
+                                .title
+                                .strip_prefix('[')
+                                .and_then(|rest| rest.split(']').next())
+                                .and_then(|n| n.parse::<i64>().ok())
+                                .or_else(|| {
+                                    pr_detail.body.lines().find_map(|line| {
+                                        let line = line.trim();
+                                        if line.starts_with("##") {
+                                            return None;
+                                        }
+                                        // Look for "issue #N" anywhere in the line
+                                        if let Some(pos) = line.find("issue #") {
+                                            let after = &line[pos + 7..];
+                                            after.split_whitespace().next()
+                                                .and_then(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<i64>().ok())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                });
                             if let Some(linked_issue) = issue_num {
                                 if let Ok(issue) = gw.view_issue(ViewIssueInput {
                                     repo: repo.clone(),
@@ -233,9 +239,11 @@ impl CoordinatorScheduler for Coordinator {
             }
         }
 
-        // --- Spec-review timeout: auto-transition stale spec-reviewing PRs to needs-human ---
+        // --- Spec-review timeout: auto-close stale spec-reviewing PRs >7 days ---
         // If a spec PR has been in looper:spec-reviewing for more than 7 days with no
-        // updates, transition it to looper:needs-human so a human reviewer can assess it.
+        // updates, auto-close it with a comment explaining the timeout. The human can
+        // re-open if they still want the change — this prevents spec PR debt from
+        // accumulating in the open-PR list.
         if let Some(ref gw) = self.github {
             let repo = &input.repo;
             if !repo.is_empty() {
@@ -257,19 +265,34 @@ impl CoordinatorScheduler for Coordinator {
                             let elapsed = chrono::Utc::now().signed_duration_since(updated_dt);
                             if elapsed.num_hours() as f64 >= SPEC_TIMEOUT_DAYS * 24.0 {
                                 tracing::info!(
-                                    "Coordinator: spec-review timeout — PR #{} stale for {:.1}h, transitioning to needs-human",
+                                    "Coordinator: spec-review timeout — PR #{} stale for {:.1}h, auto-closing",
                                     pr_summary.number, elapsed.num_hours() as f64
                                 );
+                                // Post a comment explaining the closure
+                                let _ = gw.create_issue_comment(
+                                    looper_github::types::IssueCommentInput {
+                                        repo: repo.clone(),
+                                        issue_number: pr_summary.number,
+                                        body: format!(
+                                            "Auto-closing this spec PR because it has been in `looper:spec-reviewing` \
+                                             for more than {:.0} days without activity. \
+                                             The linked issue will remain open. Re-open if this spec still applies.",
+                                            SPEC_TIMEOUT_DAYS
+                                        ),
+                                        cwd: ".".to_string(),
+                                    }
+                                );
+                                // Remove the spec-reviewing label
                                 let _ = gw.remove_issue_labels(IssueLabelsInput {
                                     repo: repo.clone(),
                                     issue_number: pr_summary.number,
                                     labels: vec!["looper:spec-reviewing".into()],
                                     cwd: ".".to_string(),
                                 });
-                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                // Close the PR
+                                let _ = gw.close_pull_request(ClosePullRequestInput {
                                     repo: repo.clone(),
-                                    issue_number: pr_summary.number,
-                                    labels: vec!["looper:needs-human".into()],
+                                    pr_number: pr_summary.number,
                                     cwd: ".".to_string(),
                                 });
                             }

@@ -35,6 +35,7 @@ pub mod enums;
 pub mod env;
 pub mod error;
 pub mod loader;
+pub mod normalize;
 pub mod partial;
 pub mod permissions;
 pub mod types;
