@@ -967,6 +967,7 @@ dependencies = [
  "chrono",
  "futures",
  "looper-config",
+ "looper-infra",
  "looper-scheduler",
  "looper-service",
  "looper-storage",

@@ -37,6 +37,7 @@ fn scan_agent_execution_row(row: &rusqlite::Row) -> rusqlite::Result<AgentExecut
 const AE_COLUMNS: &str =
     "id, project_id, loop_id, run_id, vendor, status, pid, command_json, cwd, summary, parse_status, completion_signal, heartbeat_count, last_heartbeat_at, output_json, error_message, native_session_id, native_resume_mode, native_resume_status, native_resume_error, started_at, ended_at, metadata_json, created_at, updated_at";
 
+#[derive(Clone)]
 pub struct AgentExecutionsRepository {
     conn: Arc<Connection>,
 }

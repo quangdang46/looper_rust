@@ -29,6 +29,7 @@ use self::webhook_tunnel_hooks::WebhookTunnelHooksRepository;
 use self::worktrees::WorktreesRepository;
 
 /// Container for all repository instances.
+#[derive(Clone)]
 pub struct Repositories {
     pub projects: ProjectsRepository,
     pub loops: LoopsRepository,

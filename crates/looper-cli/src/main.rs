@@ -125,6 +125,10 @@ pub enum Command {
     // -- Diagnostics --
     #[command(subcommand)]
     Diagnostics(commands::diagnostics::DiagnosticsCommand),
+
+    // -- Worktree --
+    #[command(subcommand)]
+    Worktree(commands::worktree::WorktreeCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -285,6 +289,10 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::Diagnostics(cmd) => {
             commands::ensure_daemon(client).await?;
             commands::diagnostics::handle(client, cmd, json).await
+        }
+        Command::Worktree(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::worktree::handle(client, cmd, json).await
         }
     }
 }

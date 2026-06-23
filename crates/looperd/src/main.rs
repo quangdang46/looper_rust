@@ -84,6 +84,10 @@ impl RuntimeState for DaemonState {
         &self.repos
     }
 
+    fn repos_arc(&self) -> Arc<Repositories> {
+        self.repos.clone()
+    }
+
     fn event_log(&self) -> &EventLog {
         &self.event_log
     }

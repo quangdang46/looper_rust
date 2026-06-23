@@ -6,7 +6,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::envelope::Envelope;
@@ -801,4 +801,60 @@ pub async fn global_events_stream(
     State(state): State<Arc<AppState>>,
 ) -> axum::response::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> + Send + 'static> {
     global_event_stream(state.ctx.clone())
+}
+
+// ---------------------------------------------------------------------------
+// Worktree cleanup
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct WorktreeCleanupInput {
+    pub include_orphans: Option<bool>,
+    pub retention_days: Option<u64>,
+    pub max_per_tick: Option<usize>,
+    pub dry_run: Option<bool>,
+    pub project_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct WorktreeCleanupResult {
+    pub scanned: usize,
+    pub cleaned: usize,
+    pub errors: Vec<String>,
+    pub summary: serde_json::Value,
+}
+
+pub async fn worktree_cleanup(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<WorktreeCleanupInput>,
+) -> Result<Json<Envelope<WorktreeCleanupResult>>, ApiError> {
+    let repos = state.ctx.state.repos_arc();
+
+    let options = looper_infra::worktree_cleanup::CleanupOptions {
+        include_orphans: input.include_orphans.unwrap_or(true),
+        retention_days: input.retention_days.unwrap_or(7),
+        max_per_tick: input.max_per_tick.unwrap_or(10),
+        dry_run: input.dry_run.unwrap_or(false),
+        project_id: input.project_id,
+    };
+
+    match looper_infra::worktree_cleanup::run_cycle(&repos, &options) {
+        Ok(run_result) => {
+            let summary_json = serde_json::json!({
+                "scanned": run_result.summary.scanned,
+                "candidates": run_result.summary.candidates,
+                "would_clean": run_result.summary.would_clean,
+                "skipped": run_result.summary.skipped,
+                "orphans": run_result.summary.orphans,
+            });
+            let result = WorktreeCleanupResult {
+                scanned: run_result.summary.scanned,
+                cleaned: run_result.cleaned_count,
+                errors: run_result.errors,
+                summary: summary_json,
+            };
+            Ok(Json(Envelope::success(result)))
+        }
+        Err(e) => Err(ApiError::internal(format!("worktree cleanup failed: {e}")))
+    }
 }

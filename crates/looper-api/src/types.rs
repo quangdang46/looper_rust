@@ -35,6 +35,9 @@ pub trait RuntimeState: Send + Sync {
     /// Access the repositories container.
     fn repos(&self) -> &looper_storage::Repositories;
 
+    /// Access the repositories container as an Arc (for passing to cleanup etc.).
+    fn repos_arc(&self) -> std::sync::Arc<looper_storage::Repositories>;
+
     /// Access the event log service.
     fn event_log(&self) -> &looper_storage::EventLog;
 

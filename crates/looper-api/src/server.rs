@@ -77,6 +77,8 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         // Config
         .route("/api/config", get(routes::get_config))
         .route("/api/projects/{name}/agent-config", get(routes::get_agent_config))
+        // Worktree cleanup
+        .route("/api/worktree/cleanup", post(routes::worktree_cleanup))
         // CORS
         .layer(CorsLayer::permissive())
         .with_state(state);

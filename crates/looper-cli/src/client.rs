@@ -518,6 +518,14 @@ impl DaemonAPIClient {
     pub async fn api_reload(&self) -> Result<(), CliError> {
         self.post_unit("/reload", &serde_json::Map::new()).await
     }
+
+    // -----------------------------------------------------------------------
+    // Worktree cleanup
+    // -----------------------------------------------------------------------
+
+    pub async fn worktree_cleanup(&self, input: &crate::commands::worktree::WorktreeCleanupInput) -> Result<crate::commands::worktree::WorktreeCleanupResult, CliError> {
+        self.post("/api/worktree/cleanup", input).await
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,8 @@
 
 use std::sync::Arc;
 
-use looper_github::types::{ClosePullRequestInput, EnableAutoMergeInput, IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
+use looper_github::types::{ClosePullRequestInput, IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
+use std::process::Command;
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
@@ -410,13 +411,22 @@ impl CoordinatorScheduler for Coordinator {
                                                 "Coordinator: PR #{} is merge-ready, executing auto-merge",
                                                 pr_summary.number
                                             );
-                                            let _ = gw.enable_auto_merge(EnableAutoMergeInput {
-                                                repo: repo.clone(),
-                                                pr_number: pr_summary.number,
-                                                strategy: "squash".to_string(),
-                                                head_sha: pr_detail.head_sha.clone(),
-                                                cwd: ".".to_string(),
-                                            });
+                                            match execute_auto_merge(
+                                                pr_summary.number,
+                                                repo,
+                                            ) {
+                                                Ok(()) => tracing::info!(
+                                                    "Auto-merge enabled for PR #{} in {}",
+                                                    pr_summary.number,
+                                                    repo
+                                                ),
+                                                Err(e) => tracing::warn!(
+                                                    "Auto-merge failed for PR #{} in {}: {}",
+                                                    pr_summary.number,
+                                                    repo,
+                                                    e
+                                                ),
+                                            }
                                             continue;
                                         }
                                         crate::types::WatchActionKind::MarkMerged
@@ -560,6 +570,34 @@ pub fn action_to_queue_dispatch(
             Some(format!("stuck: PR #{} ({})", action.pr_number, action.pr_title))
         }
         _ => None,
+    }
+}
+
+/// Execute auto-merge on a pull request using the `gh pr merge` command.
+///
+/// Runs `gh pr merge <num> --auto --squash -R <repo>` to enable GitHub's
+/// auto-merge (merge-when-checks-pass) functionality with squash strategy.
+pub fn execute_auto_merge(pr_number: i64, repo: &str) -> Result<(), String> {
+    let output = Command::new("gh")
+        .args([
+            "pr",
+            "merge",
+            &pr_number.to_string(),
+            "--auto",
+            "--squash",
+            "-R",
+            repo,
+        ])
+        .output()
+        .map_err(|e| format!("failed to execute gh pr merge: {e}"))?;
+
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        tracing::debug!("gh pr merge output: {stdout}");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(format!("gh pr merge failed: {stderr}"))
     }
 }
 

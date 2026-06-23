@@ -24,6 +24,7 @@ fn scan_worktree(row: &rusqlite::Row) -> rusqlite::Result<WorktreeRecord> {
 const WT_COLUMNS: &str =
     "id, project_id, repo_path, worktree_path, branch, base_branch, status, head_sha, metadata_json, created_at, updated_at, cleaned_at";
 
+#[derive(Clone)]
 pub struct WorktreesRepository {
     conn: Arc<Connection>,
 }

@@ -28,6 +28,7 @@ fn scan_pr_snapshot_row(row: &rusqlite::Row) -> rusqlite::Result<PullRequestSnap
 const PRS_COLUMNS: &str =
     "id, project_id, repo, pr_number, head_sha, base_sha, title, body, author, diff_ref, checks_summary, unresolved_thread_count, review_state, payload_json, captured_at, created_at";
 
+#[derive(Clone)]
 pub struct PullRequestSnapshotsRepository {
     conn: Arc<Connection>,
 }

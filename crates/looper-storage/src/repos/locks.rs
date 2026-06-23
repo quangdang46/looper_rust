@@ -17,6 +17,7 @@ fn scan_lock(row: &rusqlite::Row) -> rusqlite::Result<LockRecord> {
 
 const LOCK_COLUMNS: &str = "key, owner, reason, expires_at, created_at, updated_at";
 
+#[derive(Clone)]
 pub struct LocksRepository {
     conn: Arc<Connection>,
 }

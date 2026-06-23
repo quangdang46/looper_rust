@@ -51,6 +51,7 @@ fn scheduled_queue_conditions() -> &'static str {
      AND NOT EXISTS (SELECT 1 FROM loops l WHERE l.id = qi.loop_id AND l.status IN ('completed', 'cancelled', 'failed', 'paused'))"
 }
 
+#[derive(Clone)]
 pub struct QueueRepository {
     conn: Arc<Connection>,
 }

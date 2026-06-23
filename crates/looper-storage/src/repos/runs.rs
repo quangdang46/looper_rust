@@ -29,6 +29,7 @@ fn scan_run_row(row: &rusqlite::Row) -> rusqlite::Result<RunRecord> {
 const RUN_COLUMNS: &str =
     "id, loop_id, status, current_step, last_completed_step, checkpoint_json, summary, error_message, agent_vendor, model, started_at, last_heartbeat_at, ended_at, created_at, updated_at";
 
+#[derive(Clone)]
 pub struct RunsRepository {
     conn: Arc<Connection>,
 }

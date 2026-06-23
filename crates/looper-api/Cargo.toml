@@ -27,4 +27,5 @@ chrono.workspace = true
 uuid.workspace = true
 tokio-stream.workspace = true
 async-trait.workspace = true
+looper-infra = { path = "../looper-infra" }
 futures.workspace = true

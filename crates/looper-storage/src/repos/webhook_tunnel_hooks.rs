@@ -23,6 +23,7 @@ fn scan_webhook_tunnel_hook(row: &rusqlite::Row) -> rusqlite::Result<WebhookTunn
 const WHTH_COLUMNS: &str =
     "repo, hook_id, managed_url, secret_ref, last_ping_at, consecutive_disables, last_disable_at, orphaned, created_at, updated_at";
 
+#[derive(Clone)]
 pub struct WebhookTunnelHooksRepository {
     conn: Arc<Connection>,
 }

@@ -15,6 +15,7 @@ pub mod run_stats;
 pub mod runs;
 pub mod takeover;
 pub mod webhook;
+pub mod worktree;
 
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;

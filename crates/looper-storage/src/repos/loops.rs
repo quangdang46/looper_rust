@@ -28,6 +28,7 @@ fn scan_loop_row(row: &rusqlite::Row) -> rusqlite::Result<LoopRecord> {
 
 const LOOP_COLUMNS: &str = "id, seq, project_id, type, target_type, target_id, repo, pr_number, status, config_json, metadata_json, last_run_at, next_run_at, created_at, updated_at";
 
+#[derive(Clone)]
 pub struct LoopsRepository {
     conn: Arc<Connection>,
 }
