@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use looper_github::types::ListOpenPullRequestsInput;
+use looper_github::types::{IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
@@ -155,6 +155,54 @@ impl CoordinatorScheduler for Coordinator {
                     l.id
                 );
                 queue_items.push(item);
+            }
+        }
+
+        // --- Dispatch phase: auto-trigger looper:plan from dispatch/plan ---
+        if let Some(ref gw) = self.github {
+            let repo = &input.repo;
+            if !repo.is_empty() {
+                match gw.list_open_issues(ListOpenIssuesInput {
+                    repo: repo.clone(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    assignee: String::new(),
+                    label: "dispatch/plan".to_string(),
+                    labels: vec![],
+                }) {
+                    Ok(issues) => {
+                        for issue in &issues {
+                            // View full issue details to check current labels
+                            match gw.view_issue(ViewIssueInput {
+                                repo: repo.clone(),
+                                issue_number: issue.number,
+                                cwd: ".".to_string(),
+                            }) {
+                                Ok(detail) => {
+                                    let has_plan = detail.labels.iter().any(|l| l == "looper:plan");
+                                    if !has_plan {
+                                        tracing::info!(
+                                            "Dispatch: issue #{} has dispatch/plan, adding looper:plan",
+                                            issue.number
+                                        );
+                                        let _ = gw.add_issue_labels(IssueLabelsInput {
+                                            repo: repo.clone(),
+                                            issue_number: issue.number,
+                                            labels: vec!["looper:plan".into()],
+                                            cwd: ".".to_string(),
+                                        });
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Dispatch: failed to view issue #{}: {e}", issue.number);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Dispatch: GitHub issue discovery failed: {e}");
+                    }
+                }
             }
         }
 
