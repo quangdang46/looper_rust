@@ -424,6 +424,26 @@ impl Reviewer {
                                             cwd: ".".to_string(),
                                         });
                                         tracing::info!("Reviewer: PR #{} spec approved, transitioned to {}", pr_num, spec_labels::SPEC_READY);
+                                    } else {
+                                        // Not a spec PR — this is a code implementation PR.
+                                        // Enable auto-merge on approval via gh CLI so the user
+                                        // only needs to verify and let GitHub merge automatically.
+                                        let result = std::process::Command::new("gh")
+                                            .args(["pr", "merge", &pr_num.to_string(), "--auto", "--squash", "-R", repo_path])
+                                            .current_dir(".")
+                                            .output();
+                                        match result {
+                                            Ok(output) if output.status.success() => {
+                                                tracing::info!("Reviewer: enabled auto-merge for PR #{}", pr_num);
+                                            }
+                                            Ok(output) => {
+                                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                                tracing::warn!("Reviewer: auto-merge failed for PR #{}: {}", pr_num, stderr.trim());
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!("Reviewer: auto-merge error for PR #{}: {}", pr_num, e);
+                                            }
+                                        }
                                     }
                                 }
                             }

@@ -401,8 +401,8 @@ impl WorkerScheduler for Worker {
                 cwd: ".".to_string(),
                 limit: 50,
                 assignee: String::new(),
-                label: String::new(),
-                labels: vec!["good first issue".to_string()],
+                label: "looper:implement".to_string(),
+                labels: vec![],
             };
             match github.list_open_issues(gh_input) {
                 Ok(issues) => {

@@ -158,11 +158,87 @@ impl CoordinatorScheduler for Coordinator {
             }
         }
 
-        // --- Dispatch phase: auto-trigger looper:plan from dispatch/plan ---
+        // --- Spec-ready → auto-transition to dispatch/implement ---
+        // When a spec PR is marked looper:spec-ready, the linked issue should
+        // transition from dispatch/plan to dispatch/implement so the worker
+        // picks it up for implementation.
         if let Some(ref gw) = self.github {
             let repo = &input.repo;
             if !repo.is_empty() {
-                match gw.list_open_issues(ListOpenIssuesInput {
+                // Find PRs with looper:spec-ready label (spec-review approved)
+                if let Ok(prs) = gw.list_open_pull_requests(ListOpenPullRequestsInput {
+                    repo: repo.clone(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    label: "looper:spec-ready".to_string(),
+                    labels: vec![],
+                    author: String::new(),
+                    base_ref_name: String::new(),
+                    timeout: None,
+                }) {
+                    for pr_summary in &prs {
+                        // View the PR to get the body which contains the linked issue
+                        if let Ok(pr_detail) = gw.view_pull_request(ViewPullRequestInput {
+                            repo: repo.clone(),
+                            pr_number: pr_summary.number,
+                            cwd: ".".to_string(),
+                        }) {
+                            // Find linked issue number in PR body
+                            let issue_num = pr_detail.body.lines().find_map(|line| {
+                                let line = line.trim();
+                                if line.starts_with("##") {
+                                    return None;
+                                }
+                                if let Some(num_str) = line.strip_prefix("Fixes #")
+                                    .or_else(|| line.strip_prefix("Closes #"))
+                                    .or_else(|| line.strip_prefix("Resolves #"))
+                                    .or_else(|| line.strip_prefix("issue #"))
+                                {
+                                    num_str.split_whitespace().next().and_then(|s| s.parse::<i64>().ok())
+                                } else {
+                                    None
+                                }
+                            });
+                            if let Some(linked_issue) = issue_num {
+                                if let Ok(issue) = gw.view_issue(ViewIssueInput {
+                                    repo: repo.clone(),
+                                    issue_number: linked_issue,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    let has_dispatch_plan = issue.labels.iter().any(|l| l == "dispatch/plan");
+                                    let has_dispatch_implement = issue.labels.iter().any(|l| l == "dispatch/implement");
+                                    if has_dispatch_plan && !has_dispatch_implement {
+                                        tracing::info!(
+                                            "Spec transition: PR #{} spec-ready → issue #{} dispatch/plan → dispatch/implement",
+                                            pr_summary.number, linked_issue
+                                        );
+                                        let _ = gw.remove_issue_labels(IssueLabelsInput {
+                                            repo: repo.clone(),
+                                            issue_number: linked_issue,
+                                            labels: vec!["dispatch/plan".into()],
+                                            cwd: ".".to_string(),
+                                        });
+                                        let _ = gw.add_issue_labels(IssueLabelsInput {
+                                            repo: repo.clone(),
+                                            issue_number: linked_issue,
+                                            labels: vec!["dispatch/implement".into()],
+                                            cwd: ".".to_string(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Dispatch phase: auto-trigger looper:plan/looper:implement from dispatch/* ---
+        if let Some(ref gw) = self.github {
+            let repo = &input.repo;
+            if !repo.is_empty() {
+                // Dispatch/plan → add looper:plan
+                if let Ok(issues) = gw.list_open_issues(ListOpenIssuesInput {
                     repo: repo.clone(),
                     cwd: ".".to_string(),
                     limit: 50,
@@ -170,37 +246,51 @@ impl CoordinatorScheduler for Coordinator {
                     label: "dispatch/plan".to_string(),
                     labels: vec![],
                 }) {
-                    Ok(issues) => {
-                        for issue in &issues {
-                            // View full issue details to check current labels
-                            match gw.view_issue(ViewIssueInput {
-                                repo: repo.clone(),
-                                issue_number: issue.number,
-                                cwd: ".".to_string(),
-                            }) {
-                                Ok(detail) => {
-                                    let has_plan = detail.labels.iter().any(|l| l == "looper:plan");
-                                    if !has_plan {
-                                        tracing::info!(
-                                            "Dispatch: issue #{} has dispatch/plan, adding looper:plan",
-                                            issue.number
-                                        );
-                                        let _ = gw.add_issue_labels(IssueLabelsInput {
-                                            repo: repo.clone(),
-                                            issue_number: issue.number,
-                                            labels: vec!["looper:plan".into()],
-                                            cwd: ".".to_string(),
-                                        });
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Dispatch: failed to view issue #{}: {e}", issue.number);
-                                }
+                    for issue in &issues {
+                        if let Ok(detail) = gw.view_issue(ViewIssueInput {
+                            repo: repo.clone(),
+                            issue_number: issue.number,
+                            cwd: ".".to_string(),
+                        }) {
+                            let has_plan = detail.labels.iter().any(|l| l == "looper:plan");
+                            if !has_plan {
+                                tracing::info!("Dispatch: issue #{} has dispatch/plan, adding looper:plan", issue.number);
+                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                    repo: repo.clone(),
+                                    issue_number: issue.number,
+                                    labels: vec!["looper:plan".into()],
+                                    cwd: ".".to_string(),
+                                });
                             }
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Dispatch: GitHub issue discovery failed: {e}");
+                }
+                // Dispatch/implement → add looper:implement
+                if let Ok(issues) = gw.list_open_issues(ListOpenIssuesInput {
+                    repo: repo.clone(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    assignee: String::new(),
+                    label: "dispatch/implement".to_string(),
+                    labels: vec![],
+                }) {
+                    for issue in &issues {
+                        if let Ok(detail) = gw.view_issue(ViewIssueInput {
+                            repo: repo.clone(),
+                            issue_number: issue.number,
+                            cwd: ".".to_string(),
+                        }) {
+                            let has_implement = detail.labels.iter().any(|l| l == "looper:implement");
+                            if !has_implement {
+                                tracing::info!("Dispatch: issue #{} has dispatch/implement, adding looper:implement", issue.number);
+                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                    repo: repo.clone(),
+                                    issue_number: issue.number,
+                                    labels: vec!["looper:implement".into()],
+                                    cwd: ".".to_string(),
+                                });
+                            }
+                        }
                     }
                 }
             }
