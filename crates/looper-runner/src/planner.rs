@@ -576,8 +576,31 @@ impl PlannerScheduler for Planner {
                             prompt: format!("Write a specification for issue #{issue_number}: {issue_title}\n\nAnalyze the issue and produce a structured spec document in markdown that contains the following sections in order. Use the exact section headings shown below:\n\n---\n## Objective\nA concise statement of what this change achieves.\n\n## Implementation Plan\nStep-by-step breakdown of the changes to make, in order of dependency.\n\n## Files to Change\nList every file that needs modification, creation, or deletion, with a brief note on what changes each file requires.\n\n## Risks\nPotential pitfalls, regressions, or edge cases to watch out for during implementation.\n\n## Acceptance Criteria\nConcrete, testable conditions that must be true after implementation (e.g., \"All existing tests pass\", \"New test coverage for edge case X\", \"The CLI reports Y when Z\").\n---\n\nAlso include a line like:\n  Spec: PLAN.md\nat the end of the file so downstream tooling can locate the spec.\n\nWrite the spec to a file called PLAN.md in the current directory ({worktree_abs_path}).\n\nIMPORTANT: Actually create the file. Use the `write` tool to write PLAN.md with the full spec content."),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
-                            Ok(_) => tracing::info!("Planner agent wrote spec for loop {loop_id}"),
-                            Err(e) => tracing::warn!("Planner agent failed to write spec for loop {loop_id}: {e}"),
+                            Ok(exec) => {
+                                tracing::info!("Planner agent started for loop {loop_id}, waiting for completion...");
+                                match self.tokio_handle.block_on(exec.wait()) {
+                                    Ok(result) => {
+                                        tracing::info!("Planner agent wrote spec for loop {loop_id}");
+                                        // The agent outputs spec content via stdout (--print mode),
+                                        // not by writing files. Save it to PLAN.md for commit.
+                                        let spec_content = if !result.stdout.trim().is_empty() {
+                                            result.stdout
+                                        } else if !result.summary.trim().is_empty() {
+                                            result.summary
+                                        } else {
+                                            String::new()
+                                        };
+                                        if !spec_content.is_empty() {
+                                            match std::fs::write(format!("{worktree_abs_path}/PLAN.md"), &spec_content) {
+                                                Ok(_) => tracing::info!("Planner saved spec to PLAN.md for loop {loop_id}"),
+                                                Err(e) => tracing::warn!("Planner failed to save PLAN.md: {e}"),
+                                            }
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!("Planner agent execution failed for loop {loop_id}: {e}"),
+                                }
+                            }
+                            Err(e) => tracing::warn!("Planner agent failed to start for loop {loop_id}: {e}"),
                         }
                     }
                 }
