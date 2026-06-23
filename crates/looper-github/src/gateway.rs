@@ -1222,6 +1222,12 @@ impl Gateway {
         } else {
             &input.cwd
         };
+        let strategy_flag = match input.strategy.as_str() {
+            "squash" => "--squash",
+            "merge" => "--merge",
+            "rebase" => "--rebase",
+            _ => "--squash",
+        };
         self.run_gh(
             cwd,
             "",
@@ -1232,6 +1238,7 @@ impl Gateway {
                 "--repo",
                 &input.repo,
                 "--auto",
+                strategy_flag,
                 "--match-head-commit",
                 &input.head_sha,
             ],

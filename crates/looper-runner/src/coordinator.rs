@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use looper_github::types::{IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
+use looper_github::types::{EnableAutoMergeInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
@@ -233,6 +233,52 @@ impl CoordinatorScheduler for Coordinator {
             }
         }
 
+        // --- Spec-review timeout: auto-transition stale spec-reviewing PRs to needs-human ---
+        // If a spec PR has been in looper:spec-reviewing for more than 7 days with no
+        // updates, transition it to looper:needs-human so a human reviewer can assess it.
+        if let Some(ref gw) = self.github {
+            let repo = &input.repo;
+            if !repo.is_empty() {
+                const SPEC_TIMEOUT_DAYS: f64 = 7.0;
+                if let Ok(prs) = gw.list_open_pull_requests(ListOpenPullRequestsInput {
+                    repo: repo.clone(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    label: "looper:spec-reviewing".to_string(),
+                    labels: vec![],
+                    author: String::new(),
+                    base_ref_name: String::new(),
+                    timeout: None,
+                }) {
+                    for pr_summary in &prs {
+                        // Parse the PR's updated_at to see how long it's been stale
+                        let updated_at = &pr_summary.updated_at;
+                        if let Ok(updated_dt) = chrono::DateTime::parse_from_rfc3339(updated_at) {
+                            let elapsed = chrono::Utc::now().signed_duration_since(updated_dt);
+                            if elapsed.num_hours() as f64 >= SPEC_TIMEOUT_DAYS * 24.0 {
+                                tracing::info!(
+                                    "Coordinator: spec-review timeout — PR #{} stale for {:.1}h, transitioning to needs-human",
+                                    pr_summary.number, elapsed.num_hours() as f64
+                                );
+                                let _ = gw.remove_issue_labels(IssueLabelsInput {
+                                    repo: repo.clone(),
+                                    issue_number: pr_summary.number,
+                                    labels: vec!["looper:spec-reviewing".into()],
+                                    cwd: ".".to_string(),
+                                });
+                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                    repo: repo.clone(),
+                                    issue_number: pr_summary.number,
+                                    labels: vec!["looper:needs-human".into()],
+                                    cwd: ".".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // --- Dispatch phase: auto-trigger looper:plan/looper:implement from dispatch/* ---
         if let Some(ref gw) = self.github {
             let repo = &input.repo;
@@ -335,10 +381,23 @@ impl CoordinatorScheduler for Coordinator {
                                                 pr_summary.number, action.kind
                                             );
                                         }
-                                        crate::types::WatchActionKind::MergeReady
-                                        | crate::types::WatchActionKind::MarkMerged
+                                        crate::types::WatchActionKind::MergeReady => {
+                                            // Execute auto-merge on merge-ready PRs
+                                            tracing::info!(
+                                                "Coordinator: PR #{} is merge-ready, executing auto-merge",
+                                                pr_summary.number
+                                            );
+                                            let _ = gw.enable_auto_merge(EnableAutoMergeInput {
+                                                repo: repo.clone(),
+                                                pr_number: pr_summary.number,
+                                                strategy: "squash".to_string(),
+                                                head_sha: pr_detail.head_sha.clone(),
+                                                cwd: ".".to_string(),
+                                            });
+                                            continue;
+                                        }
+                                        crate::types::WatchActionKind::MarkMerged
                                         | crate::types::WatchActionKind::ClosePR => {
-                                            // Already handled or auto-merge — skip entirely
                                             continue;
                                         }
                                         _ => {}

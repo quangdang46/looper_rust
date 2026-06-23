@@ -14,6 +14,8 @@
 
 use std::sync::Arc;
 
+use std::process::Command;
+
 use chrono::Utc;
 use uuid::Uuid;
 
@@ -26,7 +28,9 @@ use looper_scheduler::types::{
     WorkerScheduler,
 };
 use looper_storage::eventlog;
-use looper_storage::record::{AppendInput, NotificationRecord, QueueItemRecord, RunRecord};
+use looper_storage::record::{
+    AppendInput, NotificationRecord, QueueItemRecord, QueueMarkRetryInput, RunRecord,
+};
 use looper_types::RunStatus;
 
 use looper_github::gateway::Gateway;
@@ -273,6 +277,79 @@ impl Worker {
                         if let Err(e) = eventlog::append(&g.events, &event) {
                             tracing::warn!("Worker validate event: {e}");
                         }
+                    }
+
+                    // Compute the worktree directory — same formula as PREPARE_WORKTREE and cleanup.
+                    let wt_dir = build_worktree_directory_name(&CreateWorktreeInput {
+                        project_id: item.project_id.clone().unwrap_or_default(),
+                        repo_path: ".".to_string(),
+                        worktree_root: ".".to_string(),
+                        branch: format!("worker/{loop_id}"),
+                        base_branch: None,
+                        start_point: None,
+                        pr_number: None,
+                        checkout_mode: CheckoutMode::Branch,
+                        protected_branches: vec![],
+                    });
+                    let worktree_path = format!("./{}", wt_dir);
+
+                    // Run cargo build in the worktree directory to validate the change.
+                    tracing::info!("Worker validate: running cargo build in {worktree_path}");
+                    let build_output = Command::new("cargo")
+                        .args(["build"])
+                        .current_dir(&worktree_path)
+                        .output()
+                        .map_err(|e| format!("Failed to execute cargo build in worktree: {e}"))?;
+
+                    if build_output.status.success() {
+                        tracing::info!("Worker validate: cargo build succeeded for run {}", run.id);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&build_output.stderr);
+                        let stdout = String::from_utf8_lossy(&build_output.stdout);
+                        tracing::warn!(
+                            "Worker validate: cargo build FAILED for run {}:\nstdout:\n{}\nstderr:\n{}",
+                            run.id, stdout, stderr,
+                        );
+
+                        // Mark the queue item for retry so it will be picked up again.
+                        let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+                        let attempts = item.attempts + 1;
+                        let retry_at = Utc::now()
+                            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                            .to_string();
+                        if let Err(e) = guard.queue.mark_retry(&QueueMarkRetryInput {
+                            id: item.id.clone(),
+                            available_at: retry_at.clone(),
+                            attempts,
+                            error_message: Some(format!("cargo build failed: {}", stderr.lines().next().unwrap_or("unknown"))),
+                            error_kind: "retryable_transient".to_string(),
+                            updated_at: retry_at.clone(),
+                        }) {
+                            tracing::warn!("Worker validate: failed to mark queue item for retry: {e}");
+                        }
+                        drop(guard);
+
+                        // Mark the run as failed so the pipeline stops here.
+                        {
+                            let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+                            let mut failed_run = guard
+                                .runs
+                                .get_by_id(&run.id)
+                                .map_err(|e| e.to_string())?
+                                .ok_or("run not found during validate failure")?;
+                            failed_run.status = RunStatus::Failed.as_str().to_string();
+                            failed_run.error_message = Some(format!("cargo build failed: {}", stderr.lines().next().unwrap_or("unknown")));
+                            failed_run.ended_at = Some(retry_at.clone());
+                            failed_run.updated_at.clone_from(&retry_at);
+                            if let Err(e) = guard.runs.upsert(&failed_run) {
+                                tracing::warn!("Worker validate: failed to mark run as failed: {e}");
+                            }
+                        }
+
+                        return Err(format!(
+                            "Worker validate: cargo build failed for run {} (item {})",
+                            run.id, item.id
+                        ));
                     }
                 }
                 worker_steps::OPEN_PR => {

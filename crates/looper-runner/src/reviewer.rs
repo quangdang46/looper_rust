@@ -13,16 +13,21 @@
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
+use looper_config::types::DisclosureConfig;
 use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
 
 use looper_github::types::{
-    IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, ViewPullRequestInput,
+    CapturePullRequestSnapshotInput, EnableAutoMergeInput, GetPullRequestDiffInput,
+    IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, PullRequestCommentInput,
+    ReviewComment, SubmitReviewInput, ViewPullRequestInput,
 };
+use crate::reviewer_criteria;
+use crate::reviewer_criteria::{AggregateDisposition, DefaultVerifier, DiffFile, PRDiff, VerificationResult};
 use crate::types::{reviewer_steps, spec_labels, SpecPhase};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
@@ -30,7 +35,9 @@ use looper_scheduler::types::{
     ReviewerTargetedDiscoveryInput, SchedulerConfig,
 };
 use looper_storage::eventlog;
-use looper_storage::record::{AppendInput, LoopRecord, NotificationRecord, QueueItemRecord, RunRecord};
+use looper_storage::record::{
+    AppendInput, LoopRecord, NotificationRecord, PullRequestSnapshotRecord, QueueItemRecord, RunRecord,
+};
 use looper_types::RunStatus;
 
 /// Reviewer runner state machine.
@@ -261,6 +268,51 @@ impl Reviewer {
                             tracing::warn!("Reviewer snapshot event: {e}");
                         }
                     }
+                    // Store diff snapshot for review-round comparison
+                    if let Some(ref gw) = self.github {
+                        if let Some(ref repo_path) = item.repo {
+                            if let Some(pr_num) = item.pr_number {
+                                match gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    Ok(pr) => {
+                                        let diff = gw.get_pull_request_diff(GetPullRequestDiffInput {
+                                            repo: repo_path.clone(),
+                                            pr_number: pr_num,
+                                            cwd: ".".to_string(),
+                                        }).unwrap_or_default();
+                                        if let Ok(guard) = self.repos.0.lock() {
+                                            let snapshot = PullRequestSnapshotRecord {
+                                                id: Uuid::new_v4().to_string(),
+                                                project_id: item.project_id.clone().unwrap_or_default(),
+                                                repo: repo_path.clone(),
+                                                pr_number: pr_num,
+                                                head_sha: pr.head_sha.clone(),
+                                                base_sha: Some(pr.base_sha.clone()),
+                                                title: Some(pr.title.clone()),
+                                                body: Some(pr.body.clone()),
+                                                author: Some(pr.author.clone()),
+                                                diff_ref: Some(diff),
+                                                checks_summary: None,
+                                                unresolved_thread_count: None,
+                                                review_state: None,
+                                                payload_json: None,
+                                                captured_at: now_iso.clone(),
+                                                created_at: now_iso.clone(),
+                                            };
+                                            if let Err(e) = guard.pull_request_snapshots.upsert(&snapshot) {
+                                                tracing::warn!("Reviewer snapshot store failed: {e}");
+                                            }
+                                            drop(guard);
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!("Reviewer snapshot PR view failed: {e}"),
+                                }
+                            }
+                        }
+                    }
                 }
                 reviewer_steps::PREPARE_WORKTREE => {
                     if let Ok(g) = self.repos.0.lock() {
@@ -316,7 +368,37 @@ impl Reviewer {
                             tracing::warn!("Reviewer review event: {e}");
                         }
                     }
-                    // Perform agent review
+
+                    // Check if the diff has changed since the last review round.
+                    // If it's the same head_sha as the latest snapshot, skip re-review.
+                    let mut diff_changed = true;
+                    if let Some(ref repo_path) = item.repo {
+                        if let Some(pr_num) = item.pr_number {
+                            if let Ok(guard) = self.repos.0.lock() {
+                                if let Some(latest) = guard.pull_request_snapshots.get_latest_by_project(
+                                    &item.project_id.clone().unwrap_or_default(),
+                                    repo_path,
+                                    pr_num,
+                                ).unwrap_or(None) {
+                                    // If there are at least 2 snapshots and the newest head_sha matches
+                                    // the previous one, the diff hasn't changed.
+                                    if let Some(ref gw) = self.github {
+                                        if let Ok(pr) = gw.view_pull_request(ViewPullRequestInput {
+                                            repo: repo_path.clone(),
+                                            pr_number: pr_num,
+                                            cwd: ".".to_string(),
+                                        }) {
+                                            if latest.head_sha == pr.head_sha {
+                                                diff_changed = false;
+                                                tracing::info!("Reviewer: PR #{} diff unchanged (head_sha={}), re-using previous review", pr_num, pr.head_sha);
+                                            }
+                                        }
+                                    }
+                                }
+                                drop(guard);
+                            }
+                        }
+                    }
                     if let Some(ref agent) = self.agent {
                         let effective_path = if item.project_id.clone().unwrap_or_default().is_empty() {
                             item.repo.clone().unwrap_or_default()
@@ -345,13 +427,71 @@ impl Reviewer {
                             project_id: item.project_id.clone().unwrap_or_default(),
                             run_id: run.id.clone(),
                             working_directory: worktree_abs_path,
-                            prompt: format!("Review pull request #{} in repo {}. Check for:\n1. Correctness — does the code do what it claims?\n2. Completeness — are edge cases handled?\n3. Style — does it follow project conventions?\n4. Tests — are there tests for the changes?\n\nProvide a concise review summary with specific issues if any.", 
+                            prompt: format!("Review pull request #{} in repo {}. Check for:\n1. Correctness — does the code do what it claims?\n2. Completeness — are edge cases handled?\n3. Style — does it follow project conventions?\n4. Tests — are there tests for the changes?\n\nProvide a concise review summary with specific issues if any.",
                                 item.pr_number.unwrap_or(0),
                                 item.repo.as_deref().unwrap_or("unknown")),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent review started for run {}", run.id),
                             Err(e) => tracing::warn!("Agent review failed: {}", e),
+                        }
+                    }
+
+                    // After agent review, verify acceptance criteria against the diff
+                    if let Some(ref gw) = self.github {
+                        if let Some(ref repo_path) = item.repo {
+                            if let Some(pr_num) = item.pr_number {
+                                if let Ok(pr) = gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    // Extract acceptance criteria from PR body
+                                    let criteria = reviewer_criteria::extract(&pr.body);
+                                    if !criteria.is_empty() {
+                                        tracing::info!("Reviewer: extracted {} acceptance criteria from PR #{}", criteria.len(), pr_num);
+                                        // Get the PR diff and convert to PRDiff
+                                        let diff = gw.get_pull_request_diff(GetPullRequestDiffInput {
+                                            repo: repo_path.clone(),
+                                            pr_number: pr_num,
+                                            cwd: ".".to_string(),
+                                        }).unwrap_or_default();
+                                        let pr_diff = PRDiff {
+                                            files: vec![DiffFile {
+                                                path: "full_diff".to_string(),
+                                                patch: diff.clone(),
+                                            }],
+                                        };
+                                        // Verify criteria against diff
+                                        let verifier = DefaultVerifier::new();
+                                        match reviewer_criteria::verify(&criteria, &pr_diff, &verifier) {
+                                            Ok(result) => {
+                                                let pass_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Pass).count();
+                                                let fail_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Fail).count();
+                                                let unverifiable_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Unverifiable).count();
+                                                tracing::info!(
+                                                    "Reviewer: criteria verification — pass={}, fail={}, unverifiable={}",
+                                                    pass_count, fail_count, unverifiable_count
+                                                );
+                                                // Store verification result as checkpoint so the PUBLISH step can use it
+                                                if let Ok(guard) = self.repos.0.lock() {
+                                                    let mut r = guard.runs.get_by_id(&run.id).unwrap_or(None).unwrap_or(run.clone());
+                                                    r.checkpoint_json = Some(serde_json::json!({
+                                                        "criteria_disposition": format!("{:?}", result.disposition),
+                                                        "criteria_pass": pass_count,
+                                                        "criteria_fail": fail_count,
+                                                        "criteria_unverifiable": unverifiable_count,
+                                                        "criteria_total": result.criteria.len(),
+                                                    }).to_string());
+                                                    let _ = guard.runs.upsert(&r);
+                                                    drop(guard);
+                                                }
+                                            }
+                                            Err(e) => tracing::warn!("Reviewer: criteria verification failed: {e}"),
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -395,10 +535,61 @@ impl Reviewer {
                             tracing::warn!("Reviewer notification: {e}");
                         }
                     }
-                    // When GitHub is available, submit review and add label
+                    // When GitHub is available, submit review, post comments, and add label
                     if let Some(ref gw) = self.github {
                         if let Some(ref repo_path) = item.repo {
                             if let Some(pr_num) = item.pr_number {
+                                // Collect criteria verification result from checkpoint
+                                let criteria_info = {
+                                    let guard = self.repos.0.lock().ok();
+                                    guard.as_ref().and_then(|g| {
+                                        g.runs.get_by_id(&run.id).ok().flatten()
+                                    }).and_then(|r| r.checkpoint_json)
+                                        .and_then(|json| {
+                                            serde_json::from_str::<serde_json::Value>(&json).ok()
+                                        })
+                                };
+
+                                // Build review body including criteria verification results
+                                let mut review_body = String::from("## Looper Review\n\nAutomated review by looper.\n");
+                                let mut has_issues = false;
+                                if let Some(ref info) = criteria_info {
+                                    if let Some(total) = info.get("criteria_total").and_then(|v| v.as_u64()) {
+                                        if total > 0 {
+                                            let pass = info.get("criteria_pass").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let fail = info.get("criteria_fail").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let unver = info.get("criteria_unverifiable").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            review_body.push_str(&format!(
+                                                "\n### Acceptance Criteria Check\n- Pass: {}\n- Fail: {}\n- Unverifiable: {}\n",
+                                                pass, fail, unver
+                                            ));
+                                            if fail > 0 || unver > 0 {
+                                                has_issues = true;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Submit a formal PR review (not just labels)
+                                let event = if has_issues { "COMMENT" } else { "APPROVE" };
+                                let pr_head_sha = gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }).ok().map(|pr| pr.head_sha).unwrap_or_default();
+                                let _ = gw.submit_review(SubmitReviewInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    event: event.to_string(),
+                                    body: review_body,
+                                    commit_id: pr_head_sha,
+                                    comments: vec![],
+                                    anchors: None,
+                                    disclosure: DisclosureConfig::default(),
+                                    cwd: ".".to_string(),
+                                });
+                                tracing::info!("Reviewer: submitted PR review ({}) for PR #{}", event, pr_num);
+
                                 // Add review label
                                 let _ = gw.add_issue_labels(IssueLabelsInput {
                                     repo: repo_path.clone(),
@@ -406,10 +597,8 @@ impl Reviewer {
                                     labels: vec!["looper/reviewed".into()],
                                     cwd: ".".to_string(),
                                 });
-                                // Transition spec-phase label based on review outcome.
-                                // If still in spec-reviewing → mark as spec-ready
-                                // (agent opinion determines needs-human vs spec-ready,
-                                // but for now we default to spec-ready on completion).
+
+                                // Transition spec-phase label based on review outcome
                                 if let Ok(pr) = gw.view_pull_request(ViewPullRequestInput {
                                     repo: repo_path.clone(),
                                     pr_number: pr_num,
@@ -417,32 +606,30 @@ impl Reviewer {
                                 }) {
                                     let has_spec_reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
                                     if has_spec_reviewing {
+                                        let target = if has_issues {
+                                            spec_labels::NEEDS_HUMAN
+                                        } else {
+                                            spec_labels::SPEC_READY
+                                        };
                                         let _ = gw.add_issue_labels(IssueLabelsInput {
                                             repo: repo_path.clone(),
                                             issue_number: pr_num,
-                                            labels: vec![spec_labels::SPEC_READY.to_string()],
+                                            labels: vec![target.to_string()],
                                             cwd: ".".to_string(),
                                         });
-                                        tracing::info!("Reviewer: PR #{} spec approved, transitioned to {}", pr_num, spec_labels::SPEC_READY);
+                                        tracing::info!("Reviewer: PR #{} spec transitioned to {}", pr_num, target);
                                     } else {
-                                        // Not a spec PR — this is a code implementation PR.
-                                        // Enable auto-merge on approval via gh CLI so the user
-                                        // only needs to verify and let GitHub merge automatically.
-                                        let result = std::process::Command::new("gh")
-                                            .args(["pr", "merge", &pr_num.to_string(), "--auto", "--squash", "-R", repo_path])
-                                            .current_dir(".")
-                                            .output();
-                                        match result {
-                                            Ok(output) if output.status.success() => {
-                                                tracing::info!("Reviewer: enabled auto-merge for PR #{}", pr_num);
-                                            }
-                                            Ok(output) => {
-                                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                                tracing::warn!("Reviewer: auto-merge failed for PR #{}: {}", pr_num, stderr.trim());
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!("Reviewer: auto-merge error for PR #{}: {}", pr_num, e);
-                                            }
+                                        // Not a spec PR — code implementation PR.
+                                        // Enable auto-merge now that approval is posted.
+                                        if !has_issues {
+                                            let _ = gw.enable_auto_merge(EnableAutoMergeInput {
+                                                repo: repo_path.clone(),
+                                                pr_number: pr_num,
+                                                strategy: "squash".to_string(),
+                                                head_sha: pr.head_sha.clone(),
+                                                cwd: ".".to_string(),
+                                            });
+                                            tracing::info!("Reviewer: enabled auto-merge for PR #{}", pr_num);
                                         }
                                     }
                                 }

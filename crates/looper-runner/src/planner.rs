@@ -459,10 +459,24 @@ impl PlannerScheduler for Planner {
                             protected_branches: vec![],
                         },
                     );
-                    let wt_base = if local_path.is_empty() {
-                        item.repo.clone().unwrap_or_default()
-                    } else {
+                    // Use project's local checkout path for filesystem operations,
+                    // NOT item.repo (which is GitHub owner/repo format).
+                    let wt_base: String = if !local_path.is_empty() {
                         local_path.clone()
+                    } else if !project_id.is_empty() {
+                        // Try to resolve from repos DB for proper filesystem path
+                        self.repos.0.lock().ok()
+                            .and_then(|g| g.projects.get_by_id(&project_id).ok().flatten())
+                            .and_then(|p| {
+                                let rp = &p.repo_path;
+                                if !rp.is_empty() && !rp.contains('/') && !rp.starts_with('.'){
+                                    None
+                                } else if !rp.is_empty() { Some(rp.clone()) }
+                                else { None }
+                            })
+                            .unwrap_or_else(|| ".".to_string())
+                    } else {
+                        ".".to_string()
                     };
                     let worktree_abs_path = format!("{}/.looper/worktrees/{wt_dir}", wt_base);
                     // Create a worktree record so downstream phases
