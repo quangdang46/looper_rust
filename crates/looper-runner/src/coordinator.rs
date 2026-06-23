@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use looper_github::types::{IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput};
+use looper_github::types::{IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
@@ -221,21 +221,87 @@ impl CoordinatorScheduler for Coordinator {
                     timeout: None,
                 }) {
                     Ok(prs) => {
-                        for pr in &prs {
+                        for pr_summary in &prs {
                             if ctx.is_cancelled() {
                                 break;
                             }
+
+                            // Fetch full PR detail for merge-watch classification
+                            let mut needs_fixer = false;
+                            if let Ok(pr_detail) = gw.view_pull_request(ViewPullRequestInput {
+                                repo: repo.clone(),
+                                pr_number: pr_summary.number,
+                                cwd: ".".to_string(),
+                            }) {
+                                let action = crate::merge_watch::classify_pr(&pr_detail, None, None);
+                                if let Some(ref action) = action {
+                                    match action.kind {
+                                        crate::types::WatchActionKind::RedCI
+                                        | crate::types::WatchActionKind::Conflict
+                                        | crate::types::WatchActionKind::ReengageReview => {
+                                            needs_fixer = true;
+                                            tracing::info!(
+                                                "Coordinator merged-watch: PR #{} → {:?}",
+                                                pr_summary.number, action.kind
+                                            );
+                                        }
+                                        crate::types::WatchActionKind::MergeReady
+                                        | crate::types::WatchActionKind::MarkMerged
+                                        | crate::types::WatchActionKind::ClosePR => {
+                                            // Already handled or auto-merge — skip entirely
+                                            continue;
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+
+                            if needs_fixer {
+                                let now_iso = chrono::Utc::now()
+                                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                                    .to_string();
+                                let fix_item = QueueItemRecord {
+                                    id: format!("github-fix-{}", pr_summary.number),
+                                    project_id: Some(input.project_id.clone()),
+                                    loop_id: None,
+                                    r#type: "fixer".into(),
+                                    target_type: "pr".into(),
+                                    target_id: pr_summary.number.to_string(),
+                                    dedupe_key: format!("pr-fix-{}", pr_summary.number),
+                                    priority: 2,
+                                    status: "queued".to_string(),
+                                    available_at: now_iso.clone(),
+                                    attempts: 0,
+                                    max_attempts: 3,
+                                    claimed_by: None,
+                                    claimed_at: None,
+                                    started_at: None,
+                                    finished_at: None,
+                                    lock_key: None,
+                                    payload_json: None,
+                                    last_error: None,
+                                    last_error_kind: None,
+                                    repo: Some(repo.clone()),
+                                    pr_number: Some(pr_summary.number),
+                                    created_at: now_iso.clone(),
+                                    updated_at: now_iso,
+                                };
+                                queue_items.push(fix_item);
+                                continue;
+                            }
+
+                            // Default: enqueue a reviewer item for this PR
                             let now_iso = chrono::Utc::now()
                                 .format("%Y-%m-%dT%H:%M:%S%.3fZ")
                                 .to_string();
                             let item = QueueItemRecord {
-                                id: format!("github-review-{}", pr.number),
+                                id: format!("github-review-{}", pr_summary.number),
                                 project_id: Some(input.project_id.clone()),
                                 loop_id: None,
                                 r#type: "reviewer".into(),
                                 target_type: "pr".into(),
-                                target_id: pr.number.to_string(),
-                                dedupe_key: format!("pr-review-{}", pr.number),
+                                target_id: pr_summary.number.to_string(),
+                                dedupe_key: format!("pr-review-{}", pr_summary.number),
                                 priority: 2,
                                 status: "queued".to_string(),
                                 available_at: now_iso.clone(),
@@ -250,7 +316,7 @@ impl CoordinatorScheduler for Coordinator {
                                 last_error: None,
                                 last_error_kind: None,
                                 repo: Some(repo.clone()),
-                                pr_number: Some(pr.number),
+                                pr_number: Some(pr_summary.number),
                                 created_at: now_iso.clone(),
                                 updated_at: now_iso,
                             };

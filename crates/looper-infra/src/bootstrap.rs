@@ -1,7 +1,6 @@
 //! Daemon bootstrap sequence: tool validation, directory setup, logger creation.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use looper_config::Config;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -12,6 +11,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
 use crate::error::{BootError, DirError};
+use crate::shell;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -26,15 +26,15 @@ pub struct BootstrapOutput {
 #[allow(clippy::disallowed_methods)]
 pub fn validate_tools(_config: &Config) -> Result<(), BootError> {
     for tool in &["git", "gh"] {
-        let output = Command::new("which")
-            .arg(tool)
-            .output()
-            .map_err(BootError::Io)?;
-        if !output.status.success() {
-            return Err(BootError::ToolNotFound {
-                tool: tool.to_string(),
-                path: PathBuf::from(tool),
-            });
+        let result = shell::run_command("which", &[tool], ".");
+        match result {
+            Ok(r) if r.exit_code == 0 => {}
+            _ => {
+                return Err(BootError::ToolNotFound {
+                    tool: tool.to_string(),
+                    path: PathBuf::from(tool),
+                });
+            }
         }
     }
     Ok(())

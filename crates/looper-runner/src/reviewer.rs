@@ -23,6 +23,7 @@ use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput}
 use looper_github::types::{
     IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, ViewPullRequestInput,
 };
+use crate::types::{reviewer_steps, spec_labels, SpecPhase};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
     Context, ReviewerDiscoveryInput, ReviewerDiscoveryResult, ReviewerScheduler,
@@ -31,8 +32,6 @@ use looper_scheduler::types::{
 use looper_storage::eventlog;
 use looper_storage::record::{AppendInput, LoopRecord, NotificationRecord, QueueItemRecord, RunRecord};
 use looper_types::RunStatus;
-
-use crate::types::reviewer_steps;
 
 /// Reviewer runner state machine.
 pub struct Reviewer {
@@ -178,6 +177,42 @@ impl Reviewer {
                         };
                         if let Err(e) = eventlog::append(&g.events, &event) {
                             tracing::warn!("Reviewer filter event: {e}");
+                        }
+                    }
+                    // Check PR phase — only review spec-phase PRs (those with
+                    // looper:spec-reviewing label). Skip implementation PRs.
+                    if let Some(ref gw) = self.github {
+                        if let Some(ref repo_path) = item.repo {
+                            if let Some(pr_num) = item.pr_number {
+                                match gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    Ok(pr) => {
+                                        let phase = SpecPhase::from_labels(&pr.labels);
+                                        match phase {
+                                            SpecPhase::SpecReviewing => {
+                                                tracing::info!("Reviewer: PR #{} is in spec phase, proceeding", pr_num);
+                                            }
+                                            SpecPhase::SpecReady => {
+                                                tracing::info!("Reviewer: PR #{} spec already approved, skipping", pr_num);
+                                                continue;
+                                            }
+                                            SpecPhase::NeedsHuman => {
+                                                tracing::info!("Reviewer: PR #{} needs human, skipping", pr_num);
+                                                continue;
+                                            }
+                                            SpecPhase::Unknown => {
+                                                tracing::debug!("Reviewer: PR #{} has no spec label, treating as implementation review", pr_num);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Reviewer: failed to view PR #{} for phase check: {e}", pr_num);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -371,6 +406,26 @@ impl Reviewer {
                                     labels: vec!["looper/reviewed".into()],
                                     cwd: ".".to_string(),
                                 });
+                                // Transition spec-phase label based on review outcome.
+                                // If still in spec-reviewing → mark as spec-ready
+                                // (agent opinion determines needs-human vs spec-ready,
+                                // but for now we default to spec-ready on completion).
+                                if let Ok(pr) = gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    let has_spec_reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
+                                    if has_spec_reviewing {
+                                        let _ = gw.add_issue_labels(IssueLabelsInput {
+                                            repo: repo_path.clone(),
+                                            issue_number: pr_num,
+                                            labels: vec![spec_labels::SPEC_READY.to_string()],
+                                            cwd: ".".to_string(),
+                                        });
+                                        tracing::info!("Reviewer: PR #{} spec approved, transitioned to {}", pr_num, spec_labels::SPEC_READY);
+                                    }
+                                }
                             }
                         }
                     }

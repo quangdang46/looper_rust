@@ -684,6 +684,13 @@ impl PlannerScheduler for Planner {
                                 }) {
                                     Ok(result) => {
                                         tracing::info!("Planner created PR #{} for loop {loop_id}", result.number);
+                                        // Mark the PR as being in spec-review phase
+                                        let _ = gw.add_issue_labels(IssueLabelsInput {
+                                            repo: repo_path.clone(),
+                                            issue_number: result.number,
+                                            labels: vec!["looper:spec-reviewing".into()],
+                                            cwd: ".".to_string(),
+                                        });
                                     }
                                     Err(e) => tracing::warn!("Planner create PR failed: {e}"),
                                 }

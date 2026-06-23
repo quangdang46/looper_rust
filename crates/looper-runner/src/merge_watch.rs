@@ -72,8 +72,57 @@ pub fn classify_pr(
     if pr.mergeable == Some(true)
         && decision == Some(ReviewDecision::Approved)
     {
+        // Check CI status before declaring merge-ready
+        if pr_has_failing_checks(pr) {
+            let failed_checks = pr_failing_check_names(pr);
+            return Some(WatchAction {
+                kind: WatchActionKind::RedCI,
+                pr_number: pr.number,
+                pr_title: format!("{} (failing checks: {})", pr.title, failed_checks.join(", ")),
+                snapshot: None,
+                first_unknown_at: None,
+                deadline_exceeded: false,
+                retries_left: 0,
+                suggested_delay_secs: 0,
+                exhausted: false,
+            });
+        }
+        if pr_has_pending_checks(pr) {
+            // Checks still running — wait
+            return None;
+        }
         return Some(WatchAction {
             kind: WatchActionKind::MergeReady,
+            pr_number: pr.number,
+            pr_title: pr.title.clone(),
+            snapshot: None,
+            first_unknown_at: None,
+            deadline_exceeded: false,
+            retries_left: 0,
+            suggested_delay_secs: 0,
+            exhausted: false,
+        });
+    }
+
+    // 5b. Even without approval, if checks are failing, flag as RedCI.
+    if pr_has_failing_checks(pr) {
+        return Some(WatchAction {
+            kind: WatchActionKind::RedCI,
+            pr_number: pr.number,
+            pr_title: pr.title.clone(),
+            snapshot: None,
+            first_unknown_at: None,
+            deadline_exceeded: false,
+            retries_left: 0,
+            suggested_delay_secs: 0,
+            exhausted: false,
+        });
+    }
+
+    // 5c. Mergeable state "dirty" → conflict.
+    if pr.mergeable_state == "dirty" {
+        return Some(WatchAction {
+            kind: WatchActionKind::Conflict,
             pr_number: pr.number,
             pr_title: pr.title.clone(),
             snapshot: None,
@@ -130,6 +179,47 @@ pub fn classify_pr(
 fn has_no_changes(pr: &PullRequestDetail, prior: &PriorWatchMarker) -> bool {
     pr.head_sha == prior.head_sha
         && ReviewDecision::from_github_string(&pr.review_decision) == prior.review_decision
+}
+
+// ---------------------------------------------------------------------------
+// CI check helpers
+// ---------------------------------------------------------------------------
+
+/// Check if any CI checks on this PR are in a failing / error / cancelled state.
+///
+/// Parses the raw `checks` field (`Vec<HashMap<String, Value>>`) for check run
+/// conclusions. Returns `true` when at least one check has a failure conclusion.
+pub fn pr_has_failing_checks(pr: &PullRequestDetail) -> bool {
+    pr.checks.iter().any(|check| {
+        check
+            .get("conclusion")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale"))
+    })
+}
+
+/// Check if any CI checks on this PR are still pending/in-progress.
+pub fn pr_has_pending_checks(pr: &PullRequestDetail) -> bool {
+    pr.checks.iter().any(|check| {
+        check
+            .get("status")
+            .and_then(|s| s.as_str())
+            .is_some_and(|s| matches!(s, "queued" | "in_progress" | "waiting"))
+    })
+}
+
+/// Extract the list of failed check names from PR checks.
+pub fn pr_failing_check_names(pr: &PullRequestDetail) -> Vec<String> {
+    pr.checks
+        .iter()
+        .filter(|check| {
+            check
+                .get("conclusion")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale"))
+        })
+        .filter_map(|check| check.get("name").and_then(|n| n.as_str()).map(|n| n.to_string()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------

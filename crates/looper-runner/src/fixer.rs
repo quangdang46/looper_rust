@@ -27,7 +27,7 @@ use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
 use looper_github::gateway::Gateway;
 use looper_github::types::{
-    IssueAssigneesInput, ListOpenPullRequestsInput,
+    IssueAssigneesInput, ListOpenPullRequestsInput, PullRequestCheckRunsInput,
     ResolveReviewThreadInput, ViewPullRequestInput,
 };
 use looper_scheduler::scheduler::SendRepos;
@@ -326,6 +326,34 @@ impl Fixer {
                             tracing::warn!("Fixer validate event: {e}");
                         }
                     }
+                    // Check CI status on the PR to validate fixes
+                    if let Some(ref gw) = self.github {
+                        if let Some(ref repo_path) = item.repo {
+                            if let Some(pr_num) = item.pr_number {
+                                match gw.view_pull_request(ViewPullRequestInput {
+                                    repo: repo_path.clone(),
+                                    pr_number: pr_num,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    Ok(pr) => {
+                                        let failing = crate::merge_watch::pr_has_failing_checks(&pr);
+                                        let names = crate::merge_watch::pr_failing_check_names(&pr);
+                                        if failing {
+                                            tracing::warn!(
+                                                "Fixer: PR #{} still has failing checks: {:?}",
+                                                pr_num, names
+                                            );
+                                        } else {
+                                            tracing::info!("Fixer: PR #{} checks passing", pr_num);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Fixer: failed to view PR #{} for validation: {e}", pr_num);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 fixer_steps::PUSH => {
                     if let Ok(g) = self.repos.0.lock() {
@@ -417,6 +445,27 @@ impl Fixer {
                         if let Err(e) = eventlog::append(&g.events, &event) {
                             tracing::warn!("Fixer recheck event: {e}");
                         }
+                    }
+                    // Trigger a new CI run by pushing an empty commit
+                    if let Some(ref git) = self.git {
+                        let branch_name = format!("fix/{}", &run.loop_id);
+                        let _ = self.tokio_handle.block_on(git.commit(
+                            looper_git::types::CommitInput {
+                                worktree_path: ".".to_string(),
+                                message: "recheck: trigger CI".to_string(),
+                            },
+                        ));
+                        let _ = self.tokio_handle.block_on(git.push(
+                            looper_git::types::PushInput {
+                                worktree_path: ".".to_string(),
+                                remote: "origin".to_string(),
+                                branch: branch_name,
+                                expected_head_sha: None,
+                                protected_branches: vec!["main".to_string(), "master".to_string()],
+                                set_upstream: false,
+                            },
+                        ));
+                        tracing::info!("Fixer: pushed empty commit to trigger CI recheck");
                     }
                 }
                 _ => {}

@@ -22,11 +22,13 @@ pub mod notifications;
 pub mod recovery;
 pub mod runtime;
 pub mod worktree_cleanup;
+pub mod shell;
 
 pub use bootstrap::BootstrapOutput;
 pub use error::{BootError, CleanupError, DirError, NotifyError, RuntimeError, SetupError};
 pub use runtime::{Runtime, Services};
 pub use worktree_cleanup::run_cycle;
+pub use shell::CommandResult;
 
 pub use circuit_breaker::CircuitBreaker;
 pub use daemon_lock::DaemonLock;

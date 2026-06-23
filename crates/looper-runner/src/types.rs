@@ -35,6 +35,48 @@ impl ReviewDecision {
 pub const NO_CHANGES_RETRY_LIMIT: usize = 10;
 
 // ---------------------------------------------------------------------------
+// Spec-PR phase labels
+// ---------------------------------------------------------------------------
+
+/// Labels used to track spec-PR lifecycle phases.
+pub mod spec_labels {
+    /// PR is under specification review (initial state after planner creates PR).
+    pub const SPEC_REVIEWING: &str = "looper:spec-reviewing";
+    /// Specification review passed — ready for implementation.
+    pub const SPEC_READY: &str = "looper:spec-ready";
+    /// Specification review found issues needing human intervention.
+    pub const NEEDS_HUMAN: &str = "looper:needs-human";
+}
+
+/// Phase of a spec-PR determined by its current labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpecPhase {
+    SpecReviewing,
+    SpecReady,
+    NeedsHuman,
+    Unknown,
+}
+
+impl SpecPhase {
+    /// Determine the spec phase from a slice of label strings.
+    ///
+    /// Priority: `looper:needs-human` > `looper:spec-ready` > `looper:spec-reviewing`.
+    /// If none match, returns `Unknown` (likely an implementation PR).
+    pub fn from_labels(labels: &[String]) -> Self {
+        if labels.iter().any(|l| l == spec_labels::NEEDS_HUMAN) {
+            return Self::NeedsHuman;
+        }
+        if labels.iter().any(|l| l == spec_labels::SPEC_READY) {
+            return Self::SpecReady;
+        }
+        if labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING) {
+            return Self::SpecReviewing;
+        }
+        Self::Unknown
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Step constants — each runner's pipeline
 // ---------------------------------------------------------------------------
 
