@@ -130,6 +130,13 @@ impl ConfiguredExecutor {
             });
         }
 
+        // Ensure working directory exists before spawning; on macOS a
+        // missing cwd produces ErrorKind::NotFound which is indistinguishable
+        // from a missing binary, so we check first.
+        if !std::path::Path::new(&input.working_directory).exists() {
+            tokio::fs::create_dir_all(&input.working_directory).await.map_err(AgentError::Io)?;
+        }
+
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 AgentError::CommandNotFound(spawn_cmd.binary.clone())

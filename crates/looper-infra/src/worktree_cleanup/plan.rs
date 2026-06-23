@@ -63,10 +63,25 @@ pub struct PlanResult {
 
 /// Plan which worktrees to clean.
 pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanResult, CleanupError> {
-    let worktrees = repos
+    // Scan active worktrees (status='active')
+    let active_worktrees = repos
         .worktrees
         .list_active()
-        .map_err(|e| CleanupError::Plan(format!("list worktrees: {e}")))?;
+        .map_err(|e| CleanupError::Plan(format!("list active worktrees: {e}")))?;
+
+    // Also scan non-active, non-cleaned worktrees (e.g. "created" status from dead runners)
+    let stale_candidates = repos
+        .worktrees
+        .list_cleanup_candidates(100)
+        .map_err(|e| CleanupError::Plan(format!("list cleanup candidates: {e}")))?;
+
+    // Merge, deduplicate by id
+    let mut seen = std::collections::HashSet::new();
+    let worktrees: Vec<WorktreeRecord> = active_worktrees
+        .into_iter()
+        .chain(stale_candidates)
+        .filter(|wt| seen.insert(wt.id.clone()))
+        .collect();
 
     let loops = repos
         .loops

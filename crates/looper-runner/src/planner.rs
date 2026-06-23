@@ -18,7 +18,7 @@ use looper_github::types::{CreatePullRequestInput, IssueLabelsInput, ListOpenIss
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
-use looper_git::{build_worktree_directory_name, CheckoutMode, CreateWorktreeInput};
+use looper_git::{build_worktree_directory_name, CreateWorktreeInput};
 use looper_git::Gateway as GitGateway;
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{

@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
 use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
-use looper_git::types::CheckoutMode;
+use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
 
 use looper_github::types::{
     IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, ViewPullRequestInput,
@@ -391,6 +391,31 @@ impl Reviewer {
             r.updated_at.clone_from(&now_iso);
             guard.runs.upsert(&r).map_err(|e| e.to_string())?;
             drop(guard);
+        }
+
+        // Clean up worktree after pipeline completes
+        if let Some(ref git) = self.git {
+            let wt_dir = build_worktree_directory_name(&CreateWorktreeInput {
+                project_id: item.project_id.clone().unwrap_or_default(),
+                repo_path: ".".to_string(),
+                worktree_root: ".".to_string(),
+                branch: format!("review/{}", &run.loop_id),
+                base_branch: None,
+                start_point: None,
+                pr_number: None,
+                checkout_mode: CheckoutMode::Branch,
+                protected_branches: vec![],
+            });
+            let worktree_path = format!("./{}", wt_dir);
+            let _ = self.tokio_handle.block_on(git.cleanup_worktree(
+                CleanupWorktreeInput {
+                    repo_path: ".".to_string(),
+                    worktree_path: worktree_path.clone(),
+                    branch: format!("review/{}", &run.loop_id),
+                    protected_branches: vec!["main".to_string(), "master".to_string()],
+                },
+            ));
+            let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
         // Complete run -------------------------------------------------------
