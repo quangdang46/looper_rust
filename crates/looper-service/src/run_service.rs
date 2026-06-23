@@ -94,6 +94,8 @@ impl RunService {
             checkpoint_json: input.checkpoint_json,
             summary: None,
             error_message: None,
+            agent_vendor: None,
+            model: None,
             started_at: now_iso.clone(),
             last_heartbeat_at: Some(now_iso.clone()),
             ended_at: None,

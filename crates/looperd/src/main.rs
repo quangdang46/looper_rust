@@ -37,6 +37,7 @@ use looper_scheduler::types::{HandlerMap, SchedulerConfig, ThreadRunner};
 use looper_scheduler::Scheduler;
 use looper_service::ProjectService;
 use looper_storage::{
+    record::ProjectRecord,
     repos::events::EventsRepository, run_migrations, EventLog, Repositories,
 };
 use rusqlite::Connection;
@@ -88,13 +89,20 @@ impl RuntimeState for DaemonState {
     }
 
     async fn stop_loop(&self, _project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
-        let rec = self
+        let mut rec = self
             .repos
             .loops
             .get_by_seq(loop_seq)
             .map_err(|e| ApiError::internal(format!("get loop: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("loop seq={loop_seq}")))?;
         let finished = now_iso();
+        rec.status = "stopped".into();
+        rec.updated_at = finished.clone();
+        self.repos
+            .loops
+            .upsert(&rec)
+            .map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
+        
         self.repos
             .queue
             .cancel_by_loop(&rec.id, &finished, Some("stopped by user"))
@@ -103,19 +111,23 @@ impl RuntimeState for DaemonState {
     }
 
     async fn close_loop(&self, _project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
-        let rec = self
+        let mut rec = self
             .repos
             .loops
             .get_by_seq(loop_seq)
             .map_err(|e| ApiError::internal(format!("get loop: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("loop seq={loop_seq}")))?;
         let finished = now_iso();
+        rec.status = "closed".into();
+        rec.updated_at = finished.clone();
+        self.repos
+            .loops
+            .upsert(&rec)
+            .map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
         self.repos
             .queue
             .cancel_by_loop(&rec.id, &finished, Some("loop closed"))
             .map_err(|e| ApiError::internal(format!("cancel queue: {e}")))?;
-        // Transition loop status via the event log (service-layer transition
-        // would be invoked here in a full wiring)
         Ok(())
     }
 
@@ -206,11 +218,13 @@ impl ProjectServiceTrait for DaemonProjectService {
         let service_input = looper_service::AddInput {
             id: input.name.clone(),
             name: input.name,
-            repo_path: input.repo_url.unwrap_or_default(),
+            // Map API `path` -> local repo path used for detection,
+            // and `repo_url` -> GitHub repo URL.
+            repo_path: input.path.unwrap_or_default(),
             base_branch: input.default_branch.unwrap_or_else(|| "main".into()),
             id_source: "explicit".into(),
             worktree_root: None,
-            repo: None,
+            repo: input.repo_url,
             snapshot_mode: looper_service::SnapshotMode::Async,
         };
         let result = self
@@ -242,15 +256,7 @@ impl ProjectServiceTrait for DaemonProjectService {
             .map_err(|e| ApiError::internal(e.to_string()))?;
         Ok(records
             .into_iter()
-            .map(|r| ProjectSummary {
-                name: r.id,
-                path: r.repo_path.clone(),
-                repo_url: None,
-                default_branch: r.base_branch.unwrap_or_default(),
-                schedule: String::new(),
-                enabled: !r.archived,
-                archive_filter: None,
-            })
+            .map(|r| project_record_to_summary(r))
             .collect())
     }
 
@@ -263,15 +269,26 @@ impl ProjectServiceTrait for DaemonProjectService {
             .into_iter()
             .find(|r| r.id == name)
             .ok_or_else(|| ApiError::not_found(name))?;
-        Ok(ProjectSummary {
-            name: rec.id,
-            path: rec.repo_path.clone(),
-            repo_url: None,
-            default_branch: rec.base_branch.unwrap_or_default(),
-            schedule: String::new(),
-            enabled: !rec.archived,
-            archive_filter: None,
-        })
+        Ok(project_record_to_summary(rec))
+    }
+}
+
+/// Convert a ProjectRecord into the API's ProjectSummary, extracting the
+/// repo_url from the metadata_json payload (stored as `{"repo": ...}`).
+fn project_record_to_summary(rec: ProjectRecord) -> ProjectSummary {
+    let repo_url = rec
+        .metadata_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("repo").and_then(|r| r.as_str().map(String::from)));
+    ProjectSummary {
+        name: rec.id,
+        path: rec.repo_path.clone(),
+        repo_url,
+        default_branch: rec.base_branch.unwrap_or_default(),
+        schedule: String::new(),
+        enabled: !rec.archived,
+        archive_filter: None,
     }
 }
 
@@ -338,7 +355,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let scheduler_cfg = SchedulerConfig::default();
     let github: Option<Arc<Gateway>> = Some(Arc::new(Gateway::new(GatewayOptions::default())));
 
-    // Agent executor gateway
+    // Agent executor gateway — uses its own connection to avoid
+    // RefCell contention with the API handler's connection.
     let agent_cfg = ExecutorConfig {
         vendor: AgentCliVendor::ClaudeCode,
         model: None,
@@ -352,9 +370,16 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|d| d.log_dir.as_deref())
         .unwrap_or("/tmp/looper/logs")
         .to_string();
+
+    // Open a dedicated connection for agent DB operations so
+    // RefCell contention with the API connection is avoided.
+    // Also wrap in Mutex for concurrent agent calls (write-spec runs
+    // on parallel pipeline threads).
+    let agent_conn = open_db(&db_path)?;
+    let agent_repos = Arc::new(std::sync::Mutex::new(Repositories::new(agent_conn)));
     let agent: Option<Arc<ConfiguredExecutor>> = Some(Arc::new(ConfiguredExecutor::new(
         agent_cfg,
-        repos.clone(),
+        agent_repos,
         log_dir,
         Utc::now,
     )));

@@ -104,7 +104,7 @@ impl DaemonProcess {
             .build()
             .map_err(|e| format!("build http client: {e}"))?;
 
-        let status_url = format!("{}/api/v1/status", self.base_url);
+        let status_url = format!("{}/health", self.base_url);
 
         loop {
             // Check if the daemon process exited prematurely

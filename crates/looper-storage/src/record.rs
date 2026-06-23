@@ -47,6 +47,8 @@ pub struct RunRecord {
     pub checkpoint_json: Option<String>,
     pub summary: Option<String>,
     pub error_message: Option<String>,
+    pub agent_vendor: Option<String>,
+    pub model: Option<String>,
     pub started_at: String,
     pub last_heartbeat_at: Option<String>,
     pub ended_at: Option<String>,

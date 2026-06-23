@@ -366,7 +366,7 @@ impl Gateway {
     pub async fn commit(&self, input: CommitInput) -> Result<CommitResult> {
         helpers::run_git_cmd(&input.worktree_path, ["add", "-A"]).await?;
         helpers::run_git_cmd(&input.worktree_path, [
-            "commit", "-m", &input.message,
+            "commit", "--allow-empty", "-m", &input.message,
         ]).await?;
 
         let head_sha = helpers::get_head_sha(&input.worktree_path).await?;

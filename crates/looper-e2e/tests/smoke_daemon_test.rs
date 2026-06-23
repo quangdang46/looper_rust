@@ -100,7 +100,7 @@ fn test_daemon_shows_version() {
     assert!(result.is_ok(), "daemon should become ready");
 
     let client = reqwest::blocking::Client::new();
-    let version_url = format!("{}/api/v1/version", daemon.base_url());
+    let version_url = format!("{}/version", daemon.base_url());
     let resp = client
         .get(&version_url)
         .send()
@@ -109,7 +109,10 @@ fn test_daemon_shows_version() {
 
     let body: serde_json::Value = resp.json().expect("version should be JSON");
     assert!(
-        body.get("version").and_then(|v| v.as_str()).is_some(),
+        body.get("data")
+            .and_then(|d| d.get("version"))
+            .and_then(|v| v.as_str())
+            .is_some(),
         "version response should contain version string: {body}"
     );
 

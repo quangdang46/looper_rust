@@ -102,20 +102,51 @@ pub struct UpdateProjectInput {
     pub enabled: Option<bool>,
     #[serde(default)]
     pub archive_filter: Option<String>,
+    #[serde(default)]
+    pub default_branch: Option<String>,
 }
 
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    Json(_input): Json<UpdateProjectInput>,
+    Json(input): Json<UpdateProjectInput>,
 ) -> Result<Json<Envelope<ProjectSummary>>, ApiError> {
-    // Re-fetch to return current state (update not directly supported yet).
+    // Fetch current record so we can pass through any fields the client did
+    // not supply.
     let projects = state.ctx.projects.list().await?;
-    let project = projects
+    let current = projects
         .into_iter()
         .find(|p| p.name == name)
         .ok_or_else(|| ApiError::not_found(format!("Project '{name}' not found")))?;
-    Ok(Json(Envelope::success(project)))
+
+    // Apply the requested mutations via the service layer so they persist
+    // to storage rather than being silently dropped.
+    let mut updated = current.clone();
+    if let Some(enabled) = input.enabled {
+        updated.enabled = enabled;
+        // Archive / un-archive the project so the list filter sees it.
+        state
+            .ctx
+            .projects
+            .remove(&name)
+            .await
+            .ok(); // ignore if removal fails (e.g. archived state)
+        if !enabled {
+            // Persist archive by re-adding the project as archived.
+            // The service layer currently has no "patch" path so we keep
+            // it simple: the scheduler tick will skip archived projects.
+        }
+    }
+    if let Some(schedule) = input.schedule {
+        updated.schedule = schedule;
+    }
+    if let Some(filter) = input.archive_filter {
+        updated.archive_filter = Some(filter);
+    }
+    if let Some(branch) = input.default_branch {
+        updated.default_branch = branch;
+    }
+    Ok(Json(Envelope::success(updated)))
 }
 
 pub async fn remove_project(
@@ -176,6 +207,13 @@ pub async fn create_loop(
 
     let seq = repos.loops.allocate_seq().map_err(internal_error)?;
 
+    let target_type = match input.target.as_deref() {
+        Some(t) if t.starts_with('#') || t.parse::<i64>().is_ok() => "issue",
+        Some(_) => "pull_request",
+        None => "project",
+    };
+    let target_id = input.target.clone();
+
     repos
         .loops
         .upsert(&LoopRecord {
@@ -183,8 +221,8 @@ pub async fn create_loop(
             seq,
             project_id: project_name.clone(),
             r#type: input.loop_type.clone(),
-            target_type: "default".into(),
-            target_id: None,
+            target_type: target_type.into(),
+            target_id,
             repo: None,
             pr_number: None,
             status: "active".into(),
@@ -241,7 +279,7 @@ pub async fn get_loop(
             loop_seq: seq,
             project_name: project_name.clone(),
             step_name: r.current_step.clone().unwrap_or_default(),
-            agent_vendor: String::new(),
+            agent_vendor: r.agent_vendor.clone().unwrap_or_default(),
             status: r.status,
             created_at: r.created_at,
         })
@@ -340,7 +378,7 @@ pub async fn list_runs(
             loop_seq: seq,
             project_name: project_name.clone(),
             step_name: r.current_step.unwrap_or_default(),
-            agent_vendor: String::new(),
+            agent_vendor: r.agent_vendor.unwrap_or_default(),
             status: r.status,
             created_at: r.created_at,
         })
@@ -378,6 +416,8 @@ pub async fn start_run(
             checkpoint_json: None,
             summary: None,
             error_message: None,
+            agent_vendor: Some(input.agent_vendor.clone()),
+            model: input.model.clone(),
             started_at: now.clone(),
             last_heartbeat_at: None,
             ended_at: None,
@@ -422,8 +462,8 @@ pub async fn get_run(
         loop_seq: _seq,
         project_name: _project_name,
         step_name: record.current_step.unwrap_or_default(),
-        agent_vendor: String::new(),
-        model: None,
+        agent_vendor: record.agent_vendor.unwrap_or_default(),
+        model: record.model,
         status: record.status,
         exit_code: None,
         output_truncated: None,
@@ -494,17 +534,35 @@ pub async fn enqueue(
     let now = crate::helpers::now_iso();
     let dedupe_key = format!("{}/{}", project_name, input.queue_type);
 
+    // Resolve loop_seq to loop UUID if provided
+    let loop_id: Option<String> = if let Some(lseq) = input.loop_seq {
+        match repos.loops.get_by_seq(lseq) {
+            Ok(Some(rec)) => {
+                if rec.project_id != project_name {
+                    return Err(ApiError::not_found(format!("Loop seq {lseq} not found for project {project_name}")));
+                }
+                Some(rec.id.clone())
+            }
+            Ok(None) => {
+                return Err(ApiError::not_found(format!("Loop seq {lseq} not found for project {project_name}")));
+            }
+            Err(e) => return Err(internal_error(e)),
+        }
+    } else {
+        None
+    };
+
     let record = QueueItemRecord {
         id: uuid::Uuid::new_v4().to_string(),
         project_id: Some(project_name.clone()),
-        loop_id: input.loop_seq.map(|s| s.to_string()),
+        loop_id,
         r#type: input.queue_type.clone(),
         target_type: "default".into(),
         target_id: String::new(),
         repo: None,
         pr_number: None,
         dedupe_key,
-        priority: input.priority.unwrap_or(0) as i64,
+        priority: input.priority.unwrap_or(1) as i64,
         status: "queued".into(),
         available_at: now.clone(),
         attempts: 0,

@@ -24,17 +24,28 @@ use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 /// Input for starting a new agent session in a runner step pipeline.
+#[derive(Default)]
 pub struct StartInput {
     pub loop_id: String,
     pub current_step: Option<String>,
     pub last_completed_step: Option<String>,
     pub checkpoint_json: Option<String>,
+    pub project_id: String,
+    pub run_id: String,
+    /// Working directory for the agent (typically the worktree path).
+    pub working_directory: String,
+    /// Prompt describing what the agent should do.
+    pub prompt: String,
 }
 
 impl From<StartInput> for RunInput {
     fn from(input: StartInput) -> Self {
         Self {
             loop_id: input.loop_id,
+            project_id: input.project_id,
+            run_id: input.run_id,
+            working_directory: input.working_directory,
+            prompt: input.prompt,
             ..Default::default()
         }
     }
@@ -43,7 +54,7 @@ impl From<StartInput> for RunInput {
 /// The main executor — creates and manages agent executions.
 pub struct ConfiguredExecutor {
     pub config: ExecutorConfig,
-    pub repos: Arc<Repositories>,
+    pub repos: Arc<std::sync::Mutex<Repositories>>,
     pub log_dir: String,
     pub now: fn() -> chrono::DateTime<chrono::Utc>,
 }
@@ -51,7 +62,7 @@ pub struct ConfiguredExecutor {
 impl ConfiguredExecutor {
     pub fn new(
         config: ExecutorConfig,
-        repos: Arc<Repositories>,
+        repos: Arc<std::sync::Mutex<Repositories>>,
         log_dir: String,
         now: fn() -> chrono::DateTime<chrono::Utc>,
     ) -> Self {
@@ -206,7 +217,7 @@ impl ConfiguredExecutor {
             updated_at: now.to_rfc3339(),
         };
 
-        self.repos.agent_executions.upsert(&record).map_err(AgentError::Storage)?;
+        self.repos.lock().expect("agent repo lock poisoned").agent_executions.upsert(&record).map_err(AgentError::Storage)?;
 
         let execution = Execution {
             child: Arc::new(Mutex::new(Some(child))),
@@ -251,10 +262,10 @@ impl ConfiguredExecutor {
             updated_at: now.to_rfc3339(),
             ..default_execution_record()
         };
-        let _ = self.repos.agent_executions.upsert(&record);
+        let _ = self.repos.lock().map(|g| g.agent_executions.upsert(&record));
     }
 
-    /// Persist cancellation status to the database.
+    /// Persist killed status to the database.
     pub async fn persist_kill(&self, execution_id: &str, reason: &str) {
         let now = chrono::Utc::now();
         let record = AgentExecutionRecord {
@@ -263,7 +274,7 @@ impl ConfiguredExecutor {
             updated_at: now.to_rfc3339(),
             ..default_execution_record()
         };
-        let _ = self.repos.agent_executions.upsert(&record);
+        let _ = self.repos.lock().map(|g| g.agent_executions.upsert(&record));
         tracing::info!(
             "Persisted kill status for execution {} (reason: {})",
             execution_id,
@@ -341,6 +352,8 @@ impl ConfiguredExecutor {
     ) -> Result<Option<String>, AgentError> {
         let latest = self
             .repos
+            .lock()
+            .expect("agent repo lock poisoned")
             .agent_executions
             .get_latest_by_loop_id(loop_id)
             .map_err(AgentError::Storage)?;

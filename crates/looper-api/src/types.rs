@@ -111,6 +111,8 @@ impl<E: fmt::Display> From<E> for ApiServiceError<E> {
 pub struct AddProjectInput {
     pub name: String,
     #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
     pub repo_url: Option<String>,
     #[serde(default)]
     pub default_branch: Option<String>,

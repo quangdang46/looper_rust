@@ -58,20 +58,16 @@ pub fn default_config(home: &TempHome, options: ConfigOptions) -> Config {
 
     std::env::set_var("HOME", home.home_dir.to_string_lossy().as_ref());
 
-    // Create a base config.  The looper_config::Config::default() gives
-    // all defaults; we overlay E2E-specific paths.
-    let mut cfg = Config::default();
-
-    // Point server at the configured port.
-    if let Some(port) = options.port {
-        if let Some(ref mut srv) = cfg.server {
-            srv.port = port;
-        }
-    }
-
     // Overlay storage, daemon, tool paths, agent, etc.
     // Use the partial config merge approach to fill in E2E overrides.
     let mut partial = looper_config::partial::PartialConfig::default();
+
+    // Point server at the configured port (or default port).
+    partial.server = Some(looper_config::partial::PartialServerConfig {
+        host: Some("127.0.0.1".into()),
+        port: options.port,
+        ..Default::default()
+    });
 
     partial.storage = Some(looper_config::partial::PartialStorageConfig {
         path: Some(home.db_path.to_string_lossy().to_string()),
@@ -102,12 +98,8 @@ pub fn default_config(home: &TempHome, options: ConfigOptions) -> Config {
     let tools = looper_config::partial::PartialToolsConfig::default();
     partial.tools = Some(tools);
 
-    // Merge partial into the default config.
-    let partial_cfg: Config = partial.into();
-    // The partial merge is already handled via From<PartialConfig>.
-    cfg = partial_cfg;
-
-    cfg
+    // Convert partial into the full config (defaults filled in).
+    partial.into()
 }
 
 /// Write an E2E config file at `path`, applying `raw_overrides` via deep

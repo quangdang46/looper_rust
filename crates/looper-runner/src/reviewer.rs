@@ -17,7 +17,8 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
-use looper_git::Gateway as GitGateway;
+use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
+use looper_git::types::CheckoutMode;
 
 use looper_github::types::{
     IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, ViewPullRequestInput,
@@ -28,7 +29,7 @@ use looper_scheduler::types::{
     ReviewerTargetedDiscoveryInput, SchedulerConfig,
 };
 use looper_storage::eventlog;
-use looper_storage::record::{AppendInput, NotificationRecord, QueueItemRecord, RunRecord};
+use looper_storage::record::{AppendInput, LoopRecord, NotificationRecord, QueueItemRecord, RunRecord};
 use looper_types::RunStatus;
 
 use crate::types::reviewer_steps;
@@ -102,6 +103,8 @@ impl Reviewer {
                     checkpoint_json: None,
                     summary: None,
                     error_message: None,
+                    agent_vendor: None,
+                    model: None,
                     started_at: now_iso.clone(),
                     last_heartbeat_at: Some(now_iso.clone()),
                     ended_at: None,
@@ -250,8 +253,8 @@ impl Reviewer {
                             repo_path: ".".to_string(),
                             worktree_root: worktree_root.display().to_string(),
                             branch: format!("review/{}", &run.loop_id),
-                            base_branch: None,
-                            start_point: None,
+                            base_branch: Some("main".to_string()),
+                            start_point: Some("main".to_string()),
                             pr_number: None,
                             checkout_mode: CheckoutMode::Branch,
                             protected_branches: vec!["main".to_string(), "master".to_string()],
@@ -280,11 +283,36 @@ impl Reviewer {
                     }
                     // Perform agent review
                     if let Some(ref agent) = self.agent {
+                        let effective_path = if item.project_id.clone().unwrap_or_default().is_empty() {
+                            item.repo.clone().unwrap_or_default()
+                        } else {
+                            format!("/tmp/e2e-{}", item.project_id.as_deref().unwrap_or("looper"))
+                        };
+                        let worktree_dir = looper_git::build_worktree_directory_name(
+                            &looper_git::CreateWorktreeInput {
+                                project_id: item.project_id.clone().unwrap_or_default(),
+                                repo_path: String::new(),
+                                worktree_root: String::new(),
+                                branch: format!("review/{}", run.loop_id),
+                                base_branch: None,
+                                start_point: None,
+                                pr_number: None,
+                                checkout_mode: CheckoutMode::Branch,
+                                protected_branches: vec![],
+                            },
+                        );
+                        let worktree_abs_path = format!("{}/.looper/worktrees/{}", effective_path, worktree_dir);
                         let input = looper_agent::executor::StartInput {
                             loop_id: run.loop_id.clone(),
                             current_step: Some("review".to_string()),
                             last_completed_step: Some("prepare_worktree".to_string()),
                             checkpoint_json: None,
+                            project_id: item.project_id.clone().unwrap_or_default(),
+                            run_id: run.id.clone(),
+                            working_directory: worktree_abs_path,
+                            prompt: format!("Review pull request #{} in repo {}. Check for:\n1. Correctness — does the code do what it claims?\n2. Completeness — are edge cases handled?\n3. Style — does it follow project conventions?\n4. Tests — are there tests for the changes?\n\nProvide a concise review summary with specific issues if any.", 
+                                item.pr_number.unwrap_or(0),
+                                item.repo.as_deref().unwrap_or("unknown")),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent review started for run {}", run.id),
@@ -407,19 +435,53 @@ impl ReviewerScheduler for Reviewer {
                         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                         let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
                         if let Ok(guard) = self.repos.0.lock() {
-                            for pr in prs {
+                            for (i, pr) in prs.iter().enumerate() {
+                                tracing::debug!("Reviewer processing PR #{}/50 (number={})", i+1, pr.number);
                                 let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
+                                // Create a loop record first (FK constraint on queue_items.loop_id)
+                                let (loop_id, loop_rec) = {
+                                    let lid = Uuid::new_v4().to_string();
+                                    let loop_seq = match guard.loops.allocate_seq() {
+                                        Ok(s) => s,
+                                        Err(e) => {
+                                            tracing::warn!("Failed to allocate loop seq for PR #{}: {e}", pr.number);
+                                            continue;
+                                        }
+                                    };
+                                    let r = LoopRecord {
+                                        id: lid.clone(),
+                                        seq: loop_seq,
+                                        project_id: input.project_id.clone(),
+                                        r#type: "review".into(),
+                                        target_type: "pull_request".into(),
+                                        target_id: Some(pr.number.to_string()),
+                                        repo: Some(input.repo.clone()),
+                                        pr_number: Some(pr.number),
+                                        status: "queued".into(),
+                                        config_json: None,
+                                        metadata_json: None,
+                                        last_run_at: None,
+                                        next_run_at: None,
+                                        created_at: now_iso.clone(),
+                                        updated_at: now_iso.clone(),
+                                    };
+                                    (lid, r)
+                                };
+                                if let Err(e) = guard.loops.upsert(&loop_rec) {
+                                    tracing::warn!("Failed to create loop for PR #{}: {e}", pr.number);
+                                    continue;
+                                }
                                 let queue_item = QueueItemRecord {
                                     id: Uuid::new_v4().to_string(),
                                     project_id: Some(input.project_id.clone()),
-                                    loop_id: None,
+                                    loop_id: Some(loop_id),
                                     r#type: "reviewer".into(),
                                     target_type: "pull_request".into(),
                                     target_id: pr.number.to_string(),
                                     repo: Some(input.repo.clone()),
                                     pr_number: Some(pr.number),
                                     dedupe_key,
-                                    priority: 0,
+                                    priority: 1,
                                     status: "queued".into(),
                                     available_at: now_iso.clone(),
                                     attempts: 0,
@@ -444,9 +506,7 @@ impl ReviewerScheduler for Reviewer {
                                 match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
                                     Ok((item, is_new)) => {
                                         discovered_items.push(item);
-                                        if is_new {
-                                            tracing::debug!("Enqueued reviewer item for PR #{}", pr.number);
-                                        }
+                                        tracing::info!("Reviewer enqueue PR #{}: is_new={} (total now={})", pr.number, is_new, discovered_items.len());
                                     }
                                     Err(e) => tracing::warn!("Failed to enqueue reviewer item for PR #{}: {}", pr.number, e),
                                 }

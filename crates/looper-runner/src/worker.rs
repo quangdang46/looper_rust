@@ -101,6 +101,8 @@ impl Worker {
                     checkpoint_json: None,
                     summary: None,
                     error_message: None,
+                    agent_vendor: None,
+                    model: None,
                     started_at: now_iso.clone(),
                     last_heartbeat_at: Some(now_iso.clone()),
                     ended_at: None,
@@ -225,6 +227,13 @@ impl Worker {
                             current_step: Some("plan".to_string()),
                             last_completed_step: Some("prepare_worktree".to_string()),
                             checkpoint_json: None,
+                            project_id: item.project_id.clone().unwrap_or_default(),
+                            run_id: run.id.clone(),
+                            working_directory: String::new(),
+                            prompt: format!(
+                                "Plan the implementation for this task in repo {}. Create PLAN.md with the implementation steps.",
+                                item.repo.as_deref().unwrap_or("unknown")
+                            ),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent plan started for run {}", run.id),
@@ -255,6 +264,13 @@ impl Worker {
                             current_step: Some("execute".to_string()),
                             last_completed_step: Some("prepare_worktree".to_string()),
                             checkpoint_json: None,
+                            project_id: item.project_id.clone().unwrap_or_default(),
+                            run_id: run.id.clone(),
+                            working_directory: String::new(),
+                            prompt: format!(
+                                "Execute the planned implementation for this task in repo {}. Write the actual code changes needed.",
+                                item.repo.as_deref().unwrap_or("unknown")
+                            ),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent execution started for run {}", run.id),

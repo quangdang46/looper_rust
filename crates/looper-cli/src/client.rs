@@ -45,6 +45,10 @@ pub struct VersionResponse {
 pub struct ProjectSummary {
     pub name: String,
     pub path: Option<String>,
+    #[serde(default)]
+    pub repo_url: Option<String>,
+    #[serde(default)]
+    pub default_branch: Option<String>,
     pub schedule: Option<String>,
     pub enabled: bool,
 }
@@ -172,6 +176,10 @@ pub struct AddProjectInput {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schedule: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
@@ -277,13 +285,23 @@ impl DaemonAPIClient {
         env.into_result()
     }
 
-    /// DELETE and parse Envelope<()>.
-    async fn delete(&self, path: &str) -> Result<(), CliError> {
+    /// POST and ignore the response body (works for `Envelope<()>` and similar).
+    async fn post_unit<B: Serialize>(&self, path: &str, body: &B) -> Result<(), CliError> {
+        let resp = self.request_builder(reqwest::Method::POST, path)
+            .json(body)
+            .send()
+            .await?;
+        let env: Envelope<()> = resp.json().await?;
+        into_unit_result(env)
+    }
+
+    /// DELETE and parse Envelope<()> — empty body is success.
+    async fn delete_unit(&self, path: &str) -> Result<(), CliError> {
         let resp = self.request_builder(reqwest::Method::DELETE, path)
             .send()
             .await?;
         let env: Envelope<()> = resp.json().await?;
-        env.into_result()
+        into_unit_result(env)
     }
 
     // -----------------------------------------------------------------------
@@ -321,7 +339,7 @@ impl DaemonAPIClient {
     }
 
     pub async fn remove_project(&self, name: &str) -> Result<(), CliError> {
-        self.delete(&format!("/api/projects/{name}")).await
+        self.delete_unit(&format!("/api/projects/{name}")).await
     }
 
     pub async fn sync_project(&self, name: &str) -> Result<ProjectSummary, CliError> {
@@ -354,15 +372,27 @@ impl DaemonAPIClient {
     }
 
     pub async fn pause_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post(&format!("/api/projects/{project}/loops/{seq}/pause"), &serde_json::Map::new()).await
+        self.post_unit(
+            &format!("/api/projects/{project}/loops/{seq}/pause"),
+            &serde_json::Map::new(),
+        )
+        .await
     }
 
     pub async fn resume_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post(&format!("/api/projects/{project}/loops/{seq}/resume"), &serde_json::Map::new()).await
+        self.post_unit(
+            &format!("/api/projects/{project}/loops/{seq}/resume"),
+            &serde_json::Map::new(),
+        )
+        .await
     }
 
     pub async fn terminate_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post(&format!("/api/projects/{project}/loops/{seq}/terminate"), &serde_json::Map::new()).await
+        self.post_unit(
+            &format!("/api/projects/{project}/loops/{seq}/terminate"),
+            &serde_json::Map::new(),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------
@@ -400,7 +430,11 @@ impl DaemonAPIClient {
     }
 
     pub async fn cancel_run(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post(&format!("/api/projects/{project}/loops/{seq}/runs/cancel"), &serde_json::Map::new()).await
+        self.post_unit(
+            &format!("/api/projects/{project}/loops/{seq}/runs/cancel"),
+            &serde_json::Map::new(),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------------
@@ -421,11 +455,15 @@ impl DaemonAPIClient {
         project: &str,
         input: &EnqueueInput,
     ) -> Result<QueueItemResponse, CliError> {
-        self.post(&format!("/api/projects/{project}/queue"), input).await
+        self.post(
+            &format!("/api/projects/{project}/queue/enqueue"),
+            input,
+        )
+        .await
     }
 
     pub async fn dequeue(&self, project: &str, item_id: &str) -> Result<(), CliError> {
-        self.post(&format!("/api/projects/{project}/queue/{item_id}/dequeue"), &serde_json::Map::new()).await
+        self.delete_unit(&format!("/api/projects/{project}/queue/{item_id}")).await
     }
 
     // -----------------------------------------------------------------------
@@ -454,7 +492,7 @@ impl DaemonAPIClient {
     }
 
     pub async fn release_lock(&self, key: &str) -> Result<(), CliError> {
-        self.delete(&format!("/api/locks/{key}")).await
+        self.delete_unit(&format!("/api/locks/{key}")).await
     }
 
     // -----------------------------------------------------------------------
@@ -474,11 +512,11 @@ impl DaemonAPIClient {
     // -----------------------------------------------------------------------
 
     pub async fn api_shutdown(&self) -> Result<(), CliError> {
-        self.post("/shutdown", &serde_json::Map::new()).await
+        self.post_unit("/shutdown", &serde_json::Map::new()).await
     }
 
     pub async fn api_reload(&self) -> Result<(), CliError> {
-        self.post("/reload", &serde_json::Map::new()).await
+        self.post_unit("/reload", &serde_json::Map::new()).await
     }
 }
 
@@ -489,6 +527,8 @@ impl DaemonAPIClient {
 impl<T> Envelope<T> {
     pub fn into_result(self) -> Result<T, CliError> {
         if self.ok {
+            // For unit-typed responses (e.g. pause, terminate, shutdown), the
+            // API legitimately returns `data: null`. Treat that as success.
             self.data.ok_or_else(|| CliError::api("Internal", "missing data in success response"))
         } else {
             let info = self.error.unwrap_or(ErrorInfo {
@@ -497,5 +537,18 @@ impl<T> Envelope<T> {
             });
             Err(CliError::api(info.code, info.message))
         }
+    }
+}
+
+/// Helper for endpoints that return `Envelope<()>` (success-with-empty-body).
+pub fn into_unit_result(env: Envelope<()>) -> Result<(), CliError> {
+    if env.ok {
+        Ok(())
+    } else {
+        let info = env.error.unwrap_or(ErrorInfo {
+            code: "Unknown".into(),
+            message: "no error details".into(),
+        });
+        Err(CliError::api(info.code, info.message))
     }
 }

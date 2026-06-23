@@ -8,3 +8,11 @@ target/
 legacy/
 .omo/run-continuation/
 invocations.jsonl
+
+# Test artifacts
+smoke-test-results/
+review-*/
+$TEMP_DIR/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

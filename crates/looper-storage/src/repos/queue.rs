@@ -139,10 +139,21 @@ impl QueueRepository {
             ],
         ) {
             Ok(rows) if rows > 0 => {
-                let inserted = self.get_by_id(&record.id)?.ok_or_else(|| {
-                    StorageError::NotFound(format!("queue item not found after upsert: {}", record.id))
+                // ON CONFLICT can either insert a new row OR update an
+                // existing one (when the partial unique index fires).
+                // The new record.id only exists if INSERT actually
+                // happened; if it doesn't, fall back to dedupe lookup
+                // so callers always get a QueueItemRecord back.
+                if let Some(inserted) = self.get_by_id(&record.id)? {
+                    return Ok((inserted, true));
+                }
+                let existing = self.find_active_by_dedupe(&record.dedupe_key)?.ok_or_else(|| {
+                    StorageError::NotFound(format!(
+                        "queue item not found after upsert: id={}, dedupe_key={}",
+                        record.id, record.dedupe_key,
+                    ))
                 })?;
-                Ok((inserted, true))
+                Ok((existing, false))
             }
             Ok(_) => {
                 let existing = self.find_active_by_dedupe(&record.dedupe_key)?.ok_or_else(|| {

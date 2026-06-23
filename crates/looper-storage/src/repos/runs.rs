@@ -16,6 +16,8 @@ fn scan_run_row(row: &rusqlite::Row) -> rusqlite::Result<RunRecord> {
         checkpoint_json: row.get("checkpoint_json")?,
         summary: row.get("summary")?,
         error_message: row.get("error_message")?,
+        agent_vendor: row.get("agent_vendor")?,
+        model: row.get("model")?,
         started_at: row.get("started_at")?,
         last_heartbeat_at: row.get("last_heartbeat_at")?,
         ended_at: row.get("ended_at")?,
@@ -25,7 +27,7 @@ fn scan_run_row(row: &rusqlite::Row) -> rusqlite::Result<RunRecord> {
 }
 
 const RUN_COLUMNS: &str =
-    "id, loop_id, status, current_step, last_completed_step, checkpoint_json, summary, error_message, started_at, last_heartbeat_at, ended_at, created_at, updated_at";
+    "id, loop_id, status, current_step, last_completed_step, checkpoint_json, summary, error_message, agent_vendor, model, started_at, last_heartbeat_at, ended_at, created_at, updated_at";
 
 pub struct RunsRepository {
     conn: Arc<Connection>,
@@ -38,8 +40,8 @@ impl RunsRepository {
 
     pub fn upsert(&self, record: &RunRecord) -> Result<()> {
         self.conn.execute(
-            "INSERT OR REPLACE INTO runs (id, loop_id, status, current_step, last_completed_step, checkpoint_json, summary, error_message, started_at, last_heartbeat_at, ended_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO runs (id, loop_id, status, current_step, last_completed_step, checkpoint_json, summary, error_message, agent_vendor, model, started_at, last_heartbeat_at, ended_at, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             rusqlite::params![
                 &record.id,
                 &record.loop_id,
@@ -49,6 +51,8 @@ impl RunsRepository {
                 &record.checkpoint_json,
                 &record.summary,
                 &record.error_message,
+                &record.agent_vendor,
+                &record.model,
                 &record.started_at,
                 &record.last_heartbeat_at,
                 &record.ended_at,

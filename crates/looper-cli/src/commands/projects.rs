@@ -24,6 +24,10 @@ pub struct AddProjectArgs {
     #[arg(long)]
     pub path: Option<String>,
     #[arg(long)]
+    pub repo_url: Option<String>,
+    #[arg(long)]
+    pub default_branch: Option<String>,
+    #[arg(long)]
     pub schedule: Option<String>,
     #[arg(long)]
     pub enabled: Option<bool>,
@@ -39,6 +43,8 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &ProjectCommand, json: bool) 
             let input = AddProjectInput {
                 name: args.name.clone(),
                 path: args.path.clone(),
+                repo_url: args.repo_url.clone(),
+                default_branch: args.default_branch.clone(),
                 schedule: args.schedule.clone(),
                 enabled: args.enabled,
             };

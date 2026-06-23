@@ -59,6 +59,10 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
             "/api/projects/{name}/loops/{seq}/runs/{run_id}/cancel",
             post(routes::cancel_run),
         )
+        .route(
+            "/api/projects/{name}/loops/{seq}/runs/cancel",
+            post(routes::cancel_run),
+        )
         // Queue
         .route("/api/projects/{name}/queue", get(routes::list_queue))
         .route("/api/projects/{name}/queue/enqueue", post(routes::enqueue))

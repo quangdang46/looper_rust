@@ -108,6 +108,8 @@ impl Fixer {
                     checkpoint_json: None,
                     summary: None,
                     error_message: None,
+                    agent_vendor: None,
+                    model: None,
                     started_at: now_iso.clone(),
                     last_heartbeat_at: Some(now_iso.clone()),
                     ended_at: None,
@@ -219,6 +221,14 @@ impl Fixer {
                             current_step: Some("collect_fixes".to_string()),
                             last_completed_step: None,
                             checkpoint_json: None,
+                            project_id: item.project_id.clone().unwrap_or_default(),
+                            run_id: run.id.clone(),
+                            working_directory: String::new(),
+                            prompt: format!(
+                                "Review the fixes needed for PR #{} in repo {}. Identify specific code issues, suggest fixes, and create a summary of what needs to change.",
+                                item.pr_number.unwrap_or(0),
+                                item.repo.as_deref().unwrap_or("unknown")
+                            ),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent fix started for run {}", run.id),
@@ -284,6 +294,14 @@ impl Fixer {
                             current_step: Some("repair".to_string()),
                             last_completed_step: Some("prepare_worktree".to_string()),
                             checkpoint_json: None,
+                            project_id: item.project_id.clone().unwrap_or_default(),
+                            run_id: run.id.clone(),
+                            working_directory: String::new(),
+                            prompt: format!(
+                                "Apply the fixes for PR #{} in repo {}. Make the necessary code changes and verify they work.",
+                                item.pr_number.unwrap_or(0),
+                                item.repo.as_deref().unwrap_or("unknown")
+                            ),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(_) => tracing::info!("Agent repair started for run {}", run.id),
