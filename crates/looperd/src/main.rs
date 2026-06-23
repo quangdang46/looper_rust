@@ -348,6 +348,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let conn = open_db(&db_path)?;
     let repos = Arc::new(Repositories::new(conn));
 
+    // Recover orphaned agent executions from DB
+    // (kill orphan PIDs, mark recovered, interrupt stale runs)
+    agent_cleanup::recover_orphan_executions(&repos);
+    agent_cleanup::interrupt_stale_runs(&repos, 600);
+
     // Event-log connection (separate to avoid contention)
     let event_log_conn = open_db(&db_path)?;
     let event_log = EventLog::new(EventsRepository::new(Arc::new(event_log_conn)));
