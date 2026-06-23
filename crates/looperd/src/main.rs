@@ -29,7 +29,7 @@ use looper_api::{
 use looper_config::Config;
 use looper_github::gateway::{Gateway, GatewayOptions};
 use looper_git::Gateway as GitGateway;
-use looper_infra::{bootstrap, Runtime as DaemonRuntime};
+use looper_infra::{agent_cleanup, bootstrap, Runtime as DaemonRuntime};
 use looper_runner::{Coordinator, Fixer, Planner, Reviewer, Worker};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::active_executions::ActiveExecutionRegistry;
@@ -327,6 +327,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         };
         loader.load()
     }.map_err(|e| format!("config load: {e}"))?;
+
+    // Clean up stale agent processes that may have survived a daemon crash
+    agent_cleanup::kill_stale_agent_processes();
 
     // 2. Validate tool paths
     bootstrap::validate_tools(&config).map_err(|e| format!("tool validation: {e}"))?;

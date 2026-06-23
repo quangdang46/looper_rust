@@ -432,7 +432,13 @@ impl Reviewer {
                                 item.repo.as_deref().unwrap_or("unknown")),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
-                            Ok(_) => tracing::info!("Agent review started for run {}", run.id),
+                            Ok(exec) => {
+                                tracing::info!("Agent review started for run {}", run.id);
+                                match self.tokio_handle.block_on(exec.wait()) {
+                                    Ok(result) => tracing::info!("Agent review completed for run {}: status={}", run.id, result.status),
+                                    Err(e) => tracing::warn!("Agent review wait failed for run {}: {}", run.id, e),
+                                }
+                            }
                             Err(e) => tracing::warn!("Agent review failed: {}", e),
                         }
                     }

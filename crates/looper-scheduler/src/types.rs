@@ -143,7 +143,7 @@ impl Default for SchedulerConfig {
     fn default() -> Self {
         Self {
             poll_interval: Duration::from_secs(30),
-            max_concurrent_runs: 5,
+            max_concurrent_runs: 1,
             retry_max_attempts: 3,
             retry_base_delay_ms: 1000,
             slow_lane_warn_threshold: Duration::from_secs(5),

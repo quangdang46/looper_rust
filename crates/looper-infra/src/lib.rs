@@ -13,6 +13,7 @@
 #[allow(unused_imports)]
 use {looper_runner as _, looper_service as _, looper_types as _, serde as _, uuid as _};
 
+pub mod agent_cleanup;
 pub mod bootstrap;
 pub mod circuit_breaker;
 pub mod daemon_lock;
