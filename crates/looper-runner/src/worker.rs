@@ -278,7 +278,7 @@ impl Worker {
                             run_id: run.id.clone(),
                             working_directory: String::new(),
                             prompt: format!(
-                                "Plan the implementation for this task in repo {}. Create PLAN.md with the implementation steps.",
+                                "Plan the implementation for this task in repo {}. Create specs/<issue_number>-spec/spec.md with the implementation steps.",
                                 item.repo.as_deref().unwrap_or("unknown")
                             ),
                         };

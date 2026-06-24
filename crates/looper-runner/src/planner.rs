@@ -573,7 +573,10 @@ impl PlannerScheduler for Planner {
                             project_id: project_id.clone(),
                             run_id: run.id.clone(),
                             working_directory: worktree_abs_path.clone(),
-                            prompt: format!("Write a specification for issue #{issue_number}: {issue_title}\n\nAnalyze the issue and produce a structured spec document in markdown that contains the following sections in order. Use the exact section headings shown below:\n\n---\n## Objective\nA concise statement of what this change achieves.\n\n## Implementation Plan\nStep-by-step breakdown of the changes to make, in order of dependency.\n\n## Files to Change\nList every file that needs modification, creation, or deletion, with a brief note on what changes each file requires.\n\n## Risks\nPotential pitfalls, regressions, or edge cases to watch out for during implementation.\n\n## Acceptance Criteria\nConcrete, testable conditions that must be true after implementation (e.g., \"All existing tests pass\", \"New test coverage for edge case X\", \"The CLI reports Y when Z\").\n---\n\nAlso include a line like:\n  Spec: PLAN.md\nat the end of the file so downstream tooling can locate the spec.\n\nWrite the spec to a file called PLAN.md in the current directory ({worktree_abs_path}).\n\nIMPORTANT: Actually create the file. Use the `write` tool to write PLAN.md with the full spec content."),
+                            prompt: format!("Write a specification for issue #{issue_number}: {issue_title}\n\nAnalyze the issue and produce a structured spec document in markdown that contains the following sections in order. Use the exact section headings shown below:\n\n---\n## Objective\nA concise statement of what this change achieves.\n\n## Implementation Plan\nStep-by-step breakdown of the changes to make, in order of dependency.\n\n## Files to Change\nList every file that needs modification, creation, or deletion, with a brief note on what changes each file requires.\n\n## Risks\nPotential pitfalls, regressions, or edge cases to watch out for during implementation.\n\n## Acceptance Criteria\nConcrete, testable conditions that must be true after implementation (e.g., \"All existing tests pass\", \"New test coverage for edge case X\", \"The CLI reports Y when Z\").\n---\n\nAlso include a line like:\n  Spec: specs/{issue_number}-spec/spec.md\nat the end of the file so downstream tooling can locate the spec.\n\nWrite the spec to a file called `specs/{issue_number}-spec/spec.md` in the repo root ({worktree_abs_path}).\n\nIMPORTANT: Actually create the file. Use the `write` tool to write specs/{issue_number}-spec/spec.md with the full spec content
+
+The spec file path MUST be included in the PR body as:
+  specPath: specs/{issue_number}-spec/spec.md."),
                         };
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(exec) => {
@@ -582,7 +585,7 @@ impl PlannerScheduler for Planner {
                                     Ok(result) => {
                                         tracing::info!("Planner agent wrote spec for loop {loop_id}");
                                         // The agent outputs spec content via stdout (--print mode),
-                                        // not by writing files. Save it to PLAN.md for commit.
+                                        // not by writing files. Save it to specs/<issue_number>-spec/spec.md for commit.
                                         let spec_content = if !result.stdout.trim().is_empty() {
                                             result.stdout
                                         } else if !result.summary.trim().is_empty() {
@@ -591,9 +594,12 @@ impl PlannerScheduler for Planner {
                                             String::new()
                                         };
                                         if !spec_content.is_empty() {
-                                            match std::fs::write(format!("{worktree_abs_path}/PLAN.md"), &spec_content) {
-                                                Ok(_) => tracing::info!("Planner saved spec to PLAN.md for loop {loop_id}"),
-                                                Err(e) => tracing::warn!("Planner failed to save PLAN.md: {e}"),
+                                            let spec_dir = format!("{worktree_abs_path}/specs/{issue_number}-spec");
+                                            let _ = std::fs::create_dir_all(&spec_dir);
+                                            let spec_path = format!("{spec_dir}/spec.md");
+                                            match std::fs::write(&spec_path, &spec_content) {
+                                                Ok(_) => tracing::info!("Planner saved spec to {spec_path} for loop {loop_id}"),
+                                                Err(e) => tracing::warn!("Planner failed to save spec: {e}"),
                                             }
                                         }
                                     }
@@ -657,8 +663,10 @@ impl PlannerScheduler for Planner {
                         // commit on GitHub. A production planner would
                         // commit the spec document written in write-spec.
                         // ponytail: update commit message once agent writes spec
-                        // Save PLAN.md before recreating the worktree
-                        let plan_content = std::fs::read_to_string(format!("{worktree_path}/PLAN.md")).ok();
+                        // Save spec.md before recreating the worktree
+                        let spec_dir = format!("{worktree_path}/specs/{issue_number}-spec");
+                        let spec_path = format!("{spec_dir}/spec.md");
+                        let spec_content = std::fs::read_to_string(&spec_path).ok();
                         let _ = std::fs::remove_dir_all(&worktree_path);
                         let _ = self.tokio_handle.block_on(async {
                             // Create worktree at the right path
@@ -675,10 +683,11 @@ impl PlannerScheduler for Planner {
                             }).await {
                                 tracing::warn!("Planner worktree (non-fatal): {e}");
                             }
-                            // Restore PLAN.md that the agent wrote so the
+                            // Restore spec.md that the agent wrote so the
                             // commit includes it.
-                            if let Some(ref plan) = plan_content {
-                                let _ = std::fs::write(format!("{worktree_path}/PLAN.md"), plan);
+                            if let Some(ref spec) = spec_content {
+                                let _ = std::fs::create_dir_all(&spec_dir);
+                                let _ = std::fs::write(&spec_path, spec);
                             }
                             if let Err(e) = git.commit(looper_git::CommitInput {
                                 worktree_path: worktree_path.clone(),
