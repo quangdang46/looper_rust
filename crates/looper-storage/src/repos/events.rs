@@ -26,7 +26,6 @@ fn scan_event_log_row(row: &rusqlite::Row) -> rusqlite::Result<EventLogRecord> {
 const EV_COLUMNS: &str =
     "id, event_type, project_id, loop_id, run_id, entity_type, entity_id, correlation_id, causation_id, actor_type, actor_id, actor_display_name, payload_json, created_at";
 
-#[derive(Clone)]
 pub struct EventsRepository {
     conn: Arc<Connection>,
 }

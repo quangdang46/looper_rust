@@ -16,3 +16,9 @@ $TEMP_DIR/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# Looper database and worktrees
+*.db
+*.db-shm
+*.db-wal
+.looper/

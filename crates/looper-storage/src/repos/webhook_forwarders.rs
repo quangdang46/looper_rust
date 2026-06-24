@@ -22,7 +22,6 @@ fn scan_webhook_forwarder(row: &rusqlite::Row) -> rusqlite::Result<WebhookForwar
 const WHF_COLUMNS: &str =
     "repo, pid, process_start, fingerprint, endpoint, events, gh_path, daemon_id, spawned_at, updated_at";
 
-#[derive(Clone)]
 pub struct WebhookForwardersRepository {
     conn: Arc<Connection>,
 }

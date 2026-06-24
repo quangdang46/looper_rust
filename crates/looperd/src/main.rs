@@ -344,24 +344,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // 5. Open SQLite, run migrations
     let db_path = resolve_db_path(&config);
 
-    // Primary connection for API handlers (via DaemonState)
-    let conn = open_db(&db_path)?;
-    let repos = Arc::new(Repositories::new(conn));
+    // Run migrations on a temporary connection, then open repos with
+    // per-repository connections so rusqlite's internal RefCell is never
+    // shared across repos (each sub-repo gets its own Connection).
+    let _migration_conn = open_db(&db_path)?;
+    drop(_migration_conn);
+
+    let repos = Arc::new(Repositories::open(&db_path)?);
 
     // Recover orphaned agent executions from DB
     // (kill orphan PIDs, mark recovered, interrupt stale runs)
     agent_cleanup::recover_orphan_executions(&repos);
     agent_cleanup::interrupt_stale_runs(&repos, 600);
 
-    // Event-log connection (separate to avoid contention)
+    // Event-log connection (separate — uses its own connection)
     let event_log_conn = open_db(&db_path)?;
     let event_log = EventLog::new(EventsRepository::new(Arc::new(event_log_conn)));
 
-    // Scheduler connection (separate — wrapped in Mutex for thread-safety)
-    let sched_conn = open_db(&db_path)?;
-    let send_repos = Arc::new(SendRepos(std::sync::Mutex::new(Repositories::new(
-        sched_conn,
-    ))));
+    // Scheduler repos — also gets per-repo connections
+    let send_repos = Arc::new(SendRepos(std::sync::Mutex::new(
+        Repositories::open(&db_path)?,
+    )));
 
     // 6. Build HandlerMap with all 5 runners + GitHub/git/agent gateways
     let scheduler_cfg = SchedulerConfig::default();
@@ -383,12 +386,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or("/tmp/looper/logs")
         .to_string();
 
-    // Open a dedicated connection for agent DB operations so
-    // RefCell contention with the API connection is avoided.
-    // Also wrap in Mutex for concurrent agent calls (write-spec runs
-    // on parallel pipeline threads).
-    let agent_conn = open_db(&db_path)?;
-    let agent_repos = Arc::new(std::sync::Mutex::new(Repositories::new(agent_conn)));
+    // Agent repos — per-repo connections in a Mutex for pipeline
+    // thread safety (write-spec runs on parallel pipeline threads).
+    let agent_repos = Arc::new(std::sync::Mutex::new(
+        Repositories::open(&db_path)?,
+    ));
     let agent: Option<Arc<ConfiguredExecutor>> = Some(Arc::new(ConfiguredExecutor::new(
         agent_cfg,
         agent_repos,

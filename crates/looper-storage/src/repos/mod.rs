@@ -29,7 +29,14 @@ use self::webhook_tunnel_hooks::WebhookTunnelHooksRepository;
 use self::worktrees::WorktreesRepository;
 
 /// Container for all repository instances.
-#[derive(Clone)]
+///
+/// Each sub-repository owns its own `Arc<Connection>`. When created via
+/// `open()`, every sub-repo gets a **unique** connection, avoiding the
+/// `RefCell` borrow panics that occur when a single `rusqlite::Connection`
+/// (which wraps `RefCell<InnerConnection>`) is shared across repos.
+///
+/// The `new()` constructor exists for tests that pass in a single in-memory
+/// connection. Consumers in production should always use `open()`.
 pub struct Repositories {
     pub projects: ProjectsRepository,
     pub loops: LoopsRepository,
@@ -46,6 +53,8 @@ pub struct Repositories {
 }
 
 impl Repositories {
+    /// Create with a single shared connection (suitable for unit tests).
+    /// In production, prefer `open()` which gives each repo its own connection.
     pub fn new(conn: Connection) -> Self {
         let conn = Arc::new(conn);
         Self {
@@ -62,5 +71,32 @@ impl Repositories {
             webhook_forwarders: WebhookForwardersRepository::new(Arc::clone(&conn)),
             webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(Arc::clone(&conn)),
         }
+    }
+
+    /// Open a new set of repositories, each with its own dedicated SQLite
+    /// connection. This avoids sharing a single `rusqlite::Connection` across
+    /// repos — since `Connection` wraps `RefCell<InnerConnection>`, sharing it
+    /// via `Arc` causes runtime panics when concurrent (or nested sequential)
+    /// accesses try to borrow the `RefCell`.
+    pub fn open(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let make_conn = || -> Result<Arc<Connection>, Box<dyn std::error::Error>> {
+            let conn = Connection::open(path)?;
+            conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+            Ok(Arc::new(conn))
+        };
+        Ok(Self {
+            projects: ProjectsRepository::new(make_conn()?),
+            loops: LoopsRepository::new(make_conn()?),
+            runs: RunsRepository::new(make_conn()?),
+            agent_executions: AgentExecutionsRepository::new(make_conn()?),
+            pull_request_snapshots: PullRequestSnapshotsRepository::new(make_conn()?),
+            events: EventsRepository::new(make_conn()?),
+            locks: LocksRepository::new(make_conn()?),
+            queue: QueueRepository::new(make_conn()?),
+            notifications: NotificationsRepository::new(make_conn()?),
+            worktrees: WorktreesRepository::new(make_conn()?),
+            webhook_forwarders: WebhookForwardersRepository::new(make_conn()?),
+            webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(make_conn()?),
+        })
     }
 }

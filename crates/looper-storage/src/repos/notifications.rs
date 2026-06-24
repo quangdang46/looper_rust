@@ -27,7 +27,6 @@ fn scan_notification(row: &rusqlite::Row) -> rusqlite::Result<NotificationRecord
     })
 }
 
-#[derive(Clone)]
 pub struct NotificationsRepository {
     conn: Arc<Connection>,
 }

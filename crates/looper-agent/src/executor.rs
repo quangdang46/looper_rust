@@ -242,6 +242,13 @@ impl ConfiguredExecutor {
             max_output_bytes: input.max_output_bytes,
         };
 
+        // Spawn the run loop as a background task so it reads stdout/stderr,
+        // handles timeouts, and signals completion to wait().
+        let exec_for_loop = execution.clone();
+        tokio::spawn(async move {
+            exec_for_loop.run_loop().await;
+        });
+
         Ok(execution)
     }
 

@@ -18,7 +18,6 @@ fn scan_project_row(row: &rusqlite::Row) -> rusqlite::Result<ProjectRecord> {
     })
 }
 
-#[derive(Clone)]
 pub struct ProjectsRepository {
     conn: Arc<Connection>,
 }

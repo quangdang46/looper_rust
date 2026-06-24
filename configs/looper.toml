@@ -501,7 +501,7 @@ parallel-tasks = 1
 #   enabled = true
 #
 # Projects can also be registered at runtime via the API.
-[[projects]]
+#[[projects]]
 # name = ""
 # path = ""
 # default-loop-type = ""
