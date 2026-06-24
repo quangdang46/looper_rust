@@ -10,23 +10,11 @@ use chrono::Utc;
 use looper_storage::record::{AgentExecutionRecord, RunRecord};
 use looper_storage::Repositories;
 
-/// Kill any looper-spawned Claude processes that aren't the current session.
-/// Called during daemon startup to clean up after a crash.
+/// Previously used pkill which killed ALL Claude sessions (bug).
+/// Now a safe no-op — use recover_orphan_executions() instead,
+/// which only kills specific PIDs from DB records.
 pub fn kill_stale_agent_processes() {
-    match Command::new("pkill")
-        .args(["-f", "claude.*--dangerously-skip-permissions"])
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                tracing::info!("Killed stale agent process(es): {}", stdout.trim());
-            }
-        }
-        Err(e) => {
-            tracing::warn!("Failed to kill stale agents: {e}");
-        }
-    }
+    tracing::debug!("kill_stale_agent_processes is a no-op; use recover_orphan_executions instead");
 }
 
 /// Recover orphaned agent executions from the DB on startup.
