@@ -24,8 +24,7 @@ const STALE_HEARTBEAT_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 // ---------------------------------------------------------------------------
 
 /// Summary of recovery operations.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RecoverySummary {
     pub started_at: String,
     pub completed_at: String,
@@ -35,15 +34,12 @@ pub struct RecoverySummary {
     pub events_written: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct OrphanAgentCleanup {
     pub attempted: bool,
     pub cleaned_count: i64,
     pub warning: String,
 }
-
-
 
 // ---------------------------------------------------------------------------
 // Phase 1: Orphan agent cleanup
