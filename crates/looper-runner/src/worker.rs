@@ -702,6 +702,15 @@ impl Worker {
                                     Err(e) => tracing::warn!("Worker: push failed (branch {}): {}", branch, e),
                                 }
                             }
+                            // Remove looper:implement and add looper:implemented to prevent re-discovery
+                            if let Ok(num) = item.target_id.parse::<i64>() {
+                                let _ = github.remove_issue_labels(looper_github::types::IssueLabelsInput {
+                                    repo: item.repo.clone().unwrap_or_default(),
+                                    issue_number: num,
+                                    labels: vec!["looper:implement".into()],
+                                    cwd: ".".to_string(),
+                                });
+                            }
                             match github.create_pull_request(CreatePullRequestInput {
                                 repo: item.repo.clone().unwrap_or_default(),
                                 head_branch: format!("worker/{loop_id}"),
