@@ -119,7 +119,8 @@ struct Args {
     /// Print version info as JSON and exit
     #[arg(long)]
     json: bool,
-}fn cleanup_stale_agent_logs() {
+}
+fn cleanup_stale_agent_logs() {
     let log_dir = std::path::Path::new("/tmp/looper/logs/loops");
     if log_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(log_dir) {
@@ -134,8 +135,6 @@ struct Args {
         }
     }
 }
-
-
 
 // ---------------------------------------------------------------------------
 // DaemonState — implements RuntimeState

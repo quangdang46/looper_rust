@@ -37,9 +37,22 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build looperd
+      - name: Install cross
+        if: contains(matrix.target, 'linux-musl')
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build looperd (musl)
+        if: contains(matrix.target, 'linux-musl')
+        run: cross build --release -p looperd --target ${{ matrix.target }}
+      - name: Build looper-cli (musl)
+        if: contains(matrix.target, 'linux-musl')
+        run: cross build --release -p looper-cli --target ${{ matrix.target }}
+
+      - name: Build looperd (native)
+        if: "!contains(matrix.target, 'linux-musl')"
         run: cargo build --release -p looperd --target ${{ matrix.target }}
-      - name: Build looper-cli
+      - name: Build looper-cli (native)
+        if: "!contains(matrix.target, 'linux-musl')"
         run: cargo build --release -p looper-cli --target ${{ matrix.target }}
 
       - name: Package (Unix)
