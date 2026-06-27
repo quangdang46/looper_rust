@@ -101,14 +101,21 @@ impl PlannerScheduler for Planner {
                             }
                             let dedupe_key = format!("planner-{}-issue-{}", input.project_id, issue.number);
 
-                            // Dedup: if a queue item with this dedupe_key
-                            // already exists, skip.
+                            // Dedup: skip if queue item with this dedupe_key already exists (active or completed)
                             let exists = match self.repos.0.lock() {
-                                Ok(g) => g.queue.find_active_by_dedupe(&dedupe_key).ok().flatten().is_some(),
+                                Ok(g) => {
+                                    if let Ok(Some(_)) = g.queue.find_active_by_dedupe(&dedupe_key) {
+                                        true
+                                    } else if let Ok(items) = g.queue.list() {
+                                        items.iter().any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
+                                    } else {
+                                        false
+                                    }
+                                }
                                 Err(_) => false,
                             };
                             if exists {
-                                tracing::debug!("Planner skipping issue #{} (already queued)", issue.number);
+                                tracing::debug!("Planner skipping issue #{} (already queued/completed)", issue.number);
                                 continue;
                             }
 
