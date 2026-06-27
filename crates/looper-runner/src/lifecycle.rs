@@ -65,7 +65,6 @@ pub struct Actions {
     pub pr: String,
 }
 
-
 impl Actions {}
 
 /// Complete lifecycle state for a run.
@@ -253,10 +252,9 @@ impl State {
                         s.last_error = val.as_str().unwrap_or("").to_string();
                     }
                 }
-                "agent_ingested_at"
-                    if s.agent_ingested_at.is_empty() => {
-                        s.agent_ingested_at = val.as_str().unwrap_or("").to_string();
-                    }
+                "agent_ingested_at" if s.agent_ingested_at.is_empty() => {
+                    s.agent_ingested_at = val.as_str().unwrap_or("").to_string();
+                }
                 _ => {}
             }
         }

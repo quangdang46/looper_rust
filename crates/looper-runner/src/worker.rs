@@ -491,7 +491,11 @@ impl Worker {
                     } else if package_json.exists() {
                         // Node.js project - check syntax only
                         tracing::info!("Worker validate: checking Node.js project in {worktree_path}");
-                        match std::process::Command::new("node").args(["--check", "index.js"]).current_dir(&worktree_path).output() {
+                        match std::process::Command::new("node")
+                            .args(["--check", "index.js"])
+                            .current_dir(&worktree_path)
+                            .output()
+                        {
                             Ok(output) if output.status.success() => {
                                 tracing::info!("Worker validate: Node.js syntax check passed for run {}", run.id);
                                 true
@@ -734,7 +738,8 @@ Looper has finished implementing this issue.
 
 This PR is currently a draft. Once validation passes, it will be marked ready for review.
 
-_This is an automated message from looper._".to_string(),
+_This is an automated message from looper._"
+                                            .to_string(),
                                         cwd: ".".to_string(),
                                     });
                                 }
