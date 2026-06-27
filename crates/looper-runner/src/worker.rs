@@ -15,7 +15,6 @@
 use std::sync::Arc;
 
 use std::path::Path;
-use std::process::Command;
 
 use chrono::Utc;
 use uuid::Uuid;
