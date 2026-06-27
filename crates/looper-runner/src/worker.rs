@@ -815,7 +815,7 @@ _This is an automated message from looper._"
                     if let Some(pr_number) = loop_rec.pr_number {
                         let _ = gw.mark_pr_ready(looper_github::types::MarkPullRequestReadyForReviewInput {
                             repo: repo_path.clone(),
-                            pr_number: pr_number,
+                            pr_number,
                             cwd: ".".to_string(),
                         });
                         tracing::info!("Worker: Marked PR #{} as ready for review", pr_number);

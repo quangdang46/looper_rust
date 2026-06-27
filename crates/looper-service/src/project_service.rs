@@ -621,7 +621,7 @@ fn validate_project_id(id: &str) -> Result<()> {
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{TimeZone, Utc};
+    use chrono::Utc;
     use rusqlite::Connection;
 
     use looper_storage::migration::run_migrations;

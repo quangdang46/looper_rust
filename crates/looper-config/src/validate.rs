@@ -134,7 +134,7 @@ fn validate_role(role: &RoleConfig, path: &str, issues: &mut ConfigValidation) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::enums::*;
+    
 
     fn minimal_valid_config() -> Config {
         Config {

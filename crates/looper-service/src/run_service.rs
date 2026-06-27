@@ -300,17 +300,17 @@ impl RunService {
 mod tests {
     use std::sync::Arc;
 
-    use chrono::{TimeZone, Utc};
+    use chrono::Utc;
     use rusqlite::Connection;
 
     use looper_storage::migration::run_migrations;
     use looper_storage::record::{LoopRecord, ProjectRecord};
     use looper_storage::repos::Repositories;
-    use looper_types::loop_target::LoopTargetType;
-    use looper_types::{LoopStatus, LoopTarget, LoopType, RunStatus};
+    
+    use looper_types::{LoopType, RunStatus};
 
     use super::*;
-    use crate::loop_service::{CreateInput, LoopService};
+    use crate::loop_service::LoopService;
 
     fn repos_setup() -> Arc<Repositories> {
         let mut conn = Connection::open_in_memory().unwrap();

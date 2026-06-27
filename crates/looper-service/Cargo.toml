@@ -24,4 +24,3 @@ uuid.workspace = true
 [dev-dependencies]
 rusqlite = { workspace = true, features = ["bundled"] }
 looper-storage = { path = "../looper-storage" }
-tempfile = "3"
