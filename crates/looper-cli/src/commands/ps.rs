@@ -30,7 +30,7 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &PsCommand, json: bool) -> Re
                 if all_loops.is_empty() {
                     println!("No active loops.");
                 } else {
-                    println!("{:>4} {:>6} {:>10} {:>8}  {}", "Seq", "Type", "Status", "Project", "Created");
+                    println!("{:>4} {:>6} {:>10} {:>8}  Created", "Seq", "Type", "Status", "Project");
                     for e in &all_loops {
                         println!(
                             "{:>4} {:>6} {:>10} {:>8}  {}",

@@ -15,16 +15,16 @@ pub enum RunStatsCommand {
 pub async fn handle(_client: &DaemonAPIClient, cmd: &RunStatsCommand, json: bool) -> Result<(), CliError> {
     match cmd {
         RunStatsCommand::Show { run_id } => {
-            output::print_ok(json, &format!("Stats for run {run_id}"));
+            output::print_ok(json, format!("Stats for run {run_id}"));
             Ok(())
         }
         RunStatsCommand::Timeline { run_id } => {
-            output::print_ok(json, &format!("Timeline for run {run_id}"));
+            output::print_ok(json, format!("Timeline for run {run_id}"));
             Ok(())
         }
         RunStatsCommand::History { limit } => {
             let n = limit.unwrap_or(10);
-            output::print_ok(json, &format!("Last {n} runs"));
+            output::print_ok(json, format!("Last {n} runs"));
             Ok(())
         }
     }

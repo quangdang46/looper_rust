@@ -26,7 +26,7 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &StopCommand, json: bool) -> 
         StopCommand::Stop(args) => {
             let project = commands::resolve_project(client, &args.project).await?;
             client.terminate_loop(&project, args.seq).await?;
-            output::print_ok(json, &format!("Loop #{} (project={}) terminated", args.seq, project));
+            output::print_ok(json, format!("Loop #{} (project={}) terminated", args.seq, project));
             Ok(())
         }
     }

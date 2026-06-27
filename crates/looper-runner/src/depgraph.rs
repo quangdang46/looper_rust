@@ -264,6 +264,7 @@ fn new_blocker(dep: &IssueRef, issues: &HashMap<IssueRef, IssueState>) -> Blocke
 // Cycle detection
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::only_used_in_recursion)]
 fn detect_cycles(tracked: &[IssueRef], edges: &HashMap<IssueRef, Vec<IssueRef>>) -> Vec<Cycle> {
     let mut state: HashMap<IssueRef, u8> = HashMap::new();
     let mut stack: Vec<IssueRef> = Vec::new();
@@ -289,7 +290,7 @@ fn detect_cycles(tracked: &[IssueRef], edges: &HashMap<IssueRef, Vec<IssueRef>>)
                     let mut cycle: Cycle = stack[idx..].to_vec();
                     cycle.push(next.clone());
                     let normalized = canonicalize_cycle(&cycle);
-                    seen.entry(cycle_key(&normalized)).or_insert_with(|| normalized);
+                    seen.entry(cycle_key(&normalized)).or_insert(normalized);
                     continue;
                 }
                 if *state.get(next).unwrap_or(&0) == 0 {
@@ -363,7 +364,7 @@ fn normalize_blocked_by(input: &HashMap<IssueRef, Vec<IssueRef>>) -> HashMap<Iss
             if dep.number <= 0 {
                 continue;
             }
-            out.entry(issue.clone()).or_insert_with(Vec::new).push(dep);
+            out.entry(issue.clone()).or_default().push(dep);
         }
     }
     out

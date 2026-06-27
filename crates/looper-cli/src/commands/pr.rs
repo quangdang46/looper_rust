@@ -56,7 +56,7 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &PrCommand, json: bool) -> Re
                 if prs.is_empty() {
                     println!("No active PRs tracked.");
                 } else {
-                    println!("{:>6} {:>10} {:>8}  {}", "Seq", "Type", "Status", "Project");
+                    println!("{:>6} {:>10} {:>8}  Project", "Seq", "Type", "Status");
                     for e in &prs {
                         println!(
                             "{:>6} {:>10} {:>8}  {}",
