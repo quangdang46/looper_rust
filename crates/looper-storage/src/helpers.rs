@@ -3,7 +3,11 @@ use rusqlite::Error as RusqliteError;
 
 /// Convert a `String` to `Option<String>`, treating empty as None.
 pub fn nullable_string(s: String) -> Option<String> {
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Convert `Option<String>` for SQL: `None` maps to empty string for TEXT columns that accept empty.
@@ -20,7 +24,11 @@ pub fn opt_i64_to_sql(val: &Option<i64>) -> i64 {
 
 /// Convert `bool` to 0/1 INTEGER for SQLite.
 pub fn bool_to_int(val: bool) -> i32 {
-    if val { 1 } else { 0 }
+    if val {
+        1
+    } else {
+        0
+    }
 }
 
 /// Convert 0/1 INTEGER from SQLite to `bool`.
@@ -47,8 +55,8 @@ pub const SQLITE_MAX_VARIABLES: usize = 900;
 pub fn is_queue_active_dedupe_constraint_error(err: &RusqliteError) -> bool {
     match err {
         RusqliteError::SqliteFailure(e, _) => {
-            e.code == rusqlite::ErrorCode::ConstraintViolation
-                && e.extended_code == 2067 /* SQLITE_CONSTRAINT_UNIQUE */
+            e.code == rusqlite::ErrorCode::ConstraintViolation && e.extended_code == 2067
+            /* SQLITE_CONSTRAINT_UNIQUE */
         }
         _ => false,
     }

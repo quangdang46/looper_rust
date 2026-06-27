@@ -31,7 +31,10 @@ impl Default for ForwarderSupervisorConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitClass { Terminal, Transient }
+pub enum ExitClass {
+    Terminal,
+    Transient,
+}
 
 #[derive(Debug, Clone)]
 pub struct ForwarderStatus {
@@ -68,12 +71,22 @@ impl ForwarderSupervisor {
     pub fn start_forwarder(&mut self, repo: &str, endpoint_url: &str) -> Result<(), String> {
         let args = self.build_args(repo, endpoint_url);
         let child = Command::new(&self.config.gh_path)
-            .args(&args).stdout(Stdio::null()).stderr(Stdio::piped())
-            .spawn().map_err(|e| format!("spawn forwarder: {e}"))?;
-        self.processes.insert(repo.into(), ForwardedProcess {
-            repo: repo.into(), child: Some(child),
-            respawn_count: 0, consecutive_transient: 0, degraded: false, last_error: None,
-        });
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("spawn forwarder: {e}"))?;
+        self.processes.insert(
+            repo.into(),
+            ForwardedProcess {
+                repo: repo.into(),
+                child: Some(child),
+                respawn_count: 0,
+                consecutive_transient: 0,
+                degraded: false,
+                last_error: None,
+            },
+        );
         Ok(())
     }
 
@@ -89,7 +102,9 @@ impl ForwarderSupervisor {
 
     pub fn stop_all(&mut self) {
         let repos: Vec<String> = self.processes.keys().cloned().collect();
-        for r in repos { self.stop_forwarder(&r); }
+        for r in repos {
+            self.stop_forwarder(&r);
+        }
     }
 
     pub fn reconcile(&mut self, configured_repos: &[String], base_url: &str) {
@@ -113,12 +128,20 @@ impl ForwarderSupervisor {
         let max_respawn = self.config.max_respawn_delay_secs;
         let u = format!("{}/webhook/forward", base_url.trim_end_matches('/'));
         let repos_to_check: Vec<String> = configured_repos.to_vec();
-        let args_cache: Vec<(String, Vec<String>)> = repos_to_check.iter().map(|r| {
-            (r.clone(), vec!["webhook".into(), "forwarder".into(), "--repo".into(), r.clone(), "--url".into(), u.clone()])
-        }).collect();
+        let args_cache: Vec<(String, Vec<String>)> = repos_to_check
+            .iter()
+            .map(|r| {
+                (
+                    r.clone(),
+                    vec!["webhook".into(), "forwarder".into(), "--repo".into(), r.clone(), "--url".into(), u.clone()],
+                )
+            })
+            .collect();
         for (repo, args) in &args_cache {
             if let Some(proc) = self.processes.get_mut(repo) {
-                if proc.degraded { continue; }
+                if proc.degraded {
+                    continue;
+                }
                 if let Some(ref mut child) = proc.child {
                     if let Ok(Some(_)) = child.try_wait() {
                         proc.respawn_count += 1;
@@ -130,8 +153,14 @@ impl ForwarderSupervisor {
                             let delay = respawn_delay(proc.respawn_count, max_respawn);
                             std::thread::sleep(Duration::from_secs(delay));
                             match Command::new(&gh).args(args).stdout(Stdio::null()).stderr(Stdio::piped()).spawn() {
-                                Ok(c) => { proc.child = Some(c); proc.last_error = None; }
-                                Err(e) => { proc.last_error = Some(format!("respawn: {e}")); proc.degraded = true; }
+                                Ok(c) => {
+                                    proc.child = Some(c);
+                                    proc.last_error = None;
+                                }
+                                Err(e) => {
+                                    proc.last_error = Some(format!("respawn: {e}"));
+                                    proc.degraded = true;
+                                }
                             }
                         }
                     }
@@ -141,22 +170,31 @@ impl ForwarderSupervisor {
     }
 
     pub fn get_status(&self) -> Vec<ForwarderStatus> {
-        self.processes.values().map(|p| ForwarderStatus {
-            repo: p.repo.clone(), running: p.child.is_some(),
-            respawn_count: p.respawn_count,
-            last_error: p.last_error.clone(), degraded: p.degraded,
-        }).collect()
+        self.processes
+            .values()
+            .map(|p| ForwarderStatus {
+                repo: p.repo.clone(),
+                running: p.child.is_some(),
+                respawn_count: p.respawn_count,
+                last_error: p.last_error.clone(),
+                degraded: p.degraded,
+            })
+            .collect()
     }
 }
 
 impl Drop for ForwarderSupervisor {
-    fn drop(&mut self) { self.stop_all(); }
+    fn drop(&mut self) {
+        self.stop_all();
+    }
 }
 
 pub fn classify_exit(stderr: &str) -> ExitClass {
     let t = stderr.to_lowercase();
     for p in &["http 401", "auth required", "http 403", "http 404", "hook already exists"] {
-        if t.contains(p) { return ExitClass::Terminal; }
+        if t.contains(p) {
+            return ExitClass::Terminal;
+        }
     }
     ExitClass::Transient
 }
@@ -168,8 +206,21 @@ fn respawn_delay(attempt: u32, max: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test] fn test_classify_terminal() { assert_eq!(classify_exit("HTTP 401"), ExitClass::Terminal); }
-    #[test] fn test_classify_transient() { assert_eq!(classify_exit("timeout"), ExitClass::Transient); }
-    #[test] fn test_respawn_delay_basic() { assert_eq!(respawn_delay(1, 60), 1); assert_eq!(respawn_delay(7, 60), 60); }
-    #[test] fn test_supervisor_new() { assert!(ForwarderSupervisor::new(ForwarderSupervisorConfig::default()).get_status().is_empty()); }
+    #[test]
+    fn test_classify_terminal() {
+        assert_eq!(classify_exit("HTTP 401"), ExitClass::Terminal);
+    }
+    #[test]
+    fn test_classify_transient() {
+        assert_eq!(classify_exit("timeout"), ExitClass::Transient);
+    }
+    #[test]
+    fn test_respawn_delay_basic() {
+        assert_eq!(respawn_delay(1, 60), 1);
+        assert_eq!(respawn_delay(7, 60), 60);
+    }
+    #[test]
+    fn test_supervisor_new() {
+        assert!(ForwarderSupervisor::new(ForwarderSupervisorConfig::default()).get_status().is_empty());
+    }
 }

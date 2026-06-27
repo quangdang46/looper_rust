@@ -18,9 +18,7 @@ pub struct Context {
 
 impl Context {
     pub fn new() -> Self {
-        Self {
-            cancelled: Arc::new(AtomicBool::new(false)),
-        }
+        Self { cancelled: Arc::new(AtomicBool::new(false)) }
     }
 
     pub fn cancel(&self) {

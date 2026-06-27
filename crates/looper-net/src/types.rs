@@ -46,7 +46,9 @@ pub struct ReviewerProject {
     pub label_mode: String,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 // ---------------------------------------------------------------------------
 // Node capabilities
@@ -304,31 +306,26 @@ pub struct LocalState {
     pub github: GitHubIdentity,
 }
 
-
 // ---------------------------------------------------------------------------
 // Claim policy types
 // ---------------------------------------------------------------------------
 
 /// Whether a project participates in network-distributed work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum NetworkMode {
     #[default]
     Off,
     Routed,
 }
 
-
 /// How the local node's GitHub identity was matched against a PR assignee/reviewer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MatchMode {
     #[default]
     None,
     Numeric,
     LoginFallback,
 }
-
 
 /// Result of evaluating whether a node should claim a work item.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -408,8 +405,7 @@ pub struct JoinKeyResponse {
 
 /// Extract the node name from a `looper:target:<name>` label.
 pub fn parse_target_label(label: &str) -> Option<&str> {
-    label.strip_prefix(TARGET_LABEL_PREFIX)
-        .filter(|name| !name.is_empty())
+    label.strip_prefix(TARGET_LABEL_PREFIX).filter(|name| !name.is_empty())
 }
 
 /// Build a target label for a given node name.
@@ -419,20 +415,13 @@ pub fn target_label_for_node(node_name: &str) -> String {
 
 /// Collect all target labels from a label list.
 pub fn collect_target_labels(labels: &[String]) -> Vec<String> {
-    labels
-        .iter()
-        .filter(|l| l.starts_with(TARGET_LABEL_PREFIX))
-        .cloned()
-        .collect()
+    labels.iter().filter(|l| l.starts_with(TARGET_LABEL_PREFIX)).cloned().collect()
 }
 
 /// Check if a set of labels has exactly one target label for the given node.
 pub fn has_exact_target(labels: &[String], node_name: &str) -> bool {
     let _expected = target_label_for_node(node_name);
-    let targets: Vec<&str> = labels
-        .iter()
-        .filter_map(|l| l.strip_prefix(TARGET_LABEL_PREFIX))
-        .collect();
+    let targets: Vec<&str> = labels.iter().filter_map(|l| l.strip_prefix(TARGET_LABEL_PREFIX)).collect();
     targets.len() == 1 && targets[0] == node_name
 }
 
@@ -471,22 +460,10 @@ pub fn is_version_at_least(version: &str, minimum: &str) -> bool {
 
 pub fn detect_identity_drift(stored: &GitHubIdentity, current: &GitHubIdentity) -> (bool, String) {
     if stored.numeric_id > 0 && current.numeric_id > 0 && stored.numeric_id != current.numeric_id {
-        return (
-            true,
-            format!(
-                "GitHub numeric ID changed from {} to {}",
-                stored.numeric_id, current.numeric_id
-            ),
-        );
+        return (true, format!("GitHub numeric ID changed from {} to {}", stored.numeric_id, current.numeric_id));
     }
     if stored.login.to_lowercase() != current.login.to_lowercase() {
-        return (
-            true,
-            format!(
-                "GitHub login changed from {} to {}",
-                stored.login, current.login
-            ),
-        );
+        return (true, format!("GitHub login changed from {} to {}", stored.login, current.login));
     }
     (false, String::new())
 }
@@ -499,10 +476,7 @@ impl Default for LocalState {
             node_id: String::new(),
             node_name: String::new(),
             node_token: String::new(),
-            github: GitHubIdentity {
-                numeric_id: 0,
-                login: String::new(),
-            },
+            github: GitHubIdentity { numeric_id: 0, login: String::new() },
         }
     }
 }
@@ -527,11 +501,7 @@ mod tests {
 
     #[test]
     fn test_collect_target_labels() {
-        let labels = vec![
-            "looper:target:node-a".to_string(),
-            "bug".to_string(),
-            "looper:target:node-b".to_string(),
-        ];
+        let labels = vec!["looper:target:node-a".to_string(), "bug".to_string(), "looper:target:node-b".to_string()];
         let targets = collect_target_labels(&labels);
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&"looper:target:node-a".to_string()));
@@ -544,10 +514,7 @@ mod tests {
         assert!(has_exact_target(&labels, "my-node"));
         assert!(!has_exact_target(&labels, "other-node"));
 
-        let multi = vec![
-            "looper:target:node-a".to_string(),
-            "looper:target:node-b".to_string(),
-        ];
+        let multi = vec!["looper:target:node-a".to_string(), "looper:target:node-b".to_string()];
         assert!(!has_exact_target(&multi, "node-a"));
     }
 

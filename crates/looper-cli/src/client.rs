@@ -230,7 +230,9 @@ pub struct PaginationParams {
     pub limit: u64,
 }
 
-fn default_limit() -> u64 { 20 }
+fn default_limit() -> u64 {
+    20
+}
 
 // ---------------------------------------------------------------------------
 // DaemonAPIClient
@@ -246,11 +248,7 @@ pub struct DaemonAPIClient {
 impl DaemonAPIClient {
     /// Create a new client connecting to the given base URL (e.g. "http://127.0.0.1:8080").
     pub fn new(base_url: String, token: Option<String>) -> Self {
-        Self {
-            base_url,
-            token,
-            inner: Client::new(),
-        }
+        Self { base_url, token, inner: Client::new() }
     }
 
     fn request_builder(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -264,42 +262,28 @@ impl DaemonAPIClient {
 
     /// GET and parse Envelope<T>.
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, CliError> {
-        let resp = self.request_builder(reqwest::Method::GET, path)
-            .send()
-            .await?;
+        let resp = self.request_builder(reqwest::Method::GET, path).send().await?;
         let env: Envelope<T> = resp.json().await?;
         env.into_result()
     }
 
     /// POST and parse Envelope<T>.
-    async fn post<T: DeserializeOwned, B: Serialize>(
-        &self,
-        path: &str,
-        body: &B,
-    ) -> Result<T, CliError> {
-        let resp = self.request_builder(reqwest::Method::POST, path)
-            .json(body)
-            .send()
-            .await?;
+    async fn post<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T, CliError> {
+        let resp = self.request_builder(reqwest::Method::POST, path).json(body).send().await?;
         let env: Envelope<T> = resp.json().await?;
         env.into_result()
     }
 
     /// POST and ignore the response body (works for `Envelope<()>` and similar).
     async fn post_unit<B: Serialize>(&self, path: &str, body: &B) -> Result<(), CliError> {
-        let resp = self.request_builder(reqwest::Method::POST, path)
-            .json(body)
-            .send()
-            .await?;
+        let resp = self.request_builder(reqwest::Method::POST, path).json(body).send().await?;
         let env: Envelope<()> = resp.json().await?;
         into_unit_result(env)
     }
 
     /// DELETE and parse Envelope<()> — empty body is success.
     async fn delete_unit(&self, path: &str) -> Result<(), CliError> {
-        let resp = self.request_builder(reqwest::Method::DELETE, path)
-            .send()
-            .await?;
+        let resp = self.request_builder(reqwest::Method::DELETE, path).send().await?;
         let env: Envelope<()> = resp.json().await?;
         into_unit_result(env)
     }
@@ -350,20 +334,11 @@ impl DaemonAPIClient {
     // Loops
     // -----------------------------------------------------------------------
 
-    pub async fn list_loops(
-        &self,
-        project: &str,
-        offset: u64,
-        limit: u64,
-    ) -> Result<Vec<LoopSummary>, CliError> {
+    pub async fn list_loops(&self, project: &str, offset: u64, limit: u64) -> Result<Vec<LoopSummary>, CliError> {
         self.get(&format!("/api/projects/{project}/loops?offset={offset}&limit={limit}")).await
     }
 
-    pub async fn create_loop(
-        &self,
-        project: &str,
-        input: &CreateLoopInput,
-    ) -> Result<LoopDetail, CliError> {
+    pub async fn create_loop(&self, project: &str, input: &CreateLoopInput) -> Result<LoopDetail, CliError> {
         self.post(&format!("/api/projects/{project}/loops"), input).await
     }
 
@@ -372,27 +347,15 @@ impl DaemonAPIClient {
     }
 
     pub async fn pause_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post_unit(
-            &format!("/api/projects/{project}/loops/{seq}/pause"),
-            &serde_json::Map::new(),
-        )
-        .await
+        self.post_unit(&format!("/api/projects/{project}/loops/{seq}/pause"), &serde_json::Map::new()).await
     }
 
     pub async fn resume_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post_unit(
-            &format!("/api/projects/{project}/loops/{seq}/resume"),
-            &serde_json::Map::new(),
-        )
-        .await
+        self.post_unit(&format!("/api/projects/{project}/loops/{seq}/resume"), &serde_json::Map::new()).await
     }
 
     pub async fn terminate_loop(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post_unit(
-            &format!("/api/projects/{project}/loops/{seq}/terminate"),
-            &serde_json::Map::new(),
-        )
-        .await
+        self.post_unit(&format!("/api/projects/{project}/loops/{seq}/terminate"), &serde_json::Map::new()).await
     }
 
     // -----------------------------------------------------------------------
@@ -406,60 +369,31 @@ impl DaemonAPIClient {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<RunSummary>, CliError> {
-        self.get(&format!(
-            "/api/projects/{project}/loops/{seq}/runs?offset={offset}&limit={limit}",
-        )).await
+        self.get(&format!("/api/projects/{project}/loops/{seq}/runs?offset={offset}&limit={limit}",)).await
     }
 
-    pub async fn start_run(
-        &self,
-        project: &str,
-        seq: i64,
-        input: &StartRunInput,
-    ) -> Result<RunDetail, CliError> {
+    pub async fn start_run(&self, project: &str, seq: i64, input: &StartRunInput) -> Result<RunDetail, CliError> {
         self.post(&format!("/api/projects/{project}/loops/{seq}/runs"), input).await
     }
 
-    pub async fn get_run(
-        &self,
-        project: &str,
-        seq: i64,
-        run_id: &str,
-    ) -> Result<RunDetail, CliError> {
+    pub async fn get_run(&self, project: &str, seq: i64, run_id: &str) -> Result<RunDetail, CliError> {
         self.get(&format!("/api/projects/{project}/loops/{seq}/runs/{run_id}")).await
     }
 
     pub async fn cancel_run(&self, project: &str, seq: i64) -> Result<(), CliError> {
-        self.post_unit(
-            &format!("/api/projects/{project}/loops/{seq}/runs/cancel"),
-            &serde_json::Map::new(),
-        )
-        .await
+        self.post_unit(&format!("/api/projects/{project}/loops/{seq}/runs/cancel"), &serde_json::Map::new()).await
     }
 
     // -----------------------------------------------------------------------
     // Queue
     // -----------------------------------------------------------------------
 
-    pub async fn list_queue(
-        &self,
-        project: &str,
-        offset: u64,
-        limit: u64,
-    ) -> Result<Vec<QueueItemResponse>, CliError> {
+    pub async fn list_queue(&self, project: &str, offset: u64, limit: u64) -> Result<Vec<QueueItemResponse>, CliError> {
         self.get(&format!("/api/projects/{project}/queue?offset={offset}&limit={limit}")).await
     }
 
-    pub async fn enqueue(
-        &self,
-        project: &str,
-        input: &EnqueueInput,
-    ) -> Result<QueueItemResponse, CliError> {
-        self.post(
-            &format!("/api/projects/{project}/queue/enqueue"),
-            input,
-        )
-        .await
+    pub async fn enqueue(&self, project: &str, input: &EnqueueInput) -> Result<QueueItemResponse, CliError> {
+        self.post(&format!("/api/projects/{project}/queue/enqueue"), input).await
     }
 
     pub async fn dequeue(&self, project: &str, item_id: &str) -> Result<(), CliError> {
@@ -470,12 +404,7 @@ impl DaemonAPIClient {
     // Events
     // -----------------------------------------------------------------------
 
-    pub async fn list_events(
-        &self,
-        project: &str,
-        offset: u64,
-        limit: u64,
-    ) -> Result<Vec<EventLogResponse>, CliError> {
+    pub async fn list_events(&self, project: &str, offset: u64, limit: u64) -> Result<Vec<EventLogResponse>, CliError> {
         self.get(&format!("/api/projects/{project}/events?offset={offset}&limit={limit}")).await
     }
 
@@ -523,7 +452,10 @@ impl DaemonAPIClient {
     // Worktree cleanup
     // -----------------------------------------------------------------------
 
-    pub async fn worktree_cleanup(&self, input: &crate::commands::worktree::WorktreeCleanupInput) -> Result<crate::commands::worktree::WorktreeCleanupResult, CliError> {
+    pub async fn worktree_cleanup(
+        &self,
+        input: &crate::commands::worktree::WorktreeCleanupInput,
+    ) -> Result<crate::commands::worktree::WorktreeCleanupResult, CliError> {
         self.post("/api/worktree/cleanup", input).await
     }
 }
@@ -539,10 +471,7 @@ impl<T> Envelope<T> {
             // API legitimately returns `data: null`. Treat that as success.
             self.data.ok_or_else(|| CliError::api("Internal", "missing data in success response"))
         } else {
-            let info = self.error.unwrap_or(ErrorInfo {
-                code: "Unknown".into(),
-                message: "no error details".into(),
-            });
+            let info = self.error.unwrap_or(ErrorInfo { code: "Unknown".into(), message: "no error details".into() });
             Err(CliError::api(info.code, info.message))
         }
     }
@@ -553,10 +482,7 @@ pub fn into_unit_result(env: Envelope<()>) -> Result<(), CliError> {
     if env.ok {
         Ok(())
     } else {
-        let info = env.error.unwrap_or(ErrorInfo {
-            code: "Unknown".into(),
-            message: "no error details".into(),
-        });
+        let info = env.error.unwrap_or(ErrorInfo { code: "Unknown".into(), message: "no error details".into() });
         Err(CliError::api(info.code, info.message))
     }
 }

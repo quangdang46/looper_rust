@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::EventLogRecord;
+use rusqlite::Connection;
 
 fn scan_event_log_row(row: &rusqlite::Row) -> rusqlite::Result<EventLogRecord> {
     Ok(EventLogRecord {
@@ -60,10 +60,7 @@ impl EventsRepository {
     }
 
     pub fn list(&self, limit: i64) -> Result<Vec<EventLogRecord>> {
-        let sql = format!(
-            "SELECT {} FROM event_logs ORDER BY created_at DESC LIMIT ?1",
-            EV_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM event_logs ORDER BY created_at DESC LIMIT ?1", EV_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![limit], scan_event_log_row)?;
         let mut records = Vec::new();
@@ -74,10 +71,7 @@ impl EventsRepository {
     }
 
     pub fn list_since(&self, since_iso: &str) -> Result<Vec<EventLogRecord>> {
-        let sql = format!(
-            "SELECT {} FROM event_logs WHERE created_at >= ?1 ORDER BY created_at DESC",
-            EV_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM event_logs WHERE created_at >= ?1 ORDER BY created_at DESC", EV_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![since_iso], scan_event_log_row)?;
         let mut records = Vec::new();
@@ -93,8 +87,7 @@ impl EventsRepository {
             EV_COLUMNS
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows =
-            stmt.query_map(rusqlite::params![entity_type, entity_id], scan_event_log_row)?;
+        let rows = stmt.query_map(rusqlite::params![entity_type, entity_id], scan_event_log_row)?;
         let mut records = Vec::new();
         for row in rows {
             records.push(row?);

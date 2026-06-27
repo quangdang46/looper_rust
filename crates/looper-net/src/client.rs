@@ -12,19 +12,11 @@ pub struct NetworkClient {
 
 impl NetworkClient {
     pub fn new(base_url: impl Into<String>) -> Self {
-        NetworkClient {
-            base_url: base_url.into(),
-            token: None,
-            http: HttpClient::new(),
-        }
+        NetworkClient { base_url: base_url.into(), token: None, http: HttpClient::new() }
     }
 
     pub fn with_token(base_url: impl Into<String>, token: impl Into<String>) -> Self {
-        NetworkClient {
-            base_url: base_url.into(),
-            token: Some(token.into()),
-            http: HttpClient::new(),
-        }
+        NetworkClient { base_url: base_url.into(), token: Some(token.into()), http: HttpClient::new() }
     }
 
     pub fn set_token(&mut self, token: impl Into<String>) {
@@ -32,9 +24,7 @@ impl NetworkClient {
     }
 
     fn auth_header(&self) -> Option<(&str, String)> {
-        self.token
-            .as_ref()
-            .map(|t| ("Authorization", format!("Bearer {}", t)))
+        self.token.as_ref().map(|t| ("Authorization", format!("Bearer {}", t)))
     }
 
     async fn post<T: serde::Serialize, R: serde::de::DeserializeOwned>(
@@ -49,18 +39,11 @@ impl NetworkClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let msg = resp
-                .json::<ApiErrorResponse>()
-                .await
-                .map(|e| e.message)
-                .unwrap_or_default();
+            let msg = resp.json::<ApiErrorResponse>().await.map(|e| e.message).unwrap_or_default();
             return Err(match status.as_u16() {
                 401 => NetworkError::Unauthorized(msg),
                 412 => NetworkError::StaleLeaseToken,
-                _ => NetworkError::Api {
-                    status: status.as_u16(),
-                    message: msg,
-                },
+                _ => NetworkError::Api { status: status.as_u16(), message: msg },
             });
         }
         Ok(resp.json::<R>().await?)
@@ -74,17 +57,10 @@ impl NetworkClient {
         let resp = req.send().await?;
         let status = resp.status();
         if !status.is_success() {
-            let msg = resp
-                .json::<ApiErrorResponse>()
-                .await
-                .map(|e| e.message)
-                .unwrap_or_default();
+            let msg = resp.json::<ApiErrorResponse>().await.map(|e| e.message).unwrap_or_default();
             return Err(match status.as_u16() {
                 401 => NetworkError::Unauthorized(msg),
-                _ => NetworkError::Api {
-                    status: status.as_u16(),
-                    message: msg,
-                },
+                _ => NetworkError::Api { status: status.as_u16(), message: msg },
             });
         }
         Ok(resp.json::<R>().await?)
@@ -99,8 +75,7 @@ impl NetworkClient {
     }
 
     pub async fn leave(&self) -> Result<(), NetworkError> {
-        self.post::<_, serde_json::Value>("/v1/leave", &serde_json::json!({}))
-            .await?;
+        self.post::<_, serde_json::Value>("/v1/leave", &serde_json::json!({})).await?;
         Ok(())
     }
 
@@ -108,40 +83,24 @@ impl NetworkClient {
         self.get("/v1/status").await
     }
 
-    pub async fn acquire_lease(
-        &self,
-        req: &CoordinatorLeaseAcquireRequest,
-    ) -> Result<CoordinatorLease, NetworkError> {
+    pub async fn acquire_lease(&self, req: &CoordinatorLeaseAcquireRequest) -> Result<CoordinatorLease, NetworkError> {
         self.post("/v1/coordinator-lease/acquire", req).await
     }
 
-    pub async fn renew_lease(
-        &self,
-        req: &CoordinatorLeaseRenewRequest,
-    ) -> Result<CoordinatorLease, NetworkError> {
+    pub async fn renew_lease(&self, req: &CoordinatorLeaseRenewRequest) -> Result<CoordinatorLease, NetworkError> {
         self.post("/v1/coordinator-lease/renew", req).await
     }
 
-    pub async fn handoff_lease(
-        &self,
-        req: &CoordinatorLeaseHandoffRequest,
-    ) -> Result<CoordinatorLease, NetworkError> {
+    pub async fn handoff_lease(&self, req: &CoordinatorLeaseHandoffRequest) -> Result<CoordinatorLease, NetworkError> {
         self.post("/v1/coordinator-lease/handoff", req).await
     }
 
-    pub async fn expire_lease(
-        &self,
-        req: &FencingTokenRequest,
-    ) -> Result<CoordinatorLease, NetworkError> {
+    pub async fn expire_lease(&self, req: &FencingTokenRequest) -> Result<CoordinatorLease, NetworkError> {
         self.post("/v1/coordinator-lease/expire", req).await
     }
 
-    pub async fn revalidate_lease(
-        &self,
-        req: &CoordinatorLeaseRevalidateRequest,
-    ) -> Result<(), NetworkError> {
-        self.post::<_, serde_json::Value>("/v1/coordinator-lease/revalidate", req)
-            .await?;
+    pub async fn revalidate_lease(&self, req: &CoordinatorLeaseRevalidateRequest) -> Result<(), NetworkError> {
+        self.post::<_, serde_json::Value>("/v1/coordinator-lease/revalidate", req).await?;
         Ok(())
     }
 

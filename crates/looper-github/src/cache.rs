@@ -62,13 +62,7 @@ impl DiscoveryCache {
     /// Stores a PR list in the cache with the given TTL.
     pub fn set_prs(&self, key: String, items: Vec<PullRequestSummary>, ttl: Duration) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.pr_cache.insert(
-                key,
-                DiscoveryPullRequestListCacheEntry {
-                    expires_at: Instant::now() + ttl,
-                    items,
-                },
-            );
+            inner.pr_cache.insert(key, DiscoveryPullRequestListCacheEntry { expires_at: Instant::now() + ttl, items });
         }
     }
 
@@ -84,20 +78,11 @@ impl DiscoveryCache {
     }
 
     /// Stores a review-requested PR list in the cache.
-    pub fn set_review_prs(
-        &self,
-        key: String,
-        items: Vec<PullRequestSummary>,
-        ttl: Duration,
-    ) {
+    pub fn set_review_prs(&self, key: String, items: Vec<PullRequestSummary>, ttl: Duration) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.review_pr_cache.insert(
-                key,
-                DiscoveryPullRequestListCacheEntry {
-                    expires_at: Instant::now() + ttl,
-                    items,
-                },
-            );
+            inner
+                .review_pr_cache
+                .insert(key, DiscoveryPullRequestListCacheEntry { expires_at: Instant::now() + ttl, items });
         }
     }
 
@@ -115,13 +100,7 @@ impl DiscoveryCache {
     /// Stores an issue list in the cache.
     pub fn set_issues(&self, key: String, items: Vec<IssueSummary>, ttl: Duration) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.issue_cache.insert(
-                key,
-                DiscoveryIssueListCacheEntry {
-                    expires_at: Instant::now() + ttl,
-                    items,
-                },
-            );
+            inner.issue_cache.insert(key, DiscoveryIssueListCacheEntry { expires_at: Instant::now() + ttl, items });
         }
     }
 }

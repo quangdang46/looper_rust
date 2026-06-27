@@ -119,10 +119,7 @@ mod tests {
 
     #[test]
     fn test_is_exhausted() {
-        let p = RetryPolicy {
-            max_attempts: 3,
-            ..Default::default()
-        };
+        let p = RetryPolicy { max_attempts: 3, ..Default::default() };
         assert!(!p.is_exhausted(0));
         assert!(!p.is_exhausted(1));
         assert!(!p.is_exhausted(2));
@@ -132,10 +129,7 @@ mod tests {
 
     #[test]
     fn test_zero_max_attempts_no_retries() {
-        let p = RetryPolicy {
-            max_attempts: 0,
-            ..Default::default()
-        };
+        let p = RetryPolicy { max_attempts: 0, ..Default::default() };
         assert!(p.is_exhausted(0));
         assert!(p.is_exhausted(1));
     }

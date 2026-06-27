@@ -54,11 +54,7 @@ impl VersionInfo {
         Self {
             version: v.to_string(),
             metadata: VersionMetadata {
-                version_source: if v.contains("dev") {
-                    "dev".into()
-                } else {
-                    "release".into()
-                },
+                version_source: if v.contains("dev") { "dev".into() } else { "release".into() },
                 channel: channel().to_string(),
                 api_version: api_version().to_string(),
                 git_commit_sha: git_commit_sha().to_string(),

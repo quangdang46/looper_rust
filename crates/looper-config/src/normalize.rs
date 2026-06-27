@@ -99,10 +99,7 @@ pub fn normalize(partial: &mut PartialConfig) -> ConfigValidation {
             if let Some(ref mut logging) = partial.logging {
                 if logging.format.is_none() {
                     logging.format = Some(*fmt);
-                    tracing::info!(
-                        "migrated server.log-format ({}) → logging.format",
-                        fmt
-                    );
+                    tracing::info!("migrated server.log-format ({}) → logging.format", fmt);
                 }
             }
         }
@@ -114,10 +111,7 @@ pub fn normalize(partial: &mut PartialConfig) -> ConfigValidation {
             if agent.model.is_none() {
                 // Can't mutate through clone easily — we need to set it
                 // on the actual partial. We handle this below.
-                tracing::info!(
-                    "migrated agent.command ({}) → agent.model",
-                    cmd
-                );
+                tracing::info!("migrated agent.command ({}) → agent.model", cmd);
             }
         }
     }
@@ -156,26 +150,10 @@ fn tools_allow_docker_to_runtime(partial: &mut PartialConfig, _issues: &mut Conf
 /// that should be surfaced to the user.
 pub fn has_deprecated_fields(partial: &PartialConfig) -> bool {
     // Quick check without building the full validation
-    partial
-        .server
-        .as_ref()
-        .and_then(|s| s.log_format)
-        .is_some()
-        || partial
-            .daemon
-            .as_ref()
-            .and_then(|d| d.auto_upgrade)
-            .is_some()
-        || partial
-            .agent
-            .as_ref()
-            .and_then(|a| a.command.as_ref())
-            .is_some()
-        || partial
-            .tools
-            .as_ref()
-            .and_then(|t| t.allow_docker)
-            .is_some()
+    partial.server.as_ref().and_then(|s| s.log_format).is_some()
+        || partial.daemon.as_ref().and_then(|d| d.auto_upgrade).is_some()
+        || partial.agent.as_ref().and_then(|a| a.command.as_ref()).is_some()
+        || partial.tools.as_ref().and_then(|t| t.allow_docker).is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -198,10 +176,7 @@ mod tests {
     #[test]
     fn test_normalize_deprecated_server_log_format_warns() {
         let mut partial = PartialConfig {
-            server: Some(PartialServerConfig {
-                log_format: Some(crate::enums::LogFormat::Json),
-                ..Default::default()
-            }),
+            server: Some(PartialServerConfig { log_format: Some(crate::enums::LogFormat::Json), ..Default::default() }),
             ..Default::default()
         };
         let issues = normalize(&mut partial);
@@ -214,20 +189,14 @@ mod tests {
     #[test]
     fn test_normalize_migrates_server_log_format_to_logging() {
         let mut partial = PartialConfig {
-            server: Some(PartialServerConfig {
-                log_format: Some(crate::enums::LogFormat::Json),
-                ..Default::default()
-            }),
+            server: Some(PartialServerConfig { log_format: Some(crate::enums::LogFormat::Json), ..Default::default() }),
             ..Default::default()
         };
         let _issues = normalize(&mut partial);
 
         // The migration should copy log_format to logging.format
         if let Some(ref logging) = partial.logging {
-            assert_eq!(
-                logging.format,
-                Some(crate::enums::LogFormat::Json)
-            );
+            assert_eq!(logging.format, Some(crate::enums::LogFormat::Json));
         } else {
             panic!("logging config should have been created by migration");
         }
@@ -236,10 +205,7 @@ mod tests {
     #[test]
     fn test_has_deprecated_fields_true() {
         let partial = PartialConfig {
-            server: Some(PartialServerConfig {
-                log_format: Some(crate::enums::LogFormat::Json),
-                ..Default::default()
-            }),
+            server: Some(PartialServerConfig { log_format: Some(crate::enums::LogFormat::Json), ..Default::default() }),
             ..Default::default()
         };
         assert!(has_deprecated_fields(&partial));
@@ -254,10 +220,7 @@ mod tests {
     #[test]
     fn test_normalize_daemon_auto_upgrade_warns() {
         let mut partial = PartialConfig {
-            daemon: Some(PartialDaemonConfig {
-                auto_upgrade: Some(true),
-                ..Default::default()
-            }),
+            daemon: Some(PartialDaemonConfig { auto_upgrade: Some(true), ..Default::default() }),
             ..Default::default()
         };
         let issues = normalize(&mut partial);
@@ -270,20 +233,14 @@ mod tests {
     #[test]
     fn test_normalize_tools_allow_docker_migrates_to_runtime() {
         let mut partial = PartialConfig {
-            tools: Some(PartialToolsConfig {
-                allow_docker: Some(true),
-                ..Default::default()
-            }),
+            tools: Some(PartialToolsConfig { allow_docker: Some(true), ..Default::default() }),
             ..Default::default()
         };
         let _issues = normalize(&mut partial);
 
         // When allow_docker = true, runtime should become Some(Docker)
         if let Some(ref tools) = partial.tools {
-            assert_eq!(
-                tools.runtime,
-                Some(crate::enums::ToolRuntime::Docker)
-            );
+            assert_eq!(tools.runtime, Some(crate::enums::ToolRuntime::Docker));
         } else {
             panic!("tools config should exist");
         }
@@ -292,10 +249,7 @@ mod tests {
     #[test]
     fn test_normalize_tools_allow_docker_false_leaves_runtime() {
         let mut partial = PartialConfig {
-            tools: Some(PartialToolsConfig {
-                allow_docker: Some(false),
-                ..Default::default()
-            }),
+            tools: Some(PartialToolsConfig { allow_docker: Some(false), ..Default::default() }),
             ..Default::default()
         };
         let _issues = normalize(&mut partial);

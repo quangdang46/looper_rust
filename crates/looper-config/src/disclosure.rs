@@ -45,10 +45,7 @@ pub fn generate_stamp(config: &DisclosureConfig) -> Option<DisclosureStamp> {
 
     if config.stamp.include_timestamp {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         parts.push(format!("ts={}", now));
     }
 
@@ -72,8 +69,7 @@ pub fn generate_stamp(config: &DisclosureConfig) -> Option<DisclosureStamp> {
 /// Check whether the given text contains a disclosure stamp.
 pub fn has_stamp(text: &str, config: &DisclosureConfig) -> bool {
     if let Some(stamp) = generate_stamp(config) {
-        text.contains(&stamp.text)
-            || text.contains(&format!("<!-- {}:", config.stamp.prefix))
+        text.contains(&stamp.text) || text.contains(&format!("<!-- {}:", config.stamp.prefix))
     } else {
         false
     }

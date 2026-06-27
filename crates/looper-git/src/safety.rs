@@ -8,9 +8,7 @@ const MAX_SYMLINK_DEPTH: u32 = 255;
 /// The protected list typically includes base branches, main/master, etc.
 pub fn assert_writable_branch(branch: &str, protected_branches: &[String]) -> Result<()> {
     if protected_branches.iter().any(|b| b == branch) {
-        return Err(GitError::ProtectedBranch(ProtectedBranchError {
-            branch: branch.to_string(),
-        }));
+        return Err(GitError::ProtectedBranch(ProtectedBranchError { branch: branch.to_string() }));
     }
     Ok(())
 }
@@ -42,9 +40,7 @@ pub struct SafetyCheckInput {
 pub fn validate_worktree_path(input: &SafetyCheckInput) -> Result<()> {
     // 1. Path must not be empty
     if input.path.is_empty() {
-        return Err(GitError::SafetyCheckFailed {
-            detail: "worktree path is empty".to_string(),
-        });
+        return Err(GitError::SafetyCheckFailed { detail: "worktree path is empty".to_string() });
     }
 
     // 2. Path must not equal repo path
@@ -53,10 +49,7 @@ pub fn validate_worktree_path(input: &SafetyCheckInput) -> Result<()> {
         let wt_canonical = canonicalize_safe(&input.path)?;
         if wt_canonical == repo_canonical {
             return Err(GitError::SafetyCheckFailed {
-                detail: format!(
-                    "worktree path '{}' is the same as repo path '{}'",
-                    input.path, repo_path
-                ),
+                detail: format!("worktree path '{}' is the same as repo path '{}'", input.path, repo_path),
             });
         }
     }
@@ -64,28 +57,20 @@ pub fn validate_worktree_path(input: &SafetyCheckInput) -> Result<()> {
     // 3. Worktree root checks
     if let Some(root) = &input.worktree_root {
         if root.is_empty() {
-            return Err(GitError::SafetyCheckFailed {
-                detail: "worktree root is empty".to_string(),
-            });
+            return Err(GitError::SafetyCheckFailed { detail: "worktree root is empty".to_string() });
         }
         let root_canonical = canonicalize_safe(root)?;
         let wt_canonical = canonicalize_safe(&input.path)?;
 
         if wt_canonical == root_canonical {
             return Err(GitError::SafetyCheckFailed {
-                detail: format!(
-                    "worktree path '{}' is the same as worktree root '{}'",
-                    input.path, root
-                ),
+                detail: format!("worktree path '{}' is the same as worktree root '{}'", input.path, root),
             });
         }
 
         if !wt_canonical.starts_with(&root_canonical) {
             return Err(GitError::SafetyCheckFailed {
-                detail: format!(
-                    "worktree path '{}' is not under worktree root '{}'",
-                    input.path, root
-                ),
+                detail: format!("worktree path '{}' is not under worktree root '{}'", input.path, root),
             });
         }
     }
@@ -115,11 +100,7 @@ fn canonicalize_safe(path: &str) -> Result<String> {
 fn resolve_symlinks(path: &Path, depth: u32) -> Result<std::path::PathBuf> {
     if depth > MAX_SYMLINK_DEPTH {
         return Err(GitError::SafetyCheckFailed {
-            detail: format!(
-                "symlink resolution exceeded max depth ({}) for '{}'",
-                MAX_SYMLINK_DEPTH,
-                path.display()
-            ),
+            detail: format!("symlink resolution exceeded max depth ({}) for '{}'", MAX_SYMLINK_DEPTH, path.display()),
         });
     }
 
@@ -180,11 +161,7 @@ mod tests {
 
     #[test]
     fn test_validate_empty_path() {
-        let input = SafetyCheckInput {
-            path: "".to_string(),
-            repo_path: None,
-            worktree_root: None,
-        };
+        let input = SafetyCheckInput { path: "".to_string(), repo_path: None, worktree_root: None };
         assert!(validate_worktree_path(&input).is_err());
     }
 }

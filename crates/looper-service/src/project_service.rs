@@ -56,18 +56,13 @@ pub struct BranchProtection {
 /// skipped with a warning.  The actual implementations will be wired in
 /// during Phase 5 (looper-github / looper-git).
 pub struct ProjectServiceCallbacks {
-    pub detect_repo:
-        Option<Arc<dyn Fn(&str) -> CallbackResult<Option<String>> + Send + Sync>>,
-    pub list_worktrees:
-        Option<Arc<dyn Fn(&str) -> CallbackResult<Vec<WorktreeEntry>> + Send + Sync>>,
-    pub list_open_pull_requests:
-        Option<Arc<dyn Fn(&str, &str) -> CallbackResult<Vec<PullRequestEntry>> + Send + Sync>>,
+    pub detect_repo: Option<Arc<dyn Fn(&str) -> CallbackResult<Option<String>> + Send + Sync>>,
+    pub list_worktrees: Option<Arc<dyn Fn(&str) -> CallbackResult<Vec<WorktreeEntry>> + Send + Sync>>,
+    pub list_open_pull_requests: Option<Arc<dyn Fn(&str, &str) -> CallbackResult<Vec<PullRequestEntry>> + Send + Sync>>,
     pub capture_pull_request_snapshot:
         Option<Arc<dyn Fn(&str, &str, i64, &str) -> CallbackResult<PullRequestSnapshotRecord> + Send + Sync>>,
-    pub get_repository_settings:
-        Option<Arc<dyn Fn(&str) -> CallbackResult<RepositorySettings> + Send + Sync>>,
-    pub get_branch_protection:
-        Option<Arc<dyn Fn(&str, &str) -> CallbackResult<BranchProtection> + Send + Sync>>,
+    pub get_repository_settings: Option<Arc<dyn Fn(&str) -> CallbackResult<RepositorySettings> + Send + Sync>>,
+    pub get_branch_protection: Option<Arc<dyn Fn(&str, &str) -> CallbackResult<BranchProtection> + Send + Sync>>,
 }
 
 impl ProjectServiceCallbacks {
@@ -101,11 +96,7 @@ impl ProjectService {
     where
         F: Fn() -> DateTime<Utc> + 'static,
     {
-        Self {
-            repos,
-            callbacks,
-            now: Box::new(now),
-        }
+        Self { repos, callbacks, now: Box::new(now) }
     }
 
     // ── AddProject ──────────────────────────────────────────────────────
@@ -123,10 +114,7 @@ impl ProjectService {
 
         if let Some(ref proj) = existing {
             if !proj.archived && input.id_source != "derived" {
-                return Err(ServiceError::ProjectIDCollision(format!(
-                    "project ID '{}' already exists",
-                    input.id,
-                )));
+                return Err(ServiceError::ProjectIDCollision(format!("project ID '{}' already exists", input.id,)));
             }
         }
 
@@ -138,30 +126,20 @@ impl ProjectService {
             let normalized: String = input
                 .id
                 .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
                 .collect();
             // Collapse consecutive dashes
-            let collapsed: String = normalized
-                .chars()
-                .fold(String::new(), |mut acc, c| {
-                    if c == '-' && acc.ends_with('-') {
-                        // skip
-                    } else {
-                        acc.push(c);
-                    }
-                    acc
-                });
+            let collapsed: String = normalized.chars().fold(String::new(), |mut acc, c| {
+                if c == '-' && acc.ends_with('-') {
+                    // skip
+                } else {
+                    acc.push(c);
+                }
+                acc
+            });
             let collapsed = collapsed.trim_matches('-').to_string();
             if collapsed.is_empty() {
-                return Err(ServiceError::InvalidProjectID(
-                    "derived project ID is empty after normalization".into(),
-                ));
+                return Err(ServiceError::InvalidProjectID("derived project ID is empty after normalization".into()));
             }
             collapsed
         } else {
@@ -205,10 +183,7 @@ impl ProjectService {
             base_branch: Some(input.base_branch),
             archived: false,
             metadata_json: Some(metadata.to_string()),
-            created_at: existing
-                .as_ref()
-                .map(|e| e.created_at.clone())
-                .unwrap_or(now_iso.clone()),
+            created_at: existing.as_ref().map(|e| e.created_at.clone()).unwrap_or(now_iso.clone()),
             updated_at: now_iso,
         };
 
@@ -223,8 +198,7 @@ impl ProjectService {
         // ── Phase 4: Discovery ─────────────────────────────────────────
         let snapshot_mode = input.snapshot_mode;
 
-        let discovered_worktrees =
-            self.discover_worktrees_internal(&record, &mut warnings)?;
+        let discovered_worktrees = self.discover_worktrees_internal(&record, &mut warnings)?;
 
         let (discovered_prs, pending_snapshots, captured_snapshots) =
             self.discover_pull_requests_internal(&record, repo.as_deref(), snapshot_mode, &mut warnings)?;
@@ -277,11 +251,7 @@ impl ProjectService {
         }
 
         // 1. Resolve project
-        let project = self
-            .repos
-            .projects
-            .get_by_id(identifier)?
-            .filter(|p| !p.archived);
+        let project = self.repos.projects.get_by_id(identifier)?.filter(|p| !p.archived);
 
         let project = match project {
             Some(p) => p,
@@ -290,19 +260,13 @@ impl ProjectService {
                 let all = self.repos.projects.list()?;
                 let matches: Vec<_> = all
                     .iter()
-                    .filter(|p| {
-                        !p.archived
-                            && p.name.to_lowercase().trim()
-                                == identifier.to_lowercase().trim()
-                    })
+                    .filter(|p| !p.archived && p.name.to_lowercase().trim() == identifier.to_lowercase().trim())
                     .collect();
 
                 if matches.len() == 1 {
                     matches[0].clone()
                 } else if matches.len() > 1 {
-                    return Err(ServiceError::AmbiguousProjectIdentifier(
-                        identifier.to_string(),
-                    ));
+                    return Err(ServiceError::AmbiguousProjectIdentifier(identifier.to_string()));
                 } else {
                     return Err(ServiceError::ProjectNotFound(identifier.to_string()));
                 }
@@ -319,24 +283,17 @@ impl ProjectService {
         }
 
         // 3. Archive project
-        let archived = self
-            .repos
-            .projects
-            .archive(&project.id, &now_iso)?;
+        let archived = self.repos.projects.archive(&project.id, &now_iso)?;
 
         if !archived {
             return Err(ServiceError::ProjectNotFound(project.id.clone()));
         }
 
         // 4. Terminate active loops
-        self.repos
-            .loops
-            .terminate_by_project(&project.id, &now_iso)?;
+        self.repos.loops.terminate_by_project(&project.id, &now_iso)?;
 
         // 5. Cancel queue items
-        self.repos
-            .queue
-            .cancel_by_project(&project.id, &now_iso, Some("project archived"))?;
+        self.repos.queue.cancel_by_project(&project.id, &now_iso, Some("project archived"))?;
 
         let mut archived_project = project;
         archived_project.archived = true;
@@ -372,13 +329,7 @@ impl ProjectService {
             let project_id: String = proj_cfg
                 .name
                 .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() {
-                        c.to_ascii_lowercase()
-                    } else {
-                        '-'
-                    }
-                })
+                .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
                 .collect();
 
             let repo_path = proj_cfg.path.as_deref().unwrap_or(&proj_cfg.name).to_string();
@@ -395,13 +346,8 @@ impl ProjectService {
                         if let Some(ref ex) = existing {
                             ex.metadata_json
                                 .as_ref()
-                                .and_then(|m| {
-                                    serde_json::from_str::<serde_json::Value>(m).ok()
-                                })
-                                .and_then(|v| {
-                                    v.get("repo")
-                                        .and_then(|r| r.as_str().map(String::from))
-                                })
+                                .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+                                .and_then(|v| v.get("repo").and_then(|r| r.as_str().map(String::from)))
                                 .or_else(|| {
                                     warn!(
                                         project_id = %project_id,
@@ -434,10 +380,7 @@ impl ProjectService {
                 base_branch: None, // use None — callers can set it later
                 archived: false,
                 metadata_json: Some(metadata.to_string()),
-                created_at: existing
-                    .as_ref()
-                    .map(|e| e.created_at.clone())
-                    .unwrap_or(now_iso.clone()),
+                created_at: existing.as_ref().map(|e| e.created_at.clone()).unwrap_or(now_iso.clone()),
                 updated_at: now_iso.clone(),
             };
 
@@ -449,11 +392,7 @@ impl ProjectService {
 
     // ── Internal helpers ────────────────────────────────────────────────
 
-    fn discover_worktrees_internal(
-        &self,
-        project: &ProjectRecord,
-        warnings: &mut Vec<String>,
-    ) -> Result<usize> {
+    fn discover_worktrees_internal(&self, project: &ProjectRecord, warnings: &mut Vec<String>) -> Result<usize> {
         let now = (self.now)();
         let now_iso = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
@@ -484,15 +423,10 @@ impl ProjectService {
                 .or_else(|| project.base_branch.clone())
                 .unwrap_or_else(|| entry.branch.clone());
 
-            let head_sha = entry
-                .head_sha
-                .clone()
-                .or_else(|| existing.as_ref().and_then(|w| w.head_sha.clone()));
+            let head_sha = entry.head_sha.clone().or_else(|| existing.as_ref().and_then(|w| w.head_sha.clone()));
 
-            let wt_id = existing
-                .as_ref()
-                .map(|w| w.id.clone())
-                .unwrap_or_else(|| looper_storage::eventlog::new_event_id("wt"));
+            let wt_id =
+                existing.as_ref().map(|w| w.id.clone()).unwrap_or_else(|| looper_storage::eventlog::new_event_id("wt"));
 
             let wt_record = WorktreeRecord {
                 id: wt_id,
@@ -504,10 +438,7 @@ impl ProjectService {
                 status: "active".into(),
                 head_sha,
                 metadata_json: None,
-                created_at: existing
-                    .as_ref()
-                    .map(|w| w.created_at.clone())
-                    .unwrap_or(now_iso.clone()),
+                created_at: existing.as_ref().map(|w| w.created_at.clone()).unwrap_or(now_iso.clone()),
                 updated_at: now_iso.clone(),
                 cleaned_at: None,
             };
@@ -559,10 +490,7 @@ impl ProjectService {
         };
 
         // Filter: non-draft, open
-        let open_prs: Vec<_> = entries
-            .into_iter()
-            .filter(|pr| !pr.draft && pr.state == "open")
-            .collect();
+        let open_prs: Vec<_> = entries.into_iter().filter(|pr| !pr.draft && pr.state == "open").collect();
 
         let discovered = open_prs.len();
         let mut pending = 0usize;
@@ -574,16 +502,11 @@ impl ProjectService {
                     for pr in &open_prs {
                         match snap_fn(&project.id, repo, pr.number, &project.repo_path) {
                             Ok(snapshot) => {
-                                self.repos
-                                    .pull_request_snapshots
-                                    .upsert(&snapshot)?;
+                                self.repos.pull_request_snapshots.upsert(&snapshot)?;
                                 captured += 1;
                             }
                             Err(e) => {
-                                warnings.push(format!(
-                                    "Could not snapshot PR #{}: {e}",
-                                    pr.number
-                                ));
+                                warnings.push(format!("Could not snapshot PR #{}: {e}", pr.number));
                             }
                         }
                     }
@@ -592,8 +515,7 @@ impl ProjectService {
             SnapshotMode::Async => {
                 // Async mode: enqueue snapshot jobs
                 for pr in &open_prs {
-                    let dedupe_key =
-                        format!("snapshot:{}:{}:{}", project.id, repo, pr.number);
+                    let dedupe_key = format!("snapshot:{}:{}:{}", project.id, repo, pr.number);
 
                     // Build queue payload
                     let payload = json!({
@@ -607,34 +529,32 @@ impl ProjectService {
                     let existing_queue = self.repos.queue.find_active_by_dedupe(&dedupe_key)?;
                     if existing_queue.is_none() {
                         pending += 1;
-                        self.repos.queue.create_or_get_active_by_dedupe(
-                            &looper_storage::record::QueueItemRecord {
-                                id: looper_storage::eventlog::new_event_id("q"),
-                                project_id: Some(project.id.clone()),
-                                loop_id: None,
-                                r#type: "snapshot".into(),
-                                target_type: "pull_request".into(),
-                                target_id: pr.number.to_string(),
-                                repo: Some(repo.to_string()),
-                                pr_number: Some(pr.number),
-                                dedupe_key,
-                                priority: 10, // QueuePrioritySnapshot
-                                status: "queued".into(),
-                                available_at: now_iso.clone(),
-                                attempts: 0,
-                                max_attempts: 3,
-                                claimed_by: None,
-                                claimed_at: None,
-                                started_at: None,
-                                finished_at: None,
-                                lock_key: None,
-                                payload_json: Some(payload.to_string()),
-                                last_error: None,
-                                last_error_kind: None,
-                                created_at: now_iso.clone(),
-                                updated_at: now_iso.clone(),
-                            },
-                        )?;
+                        self.repos.queue.create_or_get_active_by_dedupe(&looper_storage::record::QueueItemRecord {
+                            id: looper_storage::eventlog::new_event_id("q"),
+                            project_id: Some(project.id.clone()),
+                            loop_id: None,
+                            r#type: "snapshot".into(),
+                            target_type: "pull_request".into(),
+                            target_id: pr.number.to_string(),
+                            repo: Some(repo.to_string()),
+                            pr_number: Some(pr.number),
+                            dedupe_key,
+                            priority: 10, // QueuePrioritySnapshot
+                            status: "queued".into(),
+                            available_at: now_iso.clone(),
+                            attempts: 0,
+                            max_attempts: 3,
+                            claimed_by: None,
+                            claimed_at: None,
+                            started_at: None,
+                            finished_at: None,
+                            lock_key: None,
+                            payload_json: Some(payload.to_string()),
+                            last_error: None,
+                            last_error_kind: None,
+                            created_at: now_iso.clone(),
+                            updated_at: now_iso.clone(),
+                        })?;
                     }
                 }
             }
@@ -683,24 +603,16 @@ pub struct AddResult {
 
 fn validate_project_id(id: &str) -> Result<()> {
     if id.is_empty() || id == "." || id == ".." {
-        return Err(ServiceError::InvalidProjectID(format!(
-            "invalid project ID: '{id}'"
-        )));
+        return Err(ServiceError::InvalidProjectID(format!("invalid project ID: '{id}'")));
     }
     if id.contains('/') || id.contains('\\') {
-        return Err(ServiceError::InvalidProjectID(format!(
-            "project ID must not contain path separators: '{id}'"
-        )));
+        return Err(ServiceError::InvalidProjectID(format!("project ID must not contain path separators: '{id}'")));
     }
     if id.starts_with('/') || id.starts_with('\\') {
-        return Err(ServiceError::InvalidProjectID(format!(
-            "project ID must not be an absolute path: '{id}'"
-        )));
+        return Err(ServiceError::InvalidProjectID(format!("project ID must not be an absolute path: '{id}'")));
     }
     if id.starts_with("legacy-id-") {
-        return Err(ServiceError::InvalidProjectID(format!(
-            "project ID must not start with 'legacy-id-': '{id}'"
-        )));
+        return Err(ServiceError::InvalidProjectID(format!("project ID must not start with 'legacy-id-': '{id}'")));
     }
     Ok(())
 }
@@ -719,8 +631,7 @@ mod tests {
 
     fn repos_setup() -> Arc<Repositories> {
         let mut conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&mut conn).unwrap();
         Arc::new(Repositories::new(conn))
     }

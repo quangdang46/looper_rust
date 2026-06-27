@@ -47,11 +47,7 @@ impl FakeAgent {
         let root = std::env::temp_dir().join(format!("fake-agent-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create fake-agent root");
         let state_path = root.join("state.json");
-        Self {
-            path: bins.fake_agent_path.clone(),
-            artifact_dir: root,
-            state_path,
-        }
+        Self { path: bins.fake_agent_path.clone(), artifact_dir: root, state_path }
     }
 
     /// Build the triple (vendor, command, env_map) for injecting into a
@@ -69,14 +65,8 @@ impl FakeAgent {
         let vendor = looper_types::AgentVendor::Claude;
         let mut env = HashMap::new();
         env.insert(ENV_FAKE_AGENT_MODE.to_string(), mode.to_string());
-        env.insert(
-            ENV_FAKE_AGENT_ARTIFACT_DIR.to_string(),
-            self.artifact_dir.to_string_lossy().to_string(),
-        );
-        env.insert(
-            ENV_FAKE_AGENT_STATE_PATH.to_string(),
-            self.state_path.to_string_lossy().to_string(),
-        );
+        env.insert(ENV_FAKE_AGENT_ARTIFACT_DIR.to_string(), self.artifact_dir.to_string_lossy().to_string());
+        env.insert(ENV_FAKE_AGENT_STATE_PATH.to_string(), self.state_path.to_string_lossy().to_string());
         if !git_path.is_empty() {
             env.insert(ENV_FAKE_AGENT_GIT_PATH.to_string(), git_path.to_string());
         }

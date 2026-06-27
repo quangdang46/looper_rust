@@ -120,8 +120,10 @@ pub fn parse(diff: &str) -> Index {
             }
 
             // Accumulate excerpt on the RIGHT range (bounded)
-            if !line.starts_with("--- ") && !line.starts_with("+++ ")
-                && !line.starts_with("diff ") && !line.starts_with("index ")
+            if !line.starts_with("--- ")
+                && !line.starts_with("+++ ")
+                && !line.starts_with("diff ")
+                && !line.starts_with("index ")
                 && right.excerpt.len() < 1024
             {
                 if !right.excerpt.is_empty() {
@@ -136,10 +138,7 @@ pub fn parse(diff: &str) -> Index {
     ranges.append(&mut current_hunks);
 
     // Deduplicate — keep only RIGHT-side ranges (simpler validation model)
-    let right_ranges: Vec<Range> = ranges
-        .into_iter()
-        .filter(|r| r.side == SIDE_RIGHT)
-        .collect();
+    let right_ranges: Vec<Range> = ranges.into_iter().filter(|r| r.side == SIDE_RIGHT).collect();
 
     Index { ranges: right_ranges }
 }
@@ -152,10 +151,7 @@ impl Index {
     pub fn format_prompt_section(&self, limit: usize) -> String {
         let mut out = String::from("Diff index:\n");
         for range in &self.ranges {
-            let line = format!(
-                "  {}:{}-{} {}",
-                range.path, range.start, range.end, range.heading
-            );
+            let line = format!("  {}:{}-{} {}", range.path, range.start, range.end, range.heading);
             if out.len() + line.len() + 1 > limit {
                 out.push_str("  ... (truncated)\n");
                 break;
@@ -183,11 +179,7 @@ impl Index {
         if matching.is_empty() {
             return ValidationResult {
                 valid: false,
-                reason: format!(
-                    "path '{}' not found in diff (available: {})",
-                    anchor.path,
-                    self.paths_summary()
-                ),
+                reason: format!("path '{}' not found in diff (available: {})", anchor.path, self.paths_summary()),
                 location_text: fallback_location(anchor),
                 quality_flagged: false,
             };
@@ -216,10 +208,7 @@ impl Index {
             ValidationResult {
                 valid: true,
                 reason: "anchor matches diff location".to_string(),
-                location_text: format!(
-                    "{}:{}-{} [{}]",
-                    anchor.path, range.start, range.end, normalized_side
-                ),
+                location_text: format!("{}:{}-{} [{}]", anchor.path, range.start, range.end, normalized_side),
                 quality_flagged,
             }
         } else {
@@ -232,10 +221,7 @@ impl Index {
 
             ValidationResult {
                 valid: false,
-                reason: format!(
-                    "line {} not in any range for '{}'. {}",
-                    anchor.line, anchor.path, suggestion
-                ),
+                reason: format!("line {} not in any range for '{}'. {}", anchor.line, anchor.path, suggestion),
                 location_text: fallback_location(anchor),
                 quality_flagged: false,
             }
@@ -351,23 +337,13 @@ impl fmt::Display for Anchor {
 
 impl fmt::Display for Range {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{}:{}-{} [{}] {}",
-            self.path, self.start, self.end, self.side, self.heading
-        )
+        write!(f, "{}:{}-{} [{}] {}", self.path, self.start, self.end, self.side, self.heading)
     }
 }
 
 impl fmt::Display for ValidationResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "[{}] {} — {}",
-            if self.valid { "OK" } else { "INVALID" },
-            self.location_text,
-            self.reason
-        )
+        write!(f, "[{}] {} — {}", if self.valid { "OK" } else { "INVALID" }, self.location_text, self.reason)
     }
 }
 
@@ -417,10 +393,7 @@ index abc..def 100644
         // Should have ranges for both hunks
         assert!(!idx.ranges.is_empty(), "expected at least one range");
         // All ranges should be RIGHT side
-        assert!(
-            idx.ranges.iter().all(|r| r.side == SIDE_RIGHT),
-            "all ranges should be RIGHT side"
-        );
+        assert!(idx.ranges.iter().all(|r| r.side == SIDE_RIGHT), "all ranges should be RIGHT side");
         // Path should be src/main.rs
         assert_eq!(idx.ranges[0].path, "src/main.rs");
     }
@@ -451,11 +424,7 @@ index abc..def 100644
             start_side: None,
         };
         let result = idx.validate(&anchor);
-        assert!(
-            result.valid,
-            "expected valid, got: {}",
-            result.reason
-        );
+        assert!(result.valid, "expected valid, got: {}", result.reason);
     }
 
     #[test]
@@ -589,8 +558,7 @@ index abc..def 100644
 
     #[test]
     fn test_hunk_header_parsing() {
-        let (old, new, heading) = parse_hunk_header("@@ -10,7 +12,9 @@ impl App")
-            .expect("should parse hunk header");
+        let (old, new, heading) = parse_hunk_header("@@ -10,7 +12,9 @@ impl App").expect("should parse hunk header");
         assert_eq!(old, 10);
         assert_eq!(new, 12);
         assert_eq!(heading, Some("impl App".to_string()));
@@ -601,14 +569,8 @@ index abc..def 100644
 
     #[test]
     fn test_path_from_header() {
-        assert_eq!(
-            path_from_header("--- a/src/main.rs", "--- "),
-            Some("src/main.rs".to_string())
-        );
-        assert_eq!(
-            path_from_header("+++ b/src/main.rs", "+++ "),
-            Some("src/main.rs".to_string())
-        );
+        assert_eq!(path_from_header("--- a/src/main.rs", "--- "), Some("src/main.rs".to_string()));
+        assert_eq!(path_from_header("+++ b/src/main.rs", "+++ "), Some("src/main.rs".to_string()));
         assert_eq!(path_from_header("--- /dev/null", "--- "), None);
         assert_eq!(path_from_header("--- ", "--- "), None);
     }

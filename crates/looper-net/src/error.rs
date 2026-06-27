@@ -1,4 +1,3 @@
-
 /// Errors originating from the loopernet network layer.
 #[derive(Debug, thiserror::Error)]
 pub enum NetworkError {
@@ -56,10 +55,7 @@ pub enum NetworkError {
 
 impl NetworkError {
     pub fn is_transient(&self) -> bool {
-        matches!(
-            self,
-            NetworkError::Api { status: 500..=599, .. } | NetworkError::Http(_) | NetworkError::Io(_)
-        )
+        matches!(self, NetworkError::Api { status: 500..=599, .. } | NetworkError::Http(_) | NetworkError::Io(_))
     }
 }
 

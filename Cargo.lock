@@ -1231,6 +1231,7 @@ dependencies = [
  "looper-scheduler",
  "looper-service",
  "looper-storage",
+ "nix",
  "rusqlite",
  "serde",
  "serde_json",

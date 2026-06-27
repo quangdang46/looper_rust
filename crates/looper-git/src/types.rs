@@ -39,11 +39,7 @@ pub struct GatewayOptions {
 
 impl Default for GatewayOptions {
     fn default() -> Self {
-        Self {
-            git_path: "git".to_string(),
-            repos: None,
-            now: chrono::Utc::now,
-        }
+        Self { git_path: "git".to_string(), repos: None, now: chrono::Utc::now }
     }
 }
 
@@ -156,15 +152,7 @@ pub struct WorktreeListEntry {
 /// Sanitize a branch name for use as a directory name.
 /// Keeps `[a-zA-Z0-9._-]`, replaces everything else with `-`.
 pub fn sanitize_branch_name(name: &str) -> String {
-    name.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-' { c } else { '-' }).collect()
 }
 
 /// Build the worktree directory name from input.

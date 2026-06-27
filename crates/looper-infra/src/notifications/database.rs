@@ -25,18 +25,13 @@ unsafe impl Sync for DatabaseBackend {}
 
 impl DatabaseBackend {
     pub fn new(event_log: EventLog) -> Self {
-        Self {
-            event_log,
-            lock: Mutex::new(()),
-        }
+        Self { event_log, lock: Mutex::new(()) }
     }
 }
 
 impl Gateway for DatabaseBackend {
     fn send(&self, notification: &Notification) -> Result<(), NotifyError> {
-        let _guard = self.lock.lock().map_err(|e| {
-            NotifyError::EventLog(format!("lock: {e}"))
-        })?;
+        let _guard = self.lock.lock().map_err(|e| NotifyError::EventLog(format!("lock: {e}")))?;
 
         let payload = serde_json::json!({
             "title": notification.title,
@@ -56,9 +51,7 @@ impl Gateway for DatabaseBackend {
             ..AppendInput::new("")
         };
 
-        self.event_log
-            .emit(&input)
-            .map_err(|e| NotifyError::EventLog(e.to_string()))?;
+        self.event_log.emit(&input).map_err(|e| NotifyError::EventLog(e.to_string()))?;
 
         Ok(())
     }

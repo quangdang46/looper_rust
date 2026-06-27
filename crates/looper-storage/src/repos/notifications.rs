@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::NotificationRecord;
+use rusqlite::Connection;
 
 fn scan_notification(row: &rusqlite::Row) -> rusqlite::Result<NotificationRecord> {
     Ok(NotificationRecord {

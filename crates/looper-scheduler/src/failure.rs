@@ -129,9 +129,7 @@ pub fn should_retry_queue_item(item: &QueueItemRecord, kind: &QueueFailureKind) 
     match kind {
         QueueFailureKind::RetryableTransient => true,
         QueueFailureKind::RetryableAfterResume => true,
-        QueueFailureKind::NonRetryable => {
-            item.max_attempts < 0 || item.attempts < item.max_attempts
-        }
+        QueueFailureKind::NonRetryable => item.max_attempts < 0 || item.attempts < item.max_attempts,
         QueueFailureKind::ManualIntervention => false,
     }
 }
@@ -233,32 +231,20 @@ mod tests {
 
     #[test]
     fn test_should_retry_retryable() {
-        let item = QueueItemRecord {
-            max_attempts: 3,
-            attempts: 1,
-            ..create_test_queue_item()
-        };
+        let item = QueueItemRecord { max_attempts: 3, attempts: 1, ..create_test_queue_item() };
         assert!(should_retry_queue_item(&item, &QueueFailureKind::RetryableTransient));
         assert!(should_retry_queue_item(&item, &QueueFailureKind::RetryableAfterResume));
     }
 
     #[test]
     fn test_should_retry_non_retryable_under_max() {
-        let item = QueueItemRecord {
-            max_attempts: 3,
-            attempts: 1,
-            ..create_test_queue_item()
-        };
+        let item = QueueItemRecord { max_attempts: 3, attempts: 1, ..create_test_queue_item() };
         assert!(should_retry_queue_item(&item, &QueueFailureKind::NonRetryable));
     }
 
     #[test]
     fn test_should_retry_non_retryable_at_max() {
-        let item = QueueItemRecord {
-            max_attempts: 3,
-            attempts: 3,
-            ..create_test_queue_item()
-        };
+        let item = QueueItemRecord { max_attempts: 3, attempts: 3, ..create_test_queue_item() };
         assert!(!should_retry_queue_item(&item, &QueueFailureKind::NonRetryable));
     }
 

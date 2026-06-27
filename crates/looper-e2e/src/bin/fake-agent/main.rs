@@ -21,11 +21,10 @@
 
 #[allow(unused_imports)]
 use {
-    anyhow as _, chrono as _, looper_agent as _, looper_config as _, looper_e2e as _,
-    looper_git as _, looper_github as _, looper_runner as _, looper_scheduler as _,
-    looper_service as _, looper_storage as _, looper_types as _, nix as _, regex as _,
-    reqwest as _, serde as _, serde_json as _, tempfile as _, thiserror as _, tokio as _,
-    uuid as _,
+    anyhow as _, chrono as _, looper_agent as _, looper_config as _, looper_e2e as _, looper_git as _,
+    looper_github as _, looper_runner as _, looper_scheduler as _, looper_service as _, looper_storage as _,
+    looper_types as _, nix as _, regex as _, reqwest as _, serde as _, serde_json as _, tempfile as _, thiserror as _,
+    tokio as _, uuid as _,
 };
 
 use std::io::Write;
@@ -34,10 +33,8 @@ use std::process;
 const DEFAULT_MARKER: &str = "__LOOPER_RESULT__=";
 
 fn main() {
-    let mode = std::env::var("LOOPER_E2E_FAKE_AGENT_MODE")
-        .unwrap_or_else(|_| "success-no-diff".to_string());
-    let artifact_dir = std::env::var("LOOPER_E2E_FAKE_AGENT_ARTIFACT_DIR")
-        .unwrap_or_else(|_| ".".to_string());
+    let mode = std::env::var("LOOPER_E2E_FAKE_AGENT_MODE").unwrap_or_else(|_| "success-no-diff".to_string());
+    let artifact_dir = std::env::var("LOOPER_E2E_FAKE_AGENT_ARTIFACT_DIR").unwrap_or_else(|_| ".".to_string());
     let _ = std::fs::create_dir_all(&artifact_dir);
 
     // Write evidence file
@@ -53,11 +50,9 @@ fn main() {
     }
 
     match mode.as_str() {
-        "timeout" => {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(3600));
-            }
-        }
+        "timeout" => loop {
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        },
         "failure" => {
             eprintln!("fake-agent: agent process exited with transient error");
             process::exit(1);
@@ -84,22 +79,14 @@ fn main() {
                 let _ = writeln!(f, "// fake-agent modified this file");
             }
 
-            let marker = std::env::var("LOOPER_COMPLETION_MARKER")
-                .unwrap_or_else(|_| DEFAULT_MARKER.to_string());
+            let marker = std::env::var("LOOPER_COMPLETION_MARKER").unwrap_or_else(|_| DEFAULT_MARKER.to_string());
 
-            println!(
-                "{}fake-agent: mode={} status=success summary=\"completed successfully\"",
-                marker, mode
-            );
+            println!("{}fake-agent: mode={} status=success summary=\"completed successfully\"", marker, mode);
             process::exit(0);
         }
         _ => {
-            let marker = std::env::var("LOOPER_COMPLETION_MARKER")
-                .unwrap_or_else(|_| DEFAULT_MARKER.to_string());
-            println!(
-                "{}fake-agent: mode={} status=success summary=\"completed successfully\"",
-                marker, mode
-            );
+            let marker = std::env::var("LOOPER_COMPLETION_MARKER").unwrap_or_else(|_| DEFAULT_MARKER.to_string());
+            println!("{}fake-agent: mode={} status=success summary=\"completed successfully\"", marker, mode);
             process::exit(0);
         }
     }

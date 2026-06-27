@@ -1,10 +1,6 @@
 //! GitHub Gateway — wraps `gh` CLI commands and the GitHub REST/GraphQL API.
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use serde_json::Value;
 
@@ -21,18 +17,47 @@ const DEFAULT_GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 const PR_DIFF_GH_COMMAND_TIMEOUT: Duration = Duration::from_secs(180);
 const PR_DISCOVERY_CACHE_TTL: Duration = Duration::from_secs(30);
 
-
 const PR_LIST_JSON_FIELDS: &[&str] = &[
-    "number", "title", "url", "state", "updatedAt", "isDraft", "reviewDecision",
-    "labels", "headRefName", "baseRefName", "headRefOid", "baseRefOid",
-    "author", "reviewRequests", "reviews", "mergeStateStatus",
+    "number",
+    "title",
+    "url",
+    "state",
+    "updatedAt",
+    "isDraft",
+    "reviewDecision",
+    "labels",
+    "headRefName",
+    "baseRefName",
+    "headRefOid",
+    "baseRefOid",
+    "author",
+    "reviewRequests",
+    "reviews",
+    "mergeStateStatus",
 ];
 
 const PR_VIEW_JSON_FIELDS: &[&str] = &[
-    "number", "title", "body", "url", "state", "createdAt", "updatedAt",
-    "closedAt", "isDraft", "reviewDecision", "labels", "headRefName", "baseRefName",
-    "headRefOid", "baseRefOid", "author", "reviewRequests", "comments",
-    "reviews", "statusCheckRollup", "mergeStateStatus",
+    "number",
+    "title",
+    "body",
+    "url",
+    "state",
+    "createdAt",
+    "updatedAt",
+    "closedAt",
+    "isDraft",
+    "reviewDecision",
+    "labels",
+    "headRefName",
+    "baseRefName",
+    "headRefOid",
+    "baseRefOid",
+    "author",
+    "reviewRequests",
+    "comments",
+    "reviews",
+    "statusCheckRollup",
+    "mergeStateStatus",
 ];
 
 // ---------------------------------------------------------------------------
@@ -66,8 +91,7 @@ pub struct GatewayOptions {
     /// Custom gh runner. Defaults to spawning the gh binary.
     pub gh_run: Option<Arc<dyn Fn(ShellOptions) -> Result<ShellResult, GitHubError> + Send + Sync>>,
     /// Optional diagnostic callback for review submission.
-    pub review_submit_diagnostic:
-        Option<Arc<dyn Fn(String, HashMap<String, Value>) + Send + Sync>>,
+    pub review_submit_diagnostic: Option<Arc<dyn Fn(String, HashMap<String, Value>) + Send + Sync>>,
 }
 
 impl Default for GatewayOptions {
@@ -92,10 +116,8 @@ pub struct Gateway {
     pub cwd: String,
     pub discovery_cache_ttl: Duration,
     pub discovery_cache: Arc<DiscoveryCache>,
-    gh_run:
-        Arc<dyn Fn(ShellOptions) -> Result<ShellResult, GitHubError> + Send + Sync>,
-    review_submit_diagnostic:
-        Option<Arc<dyn Fn(String, HashMap<String, Value>) + Send + Sync>>,
+    gh_run: Arc<dyn Fn(ShellOptions) -> Result<ShellResult, GitHubError> + Send + Sync>,
+    review_submit_diagnostic: Option<Arc<dyn Fn(String, HashMap<String, Value>) + Send + Sync>>,
 }
 
 impl Gateway {
@@ -106,9 +128,7 @@ impl Gateway {
     pub fn new(options: GatewayOptions) -> Self {
         let gh_run = options.gh_run.unwrap_or_else(|| {
             let gh_path = options.gh_path.clone();
-            Arc::new(move |opts: ShellOptions| -> Result<ShellResult, GitHubError> {
-                run_gh_command(&gh_path, &opts)
-            })
+            Arc::new(move |opts: ShellOptions| -> Result<ShellResult, GitHubError> { run_gh_command(&gh_path, &opts) })
         });
 
         Self {
@@ -138,11 +158,7 @@ impl Gateway {
     ) -> Result<ShellResult, GitHubError> {
         let opts = ShellOptions {
             cwd: cwd.to_string(),
-            stdin: if stdin.is_empty() {
-                None
-            } else {
-                Some(stdin.to_string())
-            },
+            stdin: if stdin.is_empty() { None } else { Some(stdin.to_string()) },
             timeout,
             args: args.iter().map(|s| s.to_string()).collect(),
         };
@@ -163,18 +179,11 @@ impl Gateway {
         &self,
         input: ListOpenPullRequestsInput,
     ) -> Result<Vec<PullRequestSummary>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let limit = default_limit(input.limit);
 
         // Build cache key
-        let cache_key = format!(
-            "{}|{}|{}|{}",
-            input.repo, input.label, input.author, input.base_ref_name
-        );
+        let cache_key = format!("{}|{}|{}|{}", input.repo, input.label, input.author, input.base_ref_name);
 
         // Check cache
         let ttl = input.timeout.unwrap_or(self.discovery_cache_ttl);
@@ -184,18 +193,8 @@ impl Gateway {
 
         let limit_str = limit.to_string();
         let fields_str = PR_LIST_JSON_FIELDS.join(",");
-        let mut args = vec![
-            "pr",
-            "list",
-            "--repo",
-            &input.repo,
-            "--state",
-            "open",
-            "--limit",
-            &limit_str,
-            "--json",
-            &fields_str,
-        ];
+        let mut args =
+            vec!["pr", "list", "--repo", &input.repo, "--state", "open", "--limit", &limit_str, "--json", &fields_str];
 
         if !input.label.is_empty() {
             args.push("--label");
@@ -215,13 +214,10 @@ impl Gateway {
         }
 
         let result = self.run_gh(cwd, "", &args)?;
-        let items: Vec<HashMap<String, Value>> =
-            decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
-        let summaries: Vec<PullRequestSummary> =
-            items.into_iter().map(parse_pr_summary).collect();
+        let items: Vec<HashMap<String, Value>> = decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let summaries: Vec<PullRequestSummary> = items.into_iter().map(parse_pr_summary).collect();
 
-        self.discovery_cache
-            .set_prs(cache_key, summaries.clone(), ttl);
+        self.discovery_cache.set_prs(cache_key, summaries.clone(), ttl);
         Ok(summaries)
     }
 
@@ -229,11 +225,7 @@ impl Gateway {
         &self,
         input: ListReviewRequestedPullRequestsInput,
     ) -> Result<Vec<PullRequestSummary>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let limit = default_limit(input.limit);
         let cache_key = format!("review|{}|{}", input.repo, input.reviewer);
 
@@ -242,42 +234,24 @@ impl Gateway {
             return Ok(cached);
         }
 
-        let query = format!(
-            "repo:{} is:pr is:open review-requested:{}",
-            input.repo, input.reviewer
-        );
+        let query = format!("repo:{} is:pr is:open review-requested:{}", input.repo, input.reviewer);
         let result = self.run_gh_graphql(
             cwd,
             crate::graphql::SEARCH_PRS_BY_REVIEW_REQUESTED_QUERY,
-            &[
-                ("searchQuery", Value::String(query)),
-                ("first", Value::Number(limit.into())),
-            ],
+            &[("searchQuery", Value::String(query)), ("first", Value::Number(limit.into()))],
         )?;
 
         let items = parse_search_pr_nodes(&result)?;
-        let summaries: Vec<PullRequestSummary> =
-            items.into_iter().map(parse_pr_summary).collect();
+        let summaries: Vec<PullRequestSummary> = items.into_iter().map(parse_pr_summary).collect();
 
-        self.discovery_cache
-            .set_review_prs(cache_key, summaries.clone(), ttl);
+        self.discovery_cache.set_review_prs(cache_key, summaries.clone(), ttl);
         Ok(summaries)
     }
 
-    pub fn list_open_issues(
-        &self,
-        input: ListOpenIssuesInput,
-    ) -> Result<Vec<IssueSummary>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_open_issues(&self, input: ListOpenIssuesInput) -> Result<Vec<IssueSummary>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let limit = default_limit(input.limit);
-        let cache_key = format!(
-            "issues|{}|{}|{}",
-            input.repo, input.assignee, input.label
-        );
+        let cache_key = format!("issues|{}|{}|{}", input.repo, input.assignee, input.label);
 
         let ttl = self.discovery_cache_ttl;
         if let Some(cached) = self.discovery_cache.get_issues(&cache_key, ttl) {
@@ -312,12 +286,10 @@ impl Gateway {
         }
 
         let result = self.run_gh(cwd, "", &args)?;
-        let items: Vec<HashMap<String, Value>> =
-            decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let items: Vec<HashMap<String, Value>> = decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
         let summaries: Vec<IssueSummary> = items.into_iter().map(parse_issue_summary).collect();
 
-        self.discovery_cache
-            .set_issues(cache_key, summaries.clone(), ttl);
+        self.discovery_cache.set_issues(cache_key, summaries.clone(), ttl);
         Ok(summaries)
     }
 
@@ -326,23 +298,11 @@ impl Gateway {
     // -----------------------------------------------------------------------
 
     pub fn view_issue(&self, input: ViewIssueInput) -> Result<IssueDetail, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
 
         // Get issue details
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!("repos/{}/issues/{}", input.repo, input.issue_number),
-            ],
-        )?;
-        let issue_data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let result = self.run_gh(cwd, "", &["api", &format!("repos/{}/issues/{}", input.repo, input.issue_number)])?;
+        let issue_data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
 
         // Get comments (paginated)
         let comments = self.list_issue_comments_internal(cwd, &input.repo, input.issue_number)?;
@@ -351,68 +311,35 @@ impl Gateway {
     }
 
     pub fn get_issue_state(&self, input: ViewIssueInput) -> Result<IssueState, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!("repos/{}/issues/{}", input.repo, input.issue_number),
-            ],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let result = self.run_gh(cwd, "", &["api", &format!("repos/{}/issues/{}", input.repo, input.issue_number)])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(IssueState {
             state: data.get("state").map(as_string).unwrap_or_default(),
-            state_reason: data
-                .get("stateReason")
-                .map(as_string)
-                .unwrap_or_default(),
+            state_reason: data.get("stateReason").map(as_string).unwrap_or_default(),
         })
     }
 
-    pub fn list_issue_blocked_by(
-        &self,
-        input: ListIssueBlockedByInput,
-    ) -> Result<Vec<IssueDependency>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_issue_blocked_by(&self, input: ListIssueBlockedByInput) -> Result<Vec<IssueDependency>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
             &[
                 "api",
                 "--paginate",
-                &format!(
-                    "repos/{}/issues/{}/dependencies/blocked_by",
-                    input.repo, input.issue_number
-                ),
+                &format!("repos/{}/issues/{}/dependencies/blocked_by", input.repo, input.issue_number),
             ],
         )?;
-        let items: Vec<HashMap<String, Value>> =
-            decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let items: Vec<HashMap<String, Value>> = decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(items
             .into_iter()
-            .map(|m| IssueDependency {
-                number: m.get("number").map(as_i64).unwrap_or(0),
-                repo: input.repo.clone(),
-            })
+            .map(|m| IssueDependency { number: m.get("number").map(as_i64).unwrap_or(0), repo: input.repo.clone() })
             .collect())
     }
 
     pub fn list_issue_comments(&self, input: ViewIssueInput) -> Result<Vec<CommentInfo>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.list_issue_comments_internal(cwd, &input.repo, input.issue_number)
     }
 
@@ -425,68 +352,31 @@ impl Gateway {
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "api",
-                "--paginate",
-                "--slurp",
-                &format!("repos/{}/issues/{}/comments", repo, issue_number),
-            ],
+            &["api", "--paginate", "--slurp", &format!("repos/{}/issues/{}/comments", repo, issue_number)],
         )?;
         let items: Vec<HashMap<String, Value>> =
             decode_json_array_or_pages(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(items.into_iter().map(|m| parse_comment_info(&m)).collect())
     }
 
-    pub fn list_issue_timeline(
-        &self,
-        input: IssueTimelineInput,
-    ) -> Result<Vec<HashMap<String, Value>>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_issue_timeline(&self, input: IssueTimelineInput) -> Result<Vec<HashMap<String, Value>>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "api",
-                "--paginate",
-                "--slurp",
-                &format!(
-                    "repos/{}/issues/{}/timeline",
-                    input.repo, input.issue_number
-                ),
-            ],
+            &["api", "--paginate", "--slurp", &format!("repos/{}/issues/{}/timeline", input.repo, input.issue_number)],
         )?;
         decode_json_array_or_pages(&result.stdout).map_err(GitHubError::JsonParse)
     }
 
-    pub fn list_issue_reactions(
-        &self,
-        input: IssueReactionInput,
-    ) -> Result<Vec<IssueReaction>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_issue_reactions(&self, input: IssueReactionInput) -> Result<Vec<IssueReaction>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let endpoint = if input.comment_id > 0 {
-            format!(
-                "repos/{}/issues/comments/{}/reactions",
-                input.repo, input.comment_id
-            )
+            format!("repos/{}/issues/comments/{}/reactions", input.repo, input.comment_id)
         } else {
-            format!(
-                "repos/{}/issues/{}/reactions",
-                input.repo, input.issue_number
-            )
+            format!("repos/{}/issues/{}/reactions", input.repo, input.issue_number)
         };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &["api", "--paginate", "--slurp", &endpoint],
-        )?;
+        let result = self.run_gh(cwd, "", &["api", "--paginate", "--slurp", &endpoint])?;
         let items: Vec<HashMap<String, Value>> =
             decode_json_array_or_pages(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(items
@@ -500,21 +390,11 @@ impl Gateway {
     }
 
     pub fn add_issue_reaction(&self, input: CreateIssueReactionInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let endpoint = if input.comment_id > 0 {
-            format!(
-                "repos/{}/issues/comments/{}/reactions",
-                input.repo, input.comment_id
-            )
+            format!("repos/{}/issues/comments/{}/reactions", input.repo, input.comment_id)
         } else {
-            format!(
-                "repos/{}/issues/{}/reactions",
-                input.repo, input.issue_number
-            )
+            format!("repos/{}/issues/{}/reactions", input.repo, input.issue_number)
         };
         self.run_gh(
             cwd,
@@ -537,33 +417,22 @@ impl Gateway {
     // ISSUE COMMENTS & MUTATIONS
     // -----------------------------------------------------------------------
 
-    pub fn create_issue_comment(
-        &self,
-        input: IssueCommentInput,
-    ) -> Result<IssueCommentResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn create_issue_comment(&self, input: IssueCommentInput) -> Result<IssueCommentResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let body_json = serde_json::json!({"body": input.body}).to_string();
         let result = self.run_gh(
             cwd,
             &body_json,
             &[
                 "api",
-                &format!(
-                    "repos/{}/issues/{}/comments",
-                    input.repo, input.issue_number
-                ),
+                &format!("repos/{}/issues/{}/comments", input.repo, input.issue_number),
                 "--method",
                 "POST",
                 "--input",
                 "-",
             ],
         )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(IssueCommentResult {
             id: data.get("id").map(as_i64).unwrap_or(0),
             url: data.get("url").map(as_string).unwrap_or_default(),
@@ -571,11 +440,7 @@ impl Gateway {
     }
 
     pub fn update_issue_comment(&self, input: UpdateIssueCommentInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let body_json = serde_json::json!({"body": input.body}).to_string();
         self.run_gh(
             cwd,
@@ -593,30 +458,17 @@ impl Gateway {
     }
 
     pub fn delete_issue_comment(&self, input: DeleteIssueCommentInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.run_gh(
             cwd,
             "",
-            &[
-                "api",
-                &format!("repos/{}/issues/comments/{}", input.repo, input.comment_id),
-                "--method",
-                "DELETE",
-            ],
+            &["api", &format!("repos/{}/issues/comments/{}", input.repo, input.comment_id), "--method", "DELETE"],
         )?;
         Ok(())
     }
 
     pub fn close_issue(&self, input: CloseIssueInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // Check current state first (idempotent)
         let state_result = self.get_issue_state(ViewIssueInput {
             repo: input.repo.clone(),
@@ -645,21 +497,10 @@ impl Gateway {
     }
 
     pub fn add_issue_assignees(&self, input: IssueAssigneesInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // Build gh api -f assignees[]=<user> per assignee
-        let _assignees: Vec<String> = input
-            .assignees
-            .iter()
-            .map(|a| format!("assignees[]={}", a))
-            .collect();
-        let endpoint = format!(
-            "repos/{}/issues/{}/assignees",
-            input.repo, input.issue_number
-        );
+        let _assignees: Vec<String> = input.assignees.iter().map(|a| format!("assignees[]={}", a)).collect();
+        let endpoint = format!("repos/{}/issues/{}/assignees", input.repo, input.issue_number);
         let mut flag_args: Vec<String> = Vec::new();
         for a in &input.assignees {
             flag_args.push("-f".to_string());
@@ -673,11 +514,7 @@ impl Gateway {
     }
 
     pub fn add_issue_labels(&self, input: IssueLabelsInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // Ensure labels exist first
         let _ = self.ensure_labels_exist(cwd, &input.repo, &input.labels);
         let payload = serde_json::json!({"labels": input.labels}).to_string();
@@ -697,11 +534,7 @@ impl Gateway {
     }
 
     pub fn remove_issue_labels(&self, input: IssueLabelsInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         for label in &input.labels {
             let encoded = encode_uri_component(label);
             let _result = self.run_gh(
@@ -709,10 +542,7 @@ impl Gateway {
                 "",
                 &[
                     "api",
-                    &format!(
-                        "repos/{}/issues/{}/labels/{}",
-                        input.repo, input.issue_number, encoded
-                    ),
+                    &format!("repos/{}/issues/{}/labels/{}", input.repo, input.issue_number, encoded),
                     "--method",
                     "DELETE",
                 ],
@@ -726,103 +556,40 @@ impl Gateway {
     // REPOSITORY INFO
     // -----------------------------------------------------------------------
 
-    pub fn get_repository_permission(
-        &self,
-        input: RepositoryPermissionInput,
-    ) -> Result<String, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!(
-                    "repos/{}/collaborators/{}/permission",
-                    input.repo, input.user
-                ),
-            ],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
-        Ok(data
-            .get("permission")
-            .map(as_string)
-            .unwrap_or_default())
+    pub fn get_repository_permission(&self, input: RepositoryPermissionInput) -> Result<String, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/collaborators/{}/permission", input.repo, input.user)])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        Ok(data.get("permission").map(as_string).unwrap_or_default())
     }
 
-    pub fn get_repository_settings(
-        &self,
-        input: RepositorySettingsInput,
-    ) -> Result<RepositorySettings, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn get_repository_settings(&self, input: RepositorySettingsInput) -> Result<RepositorySettings, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(cwd, "", &["api", &format!("repos/{}", input.repo)])?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(RepositorySettings {
-            allow_squash_merge: as_bool(
-                data.get("allow_squash_merge")
-                    .unwrap_or(&Value::Bool(false)),
-            ),
-            allow_merge_commit: as_bool(
-                data.get("allow_merge_commit")
-                    .unwrap_or(&Value::Bool(false)),
-            ),
-            allow_rebase_merge: as_bool(
-                data.get("allow_rebase_merge")
-                    .unwrap_or(&Value::Bool(false)),
-            ),
-            allow_auto_merge: as_bool(
-                data.get("allow_auto_merge")
-                    .unwrap_or(&Value::Bool(false)),
-            ),
+            allow_squash_merge: as_bool(data.get("allow_squash_merge").unwrap_or(&Value::Bool(false))),
+            allow_merge_commit: as_bool(data.get("allow_merge_commit").unwrap_or(&Value::Bool(false))),
+            allow_rebase_merge: as_bool(data.get("allow_rebase_merge").unwrap_or(&Value::Bool(false))),
+            allow_auto_merge: as_bool(data.get("allow_auto_merge").unwrap_or(&Value::Bool(false))),
         })
     }
 
-    pub fn get_branch_protection(
-        &self,
-        input: BranchProtectionInput,
-    ) -> Result<BranchProtection, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!(
-                    "repos/{}/branches/{}/protection",
-                    input.repo, input.branch
-                ),
-            ],
-        );
+    pub fn get_branch_protection(&self, input: BranchProtectionInput) -> Result<BranchProtection, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/branches/{}/protection", input.repo, input.branch)]);
         match result {
             Ok(res) => {
-                let data: HashMap<String, Value> =
-                    decode_json_object(&res.stdout).map_err(GitHubError::JsonParse)?;
-                let required_checks = if let Some(checks) =
-                    data.get("required_status_checks")
-                {
+                let data: HashMap<String, Value> = decode_json_object(&res.stdout).map_err(GitHubError::JsonParse)?;
+                let required_checks = if let Some(checks) = data.get("required_status_checks") {
                     if let Some(checks_obj) = checks.as_object() {
                         checks_obj
                             .get("contexts")
                             .map(|c| {
                                 c.as_array()
-                                    .map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                            .collect()
-                                    })
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
                                     .unwrap_or_default()
                             })
                             .unwrap_or_default()
@@ -838,11 +605,7 @@ impl Gateway {
                     required_checks,
                 })
             }
-            Err(_) => Ok(BranchProtection {
-                enabled: false,
-                has_required_checks: false,
-                required_checks: vec![],
-            }),
+            Err(_) => Ok(BranchProtection { enabled: false, has_required_checks: false, required_checks: vec![] }),
         }
     }
 
@@ -850,15 +613,8 @@ impl Gateway {
     // PULL REQUESTS — VIEW / DETAIL
     // -----------------------------------------------------------------------
 
-    pub fn view_pull_request(
-        &self,
-        input: ViewPullRequestInput,
-    ) -> Result<PullRequestDetail, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn view_pull_request(&self, input: ViewPullRequestInput) -> Result<PullRequestDetail, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
@@ -872,32 +628,16 @@ impl Gateway {
                 &PR_VIEW_JSON_FIELDS.join(","),
             ],
         )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         parse_pr_detail(&data)
     }
 
     #[allow(clippy::field_reassign_with_default)]
-    pub fn view_pull_request_merge_watch(
-        &self,
-        input: ViewPullRequestInput,
-    ) -> Result<PullRequestDetail, GitHubError> {
+    pub fn view_pull_request_merge_watch(&self, input: ViewPullRequestInput) -> Result<PullRequestDetail, GitHubError> {
         // Use REST API for merge status specifically
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!("repos/{}/pulls/{}", input.repo, input.pr_number),
-            ],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let result = self.run_gh(cwd, "", &["api", &format!("repos/{}/pulls/{}", input.repo, input.pr_number)])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         // Wrap in a detail struct with available data
         let mut detail = PullRequestDetail::default();
         detail.number = data.get("number").map(as_i64).unwrap_or(0);
@@ -905,30 +645,20 @@ impl Gateway {
         detail.body = data.get("body").map(as_string).unwrap_or_default();
         detail.url = data.get("html_url").map(as_string).unwrap_or_default();
         detail.state = data.get("state").map(as_string).unwrap_or_default();
-        detail.mergeable = data
-            .get("mergeable")
-            .and_then(|v| match v {
-                Value::Bool(b) => Some(*b),
-                Value::Null => None,
-                _ => None,
-            });
-        detail.mergeable_state =
-            data.get("mergeable_state").map(as_string).unwrap_or_default();
+        detail.mergeable = data.get("mergeable").and_then(|v| match v {
+            Value::Bool(b) => Some(*b),
+            Value::Null => None,
+            _ => None,
+        });
+        detail.mergeable_state = data.get("mergeable_state").map(as_string).unwrap_or_default();
         detail.merged_at = data.get("merged_at").map(as_string).unwrap_or_default();
         detail.head_sha = nested_string(&data, &["head", "sha"]);
         detail.base_sha = nested_string(&data, &["base", "sha"]);
         Ok(detail)
     }
 
-    pub fn get_pull_request_author(
-        &self,
-        input: ViewPullRequestInput,
-    ) -> Result<String, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn get_pull_request_author(&self, input: ViewPullRequestInput) -> Result<String, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
@@ -951,34 +681,16 @@ impl Gateway {
         &self,
         input: ViewPullRequestInput,
     ) -> Result<PullRequestHeadAndAuthor, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "pr",
-                "view",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-                "--json",
-                "headRefOid,author",
-            ],
+            &["pr", "view", &input.pr_number.to_string(), "--repo", &input.repo, "--json", "headRefOid,author"],
         )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(PullRequestHeadAndAuthor {
-            head_sha: data
-                .get("headRefOid")
-                .map(as_string)
-                .unwrap_or_default(),
-            author: extract_author(
-                data.get("author").unwrap_or(&Value::Null),
-            ),
+            head_sha: data.get("headRefOid").map(as_string).unwrap_or_default(),
+            author: extract_author(data.get("author").unwrap_or(&Value::Null)),
         })
     }
 
@@ -986,29 +698,13 @@ impl Gateway {
         &self,
         input: PullRequestCheckRunsInput,
     ) -> Result<PullRequestCheckRuns, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // Get check runs
-        let check_result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!("repos/{}/commits/{}/check-runs", input.repo, input.r#ref),
-            ],
-        );
+        let check_result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/commits/{}/check-runs", input.repo, input.r#ref)]);
         // Get commit status
-        let status_result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!("repos/{}/commits/{}/status", input.repo, input.r#ref),
-            ],
-        );
+        let status_result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/commits/{}/status", input.repo, input.r#ref)]);
 
         let mut check_runs = Vec::new();
         let mut total_count = 0;
@@ -1021,18 +717,9 @@ impl Gateway {
                             .iter()
                             .filter_map(|v| {
                                 v.as_object().map(|m| PullRequestCheckRun {
-                                    name: m
-                                        .get("name")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                    status: m
-                                        .get("status")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                    conclusion: m
-                                        .get("conclusion")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
+                                    name: m.get("name").map(as_string).unwrap_or_default(),
+                                    status: m.get("status").map(as_string).unwrap_or_default(),
+                                    conclusion: m.get("conclusion").map(as_string).unwrap_or_default(),
                                 })
                             })
                             .collect();
@@ -1050,14 +737,8 @@ impl Gateway {
                             .iter()
                             .filter_map(|v| {
                                 v.as_object().map(|m| PullRequestStatus {
-                                    context: m
-                                        .get("context")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                    state: m
-                                        .get("state")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
+                                    context: m.get("context").map(as_string).unwrap_or_default(),
+                                    state: m.get("state").map(as_string).unwrap_or_default(),
                                 })
                             })
                             .collect();
@@ -1066,11 +747,7 @@ impl Gateway {
             }
         }
 
-        Ok(PullRequestCheckRuns {
-            total_count,
-            check_runs,
-            statuses,
-        })
+        Ok(PullRequestCheckRuns { total_count, check_runs, statuses })
     }
 
     // -----------------------------------------------------------------------
@@ -1081,11 +758,7 @@ impl Gateway {
         &self,
         input: LinkedPullRequestsInput,
     ) -> Result<Vec<LinkedPullRequest>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let (owner, name) = split_repo_owner_name(&input.repo);
         let variables = serde_json::json!({
             "owner": owner,
@@ -1119,11 +792,11 @@ impl Gateway {
                                             merged: obj.get("merged").map(as_bool).unwrap_or(false),
                                             merged_at: obj.get("mergedAt").map(as_string).unwrap_or_default(),
                                             merge_commit_sha: obj
-                        .get("mergeCommit")
-                        .and_then(|v| v.as_object())
-                        .and_then(|m| m.get("oid"))
-                        .map(as_string)
-                        .unwrap_or_default(),
+                                                .get("mergeCommit")
+                                                .and_then(|v| v.as_object())
+                                                .and_then(|m| m.get("oid"))
+                                                .map(as_string)
+                                                .unwrap_or_default(),
                                         });
                                     }
                                 }
@@ -1140,42 +813,23 @@ impl Gateway {
         &self,
         input: PullRequestReviewStateInput,
     ) -> Result<PullRequestReviewState, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "pr",
-                "view",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-                "--json",
-                "reviewRequests,reviews",
-            ],
+            &["pr", "view", &input.pr_number.to_string(), "--repo", &input.repo, "--json", "reviewRequests,reviews"],
         )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
 
-        let requested_reviewers = data
-            .get("reviewRequests")
-            .map(extract_review_request_logins)
-            .unwrap_or_default();
+        let requested_reviewers = data.get("reviewRequests").map(extract_review_request_logins).unwrap_or_default();
 
         let reviews_arr = to_object_slice(data.get("reviews").unwrap_or(&Value::Null));
         let mut latest_review: HashMap<String, String> = HashMap::new();
         let mut last_review_at = String::new();
 
         for review in &reviews_arr {
-            if let Some(author) = review
-                .get("author")
-                .and_then(|a| a.as_object())
-                .and_then(|a| a.get("login"))
-                .map(as_string)
+            if let Some(author) =
+                review.get("author").and_then(|a| a.as_object()).and_then(|a| a.get("login")).map(as_string)
             {
                 if let Some(state) = review.get("state").map(as_string) {
                     if !state.is_empty() && state != "PENDING" {
@@ -1189,39 +843,23 @@ impl Gateway {
             }
         }
 
-        Ok(PullRequestReviewState {
-            requested_reviewers,
-            latest_review_per_user: latest_review,
-            last_review_at,
-        })
+        Ok(PullRequestReviewState { requested_reviewers, latest_review_per_user: latest_review, last_review_at })
     }
 
     pub fn close_pull_request(&self, input: ClosePullRequestInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        self.run_gh(
-            cwd,
-            "",
-            &[
-                "pr",
-                "close",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-            ],
-        )?;
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        self.run_gh(cwd, "", &["pr", "close", &input.pr_number.to_string(), "--repo", &input.repo])?;
+        Ok(())
+    }
+
+    pub fn mark_pr_ready(&self, input: MarkPullRequestReadyForReviewInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        self.run_gh(cwd, "", &["pr", "ready", &input.pr_number.to_string(), "--repo", &input.repo])?;
         Ok(())
     }
 
     pub fn enable_auto_merge(&self, input: EnableAutoMergeInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let strategy_flag = match input.strategy.as_str() {
             "squash" => "--squash",
             "merge" => "--merge",
@@ -1246,15 +884,8 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn get_pull_request_head_sha(
-        &self,
-        input: ViewPullRequestInput,
-    ) -> Result<String, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn get_pull_request_head_sha(&self, input: ViewPullRequestInput) -> Result<String, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
@@ -1278,11 +909,7 @@ impl Gateway {
     // -----------------------------------------------------------------------
 
     pub fn resolve_review_thread(&self, input: ResolveReviewThreadInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let variables = serde_json::json!({"threadId": input.thread_id});
         self.run_gh_graphql(
             cwd,
@@ -1292,23 +919,13 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn view_review_thread(
-        &self,
-        input: ViewReviewThreadInput,
-    ) -> Result<ReviewThread, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn view_review_thread(&self, input: ViewReviewThreadInput) -> Result<ReviewThread, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let variables = serde_json::json!({"threadId": input.thread_id, "after": ""});
         let result = self.run_gh_graphql(
             cwd,
             crate::graphql::REVIEW_THREAD_QUERY,
-            &[
-                ("threadId", variables["threadId"].clone()),
-                ("after", Value::Null),
-            ],
+            &[("threadId", variables["threadId"].clone()), ("after", Value::Null)],
         )?;
 
         // Parse the response
@@ -1326,25 +943,11 @@ impl Gateway {
             }
         }
 
-        Ok(ReviewThread {
-            id,
-            is_resolved: false,
-            path: String::new(),
-            line: 0,
-            url: String::new(),
-            comments,
-        })
+        Ok(ReviewThread { id, is_resolved: false, path: String::new(), line: 0, url: String::new(), comments })
     }
 
-    pub fn list_review_threads(
-        &self,
-        input: ListReviewThreadsInput,
-    ) -> Result<Vec<ReviewThread>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_review_threads(&self, input: ListReviewThreadsInput) -> Result<Vec<ReviewThread>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let (owner, name) = split_repo_owner_name(&input.repo);
         let variables = serde_json::json!({
             "owner": owner,
@@ -1376,7 +979,9 @@ impl Gateway {
                                     if let Some(node) = node_val.as_object() {
                                         let mut comments = Vec::new();
                                         if let Some(comments_conn) = node.get("comments") {
-                                            if let Some(comments_nodes) = comments_conn.as_object().and_then(|c| c.get("nodes")) {
+                                            if let Some(comments_nodes) =
+                                                comments_conn.as_object().and_then(|c| c.get("nodes"))
+                                            {
                                                 if let Some(arr) = comments_nodes.as_array() {
                                                     append_review_thread_comment(&mut comments, arr);
                                                 }
@@ -1401,15 +1006,8 @@ impl Gateway {
         Ok(threads)
     }
 
-    pub fn add_review_thread_reply(
-        &self,
-        input: AddReviewThreadReplyInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn add_review_thread_reply(&self, input: AddReviewThreadReplyInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let variables = serde_json::json!({
             "threadId": input.thread_id,
             "body": input.body,
@@ -1417,10 +1015,7 @@ impl Gateway {
         self.run_gh_graphql(
             cwd,
             crate::graphql::ADD_REVIEW_THREAD_REPLY_MUTATION,
-            &[
-                ("threadId", variables["threadId"].clone()),
-                ("body", variables["body"].clone()),
-            ],
+            &[("threadId", variables["threadId"].clone()), ("body", variables["body"].clone())],
         )?;
         Ok(())
     }
@@ -1429,53 +1024,21 @@ impl Gateway {
     // COMPARE / DIFF
     // -----------------------------------------------------------------------
 
-    pub fn compare_commits(
-        &self,
-        input: CompareCommitsInput,
-    ) -> Result<CompareCommitsResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!(
-                    "repos/{}/compare/{}...{}",
-                    input.repo, input.base, input.head
-                ),
-            ],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
-        Ok(CompareCommitsResult {
-            status: data.get("status").map(as_string).unwrap_or_default(),
-        })
+    pub fn compare_commits(&self, input: CompareCommitsInput) -> Result<CompareCommitsResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/compare/{}...{}", input.repo, input.base, input.head)])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        Ok(CompareCommitsResult { status: data.get("status").map(as_string).unwrap_or_default() })
     }
 
-    pub fn get_pull_request_diff(
-        &self,
-        input: GetPullRequestDiffInput,
-    ) -> Result<String, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn get_pull_request_diff(&self, input: GetPullRequestDiffInput) -> Result<String, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh_with_timeout(
             cwd,
             "",
             PR_DIFF_GH_COMMAND_TIMEOUT,
-            &[
-                "pr",
-                "diff",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-            ],
+            &["pr", "diff", &input.pr_number.to_string(), "--repo", &input.repo],
         )?;
         // Check for diff-too-large sentinel
         if result.stdout.is_empty() && !result.stderr.is_empty() {
@@ -1489,38 +1052,19 @@ impl Gateway {
     // -----------------------------------------------------------------------
 
     pub fn submit_review(&self, input: SubmitReviewInput) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
 
         // 1. Build diagnostic request map
         let mut diag_data = HashMap::new();
-        diag_data.insert(
-            "repo".into(),
-            Value::String(input.repo.clone()),
-        );
-        diag_data.insert(
-            "pr_number".into(),
-            Value::Number(input.pr_number.into()),
-        );
-        diag_data.insert(
-            "event".into(),
-            Value::String(input.event.clone()),
-        );
-        diag_data.insert(
-            "commit_id".into(),
-            Value::String(input.commit_id.clone()),
-        );
+        diag_data.insert("repo".into(), Value::String(input.repo.clone()));
+        diag_data.insert("pr_number".into(), Value::Number(input.pr_number.into()));
+        diag_data.insert("event".into(), Value::String(input.event.clone()));
+        diag_data.insert("commit_id".into(), Value::String(input.commit_id.clone()));
         diag_data.insert(
             "body_summary".into(),
             Value::String(review_submit_body_marker_summary(&input.body)["length"].to_string()),
         );
-        diag_data.insert(
-            "comments_count".into(),
-            Value::Number(input.comments.len().into()),
-        );
+        diag_data.insert("comments_count".into(), Value::Number(input.comments.len().into()));
         self.emit_diagnostic("prepared", diag_data);
 
         // 2. Check if we have inline comments
@@ -1530,17 +1074,13 @@ impl Gateway {
         if has_inline_comments || has_commit_id {
             // Use REST API with inline comments
             let request_body = review_submit_request(&input);
-            let payload = serde_json::to_string(&request_body)
-                .map_err(GitHubError::JsonParse)?;
+            let payload = serde_json::to_string(&request_body).map_err(GitHubError::JsonParse)?;
             let result = self.run_gh(
                 cwd,
                 &payload,
                 &[
                     "api",
-                    &format!(
-                        "repos/{}/pulls/{}/reviews",
-                        input.repo, input.pr_number
-                    ),
+                    &format!("repos/{}/pulls/{}/reviews", input.repo, input.pr_number),
                     "--method",
                     "POST",
                     "--input",
@@ -1550,18 +1090,12 @@ impl Gateway {
 
             match result {
                 Ok(_) => {
-                    self.emit_diagnostic(
-                        "submitted",
-                        HashMap::new(),
-                    );
+                    self.emit_diagnostic("submitted", HashMap::new());
                     Ok(())
                 }
                 Err(e) => {
                     let mut err_data = HashMap::new();
-                    err_data.insert(
-                        "error".into(),
-                        Value::String(e.to_string()),
-                    );
+                    err_data.insert("error".into(), Value::String(e.to_string()));
                     self.emit_diagnostic("failed", err_data);
                     Err(e)
                 }
@@ -1580,16 +1114,7 @@ impl Gateway {
                     cwd,
                     &input.body,
                     DEFAULT_GH_COMMAND_TIMEOUT,
-                    &[
-                        "pr",
-                        "review",
-                        &pr_str,
-                        "--repo",
-                        &input.repo,
-                        event_flag,
-                        "--body",
-                        "-",
-                    ],
+                    &["pr", "review", &pr_str, "--repo", &input.repo, event_flag, "--body", "-"],
                 );
                 return match result {
                     Ok(_) => Ok(()),
@@ -1601,14 +1126,7 @@ impl Gateway {
                     }
                 };
             }
-            let args: Vec<&str> = vec![
-                "pr",
-                "review",
-                &pr_str,
-                "--repo",
-                &input.repo,
-                event_flag,
-            ];
+            let args: Vec<&str> = vec!["pr", "review", &pr_str, "--repo", &input.repo, event_flag];
             self.run_gh(cwd, "", &args)?;
             Ok(())
         }
@@ -1618,62 +1136,29 @@ impl Gateway {
     // REVIEW MARKERS / COMMENTS / REACTIONS
     // -----------------------------------------------------------------------
 
-    pub fn add_pull_request_comment(
-        &self,
-        input: PullRequestCommentInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn add_pull_request_comment(&self, input: PullRequestCommentInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.run_gh(
             cwd,
             &input.body,
-            &[
-                "pr",
-                "comment",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-                "--body",
-                "-",
-            ],
+            &["pr", "comment", &input.pr_number.to_string(), "--repo", &input.repo, "--body", "-"],
         )?;
         Ok(())
     }
 
-    pub fn has_review_marker(
-        &self,
-        input: VerifyReviewMarkerInput,
-    ) -> Result<bool, GitHubError> {
+    pub fn has_review_marker(&self, input: VerifyReviewMarkerInput) -> Result<bool, GitHubError> {
         let result = self.find_review_marker(input)?;
         Ok(result.found)
     }
 
-    pub fn find_review_marker(
-        &self,
-        input: VerifyReviewMarkerInput,
-    ) -> Result<ReviewMarkerResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn find_review_marker(&self, input: VerifyReviewMarkerInput) -> Result<ReviewMarkerResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
 
         // Fetch all reviews on this PR
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "api",
-                "--paginate",
-                "--slurp",
-                &format!(
-                    "repos/{}/pulls/{}/reviews",
-                    input.repo, input.pr_number
-                ),
-            ],
+            &["api", "--paginate", "--slurp", &format!("repos/{}/pulls/{}/reviews", input.repo, input.pr_number)],
         )?;
         let reviews: Vec<HashMap<String, Value>> =
             decode_json_array_or_pages(&result.stdout).map_err(GitHubError::JsonParse)?;
@@ -1686,8 +1171,7 @@ impl Gateway {
                 .iter()
                 .filter(|r| {
                     let author = nested_string(r, &["user", "login"]);
-                    normalize_github_login(&author)
-                        == normalize_github_login(&input.author_login)
+                    normalize_github_login(&author) == normalize_github_login(&input.author_login)
                 })
                 .collect()
         };
@@ -1706,11 +1190,7 @@ impl Gateway {
                             c.as_array()
                                 .map(|arr| {
                                     arr.iter()
-                                        .filter_map(|v| {
-                                            v.as_object()
-                                                .and_then(|m| m.get("body"))
-                                                .map(as_string)
-                                        })
+                                        .filter_map(|v| v.as_object().and_then(|m| m.get("body")).map(as_string))
                                         .collect()
                                 })
                                 .unwrap_or_default()
@@ -1722,10 +1202,7 @@ impl Gateway {
                         event,
                         author_login: nested_string(review, &["user", "login"]),
                         body,
-                        review_id: review
-                            .get("id")
-                            .map(as_string)
-                            .unwrap_or_default(),
+                        review_id: review.get("id").map(as_string).unwrap_or_default(),
                         inline_comment_bodies,
                     });
                 }
@@ -1738,19 +1215,14 @@ impl Gateway {
                 let body = review.get("body").map(as_string).unwrap_or_default();
                 let state = review.get("state").map(as_string).unwrap_or_default();
                 let event = review_event_from_state(&state);
-                if review_event_allowed(event, &input.allowed_review_events)
-                    && !body.contains("looper-review:")
-                {
+                if review_event_allowed(event, &input.allowed_review_events) && !body.contains("looper-review:") {
                     return Ok(ReviewMarkerResult {
                         found: true,
                         outcome: "clean".into(),
                         event: event.to_string(),
                         author_login: nested_string(review, &["user", "login"]),
                         body,
-                        review_id: review
-                            .get("id")
-                            .map(as_string)
-                            .unwrap_or_default(),
+                        review_id: review.get("id").map(as_string).unwrap_or_default(),
                         inline_comment_bodies: vec![],
                     });
                 }
@@ -1768,15 +1240,8 @@ impl Gateway {
         })
     }
 
-    pub fn add_pull_request_reaction(
-        &self,
-        input: PullRequestReactionInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn add_pull_request_reaction(&self, input: PullRequestReactionInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.run_gh(
             cwd,
             "",
@@ -1792,30 +1257,13 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn remove_pull_request_reaction(
-        &self,
-        input: PullRequestReactionInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn remove_pull_request_reaction(&self, input: PullRequestReactionInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // List reactions, find matching one for current user, delete it
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                &format!(
-                    "repos/{}/issues/{}/reactions",
-                    input.repo, input.pr_number
-                ),
-            ],
-        );
+        let result =
+            self.run_gh(cwd, "", &["api", &format!("repos/{}/issues/{}/reactions", input.repo, input.pr_number)]);
         if let Ok(res) = result {
-            let items: Vec<HashMap<String, Value>> =
-                decode_json_array(&res.stdout).map_err(GitHubError::JsonParse)?;
+            let items: Vec<HashMap<String, Value>> = decode_json_array(&res.stdout).map_err(GitHubError::JsonParse)?;
             // Get current user
             if let Ok(user) = self.get_current_user_login(cwd) {
                 for item in &items {
@@ -1828,10 +1276,7 @@ impl Gateway {
                                 "",
                                 &[
                                     "api",
-                                    &format!(
-                                        "repos/{}/issues/{}/reactions/{}",
-                                        input.repo, input.pr_number, id
-                                    ),
+                                    &format!("repos/{}/issues/{}/reactions/{}", input.repo, input.pr_number, id),
                                     "--method",
                                     "DELETE",
                                 ],
@@ -1844,15 +1289,8 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn add_pull_request_labels(
-        &self,
-        input: PullRequestLabelsInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn add_pull_request_labels(&self, input: PullRequestLabelsInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // Ensure labels exist first
         let _ = self.ensure_labels_exist(cwd, &input.repo, &input.labels);
         let payload = serde_json::json!({"labels": input.labels}).to_string();
@@ -1871,15 +1309,8 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn remove_pull_request_labels(
-        &self,
-        input: PullRequestLabelsInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn remove_pull_request_labels(&self, input: PullRequestLabelsInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         for label in &input.labels {
             let encoded = encode_uri_component(label);
             let _ = self.run_gh(
@@ -1887,10 +1318,7 @@ impl Gateway {
                 "",
                 &[
                     "api",
-                    &format!(
-                        "repos/{}/issues/{}/labels/{}",
-                        input.repo, input.pr_number, encoded
-                    ),
+                    &format!("repos/{}/issues/{}/labels/{}", input.repo, input.pr_number, encoded),
                     "--method",
                     "DELETE",
                 ],
@@ -1899,19 +1327,9 @@ impl Gateway {
         Ok(())
     }
 
-    pub fn add_pull_request_reviewers(
-        &self,
-        input: PullRequestReviewersInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let endpoint = format!(
-            "repos/{}/pulls/{}/requested_reviewers",
-            input.repo, input.pr_number
-        );
+    pub fn add_pull_request_reviewers(&self, input: PullRequestReviewersInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let endpoint = format!("repos/{}/pulls/{}/requested_reviewers", input.repo, input.pr_number);
         let mut flag_args: Vec<String> = Vec::new();
         for reviewer in &input.reviewers {
             flag_args.push("-f".to_string());
@@ -1928,60 +1346,40 @@ impl Gateway {
     // PR CREATE / UPDATE / COMPARE
     // -----------------------------------------------------------------------
 
-    pub fn create_pull_request(
-        &self,
-        input: CreatePullRequestInput,
-    ) -> Result<CreatePullRequestResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "pr",
-                "create",
-                "--repo",
-                &input.repo,
-                "--head",
-                &input.head_branch,
-                "--base",
-                &input.base_branch,
-                "--title",
-                &input.title,
-                "--body",
-                &input.body,
-            ],
-        )?;
+    pub fn create_pull_request(&self, input: CreatePullRequestInput) -> Result<CreatePullRequestResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
+        let mut args: Vec<String> = vec![
+            "pr".into(),
+            "create".into(),
+            "--repo".into(),
+            input.repo.clone(),
+            "--head".into(),
+            input.head_branch.clone(),
+            "--base".into(),
+            input.base_branch.clone(),
+            "--title".into(),
+            input.title.clone(),
+            "--body".into(),
+            input.body.clone(),
+        ];
+        if input.draft {
+            args.push("--draft".into());
+        }
+        let str_args: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+        let result = self.run_gh(cwd, "", &str_args)?;
         let url = result.stdout.trim().to_string();
         let number = parse_pr_number_from_url(&url);
         Ok(CreatePullRequestResult { number, url })
     }
 
-    pub fn compare_branches(
-        &self,
-        input: CompareBranchesInput,
-    ) -> Result<CompareBranchesResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn compare_branches(&self, input: CompareBranchesInput) -> Result<CompareBranchesResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "api",
-                &format!(
-                    "repos/{}/compare/{}...{}",
-                    input.repo, input.base_branch, input.head_branch
-                ),
-            ],
+            &["api", &format!("repos/{}/compare/{}...{}", input.repo, input.base_branch, input.head_branch)],
         )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(CompareBranchesResult {
             ahead_by: data.get("ahead_by").map(as_i64).unwrap_or(0) as i32,
             behind_by: data.get("behind_by").map(as_i64).unwrap_or(0) as i32,
@@ -1990,52 +1388,22 @@ impl Gateway {
         })
     }
 
-    pub fn update_pull_request_title(
-        &self,
-        input: UpdatePullRequestTitleInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn update_pull_request_title(&self, input: UpdatePullRequestTitleInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.run_gh(
             cwd,
             "",
-            &[
-                "pr",
-                "edit",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-                "--title",
-                &input.title,
-            ],
+            &["pr", "edit", &input.pr_number.to_string(), "--repo", &input.repo, "--title", &input.title],
         )?;
         Ok(())
     }
 
-    pub fn update_pull_request_body(
-        &self,
-        input: UpdatePullRequestBodyInput,
-    ) -> Result<(), GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn update_pull_request_body(&self, input: UpdatePullRequestBodyInput) -> Result<(), GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.run_gh(
             cwd,
             "",
-            &[
-                "pr",
-                "edit",
-                &input.pr_number.to_string(),
-                "--repo",
-                &input.repo,
-                "--body",
-                &input.body,
-            ],
+            &["pr", "edit", &input.pr_number.to_string(), "--repo", &input.repo, "--body", &input.body],
         )?;
         Ok(())
     }
@@ -2062,69 +1430,34 @@ impl Gateway {
             Ok(res) => Ok(res.stdout.trim().to_string()),
             Err(_) => {
                 // Fallback to GraphQL
-                let gql_result = self.run_gh_graphql(
-                    cwd,
-                    crate::graphql::VIEWER_LOGIN_QUERY,
-                    &[],
-                )?;
+                let gql_result = self.run_gh_graphql(cwd, crate::graphql::VIEWER_LOGIN_QUERY, &[])?;
                 if let Some(data) = gql_result.as_object() {
                     if let Some(viewer) = data.get("viewer") {
-                        return Ok(viewer
-                            .as_object()
-                            .and_then(|v| v.get("login"))
-                            .map(as_string)
-                            .unwrap_or_default());
+                        return Ok(viewer.as_object().and_then(|v| v.get("login")).map(as_string).unwrap_or_default());
                     }
                 }
-                Err(GitHubError::Auth(
-                    "could not determine current user".into(),
-                ))
+                Err(GitHubError::Auth("could not determine current user".into()))
             }
         }
     }
 
-    pub fn get_current_user_identity(
-        &self,
-        cwd: &str,
-    ) -> Result<CurrentUserIdentity, GitHubError> {
-        let result = self.run_gh(
-            cwd,
-            "",
-            &[
-                "api",
-                "user",
-                "--jq",
-                "{login: .login, id: .id}",
-            ],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+    pub fn get_current_user_identity(&self, cwd: &str) -> Result<CurrentUserIdentity, GitHubError> {
+        let result = self.run_gh(cwd, "", &["api", "user", "--jq", "{login: .login, id: .id}"])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
         Ok(CurrentUserIdentity {
             login: data.get("login").map(as_string).unwrap_or_default(),
             numeric_id: data.get("id").map(as_i64).unwrap_or(0),
         })
     }
 
-    pub fn get_current_user_login_for_repo(
-        &self,
-        _repo: &str,
-        cwd: &str,
-    ) -> Result<String, GitHubError> {
+    pub fn get_current_user_login_for_repo(&self, _repo: &str, cwd: &str) -> Result<String, GitHubError> {
         self.get_current_user_login(cwd)
     }
 
     pub fn detect_current_repository(&self, cwd: &str) -> Result<String, GitHubError> {
-        let result = self.run_gh(
-            cwd,
-            "",
-            &["repo", "view", "--json", "nameWithOwner,url"],
-        )?;
-        let data: HashMap<String, Value> =
-            decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
-        Ok(data
-            .get("nameWithOwner")
-            .map(as_string)
-            .unwrap_or_default())
+        let result = self.run_gh(cwd, "", &["repo", "view", "--json", "nameWithOwner,url"])?;
+        let data: HashMap<String, Value> = decode_json_object(&result.stdout).map_err(GitHubError::JsonParse)?;
+        Ok(data.get("nameWithOwner").map(as_string).unwrap_or_default())
     }
 
     // -----------------------------------------------------------------------
@@ -2132,41 +1465,20 @@ impl Gateway {
     // -----------------------------------------------------------------------
 
     /// List dependencies where this issue is blocked by.
-    pub fn list_blocked_by_issues(
-        &self,
-        input: ViewIssueInput,
-    ) -> Result<Vec<DependencyIssue>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_blocked_by_issues(&self, input: ViewIssueInput) -> Result<Vec<DependencyIssue>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.list_dependency_issues(cwd, &input.repo, input.issue_number, "blocked_by")
     }
 
     /// List issues that this issue is blocking.
-    pub fn list_blocking_issues(
-        &self,
-        input: ViewIssueInput,
-    ) -> Result<Vec<DependencyIssue>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_blocking_issues(&self, input: ViewIssueInput) -> Result<Vec<DependencyIssue>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.list_dependency_issues(cwd, &input.repo, input.issue_number, "blocking")
     }
 
     /// List sub-issues of this issue.
-    pub fn list_sub_issues(
-        &self,
-        input: ViewIssueInput,
-    ) -> Result<Vec<DependencyIssue>, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn list_sub_issues(&self, input: ViewIssueInput) -> Result<Vec<DependencyIssue>, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         self.list_dependency_issues(cwd, &input.repo, input.issue_number, "sub_issues")
     }
 
@@ -2184,18 +1496,12 @@ impl Gateway {
                 "api",
                 "--paginate",
                 "--slurp",
-                &format!(
-                    "repos/{}/issues/{}/dependencies/{}",
-                    repo, issue_number, dependency_type
-                ),
+                &format!("repos/{}/issues/{}/dependencies/{}", repo, issue_number, dependency_type),
             ],
         )?;
         let items: Vec<HashMap<String, Value>> =
             decode_json_array_or_pages(&result.stdout).map_err(GitHubError::JsonParse)?;
-        Ok(items
-            .into_iter()
-            .map(|m| extract_dependency_issue(&m, repo))
-            .collect())
+        Ok(items.into_iter().map(|m| extract_dependency_issue(&m, repo)).collect())
     }
 
     /// Find any issue number in a repository (skips PRs).
@@ -2203,56 +1509,27 @@ impl Gateway {
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "issue",
-                "list",
-                "--repo",
-                repo,
-                "--state",
-                "open",
-                "--limit",
-                "30",
-                "--json",
-                "number,isPullRequest",
-            ],
+            &["issue", "list", "--repo", repo, "--state", "open", "--limit", "30", "--json", "number,isPullRequest"],
         )?;
-        let items: Vec<HashMap<String, Value>> =
-            decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let items: Vec<HashMap<String, Value>> = decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
         for item in &items {
-            let is_pr = item
-                .get("isPullRequest")
-                .map(as_bool)
-                .unwrap_or(false);
+            let is_pr = item.get("isPullRequest").map(as_bool).unwrap_or(false);
             if !is_pr {
                 return Ok(item.get("number").map(as_i64).unwrap_or(0));
             }
         }
-        Err(GitHubError::Empty(
-            "no issues found in repository".into(),
-        ))
+        Err(GitHubError::Empty("no issues found in repository".into()))
     }
 
     // -----------------------------------------------------------------------
     // LABEL INITIALIZATION
     // -----------------------------------------------------------------------
 
-    pub fn initialize_labels(
-        &self,
-        input: InitializeLabelsInput,
-    ) -> Result<LabelInitResult, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+    pub fn initialize_labels(&self, input: InitializeLabelsInput) -> Result<LabelInitResult, GitHubError> {
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         let standard_labels = crate::types::standard_looper_labels();
         let mut items = Vec::new();
-        let mut summary = LabelInitSummary {
-            created: 0,
-            updated: 0,
-            skipped: 0,
-            failed: 0,
-        };
+        let mut summary = LabelInitSummary { created: 0, updated: 0, skipped: 0, failed: 0 };
 
         // Get existing labels
         let existing = self.list_repository_labels(cwd, &input.repo).ok();
@@ -2325,20 +1602,11 @@ impl Gateway {
                 name: label_def.name.clone(),
                 color: label_def.color.clone(),
                 description: label_def.description.clone(),
-                error: if error.is_empty() {
-                    None
-                } else {
-                    Some(error)
-                },
+                error: if error.is_empty() { None } else { Some(error) },
             });
         }
 
-        Ok(LabelInitResult {
-            repo: input.repo,
-            dry_run: input.dry_run,
-            labels: items,
-            summary,
-        })
+        Ok(LabelInitResult { repo: input.repo, dry_run: input.dry_run, labels: items, summary })
     }
 
     // -----------------------------------------------------------------------
@@ -2349,11 +1617,7 @@ impl Gateway {
         &self,
         input: CapturePullRequestSnapshotInput,
     ) -> Result<PullRequestSnapshotRecord, GitHubError> {
-        let cwd = if input.cwd.is_empty() {
-            &self.cwd
-        } else {
-            &input.cwd
-        };
+        let cwd = if input.cwd.is_empty() { &self.cwd } else { &input.cwd };
         // View PR detail
         let pr = self.view_pull_request(ViewPullRequestInput {
             repo: input.repo.clone(),
@@ -2387,12 +1651,7 @@ impl Gateway {
     // INTERNAL HELPERS
     // -----------------------------------------------------------------------
 
-    fn run_gh_graphql(
-        &self,
-        cwd: &str,
-        query: &str,
-        variables: &[(&str, Value)],
-    ) -> Result<Value, GitHubError> {
+    fn run_gh_graphql(&self, cwd: &str, query: &str, variables: &[(&str, Value)]) -> Result<Value, GitHubError> {
         let query_arg = format!("query={}", query);
         // Build variable args as Strings first to avoid borrow issues
         let mut var_strings: Vec<String> = Vec::new();
@@ -2405,8 +1664,7 @@ impl Gateway {
         let mut args: Vec<&str> = vec!["api", "graphql", "-f", &query_arg];
         args.extend(var_refs);
         let result = self.run_gh(cwd, "", &args)?;
-        let data: Value =
-            serde_json::from_str(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let data: Value = serde_json::from_str(&result.stdout).map_err(GitHubError::JsonParse)?;
         // Extract data from {"data": {...}} response
         if let Some(obj) = data.as_object() {
             if let Some(data_obj) = obj.get("data") {
@@ -2426,19 +1684,11 @@ impl Gateway {
         Ok(data)
     }
 
-    fn ensure_labels_exist(
-        &self,
-        cwd: &str,
-        repo: &str,
-        labels: &[String],
-    ) -> Result<(), GitHubError> {
+    fn ensure_labels_exist(&self, cwd: &str, repo: &str, labels: &[String]) -> Result<(), GitHubError> {
         let existing = self.list_repository_labels(cwd, repo).ok();
         for label in labels {
-            let should_create = if let Some(ref existing_labels) = existing {
-                !existing_labels.contains_key(label)
-            } else {
-                true
-            };
+            let should_create =
+                if let Some(ref existing_labels) = existing { !existing_labels.contains_key(label) } else { true };
             if should_create {
                 let color = resolve_label_color(label);
                 let description = resolve_label_description(label);
@@ -2463,27 +1713,13 @@ impl Gateway {
         Ok(())
     }
 
-    fn list_repository_labels(
-        &self,
-        cwd: &str,
-        repo: &str,
-    ) -> Result<HashMap<String, LabelDefinition>, GitHubError> {
+    fn list_repository_labels(&self, cwd: &str, repo: &str) -> Result<HashMap<String, LabelDefinition>, GitHubError> {
         let result = self.run_gh(
             cwd,
             "",
-            &[
-                "label",
-                "list",
-                "--repo",
-                repo,
-                "--limit",
-                "1000",
-                "--json",
-                "name,color,description",
-            ],
+            &["label", "list", "--repo", repo, "--limit", "1000", "--json", "name,color,description"],
         )?;
-        let items: Vec<HashMap<String, Value>> =
-            decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
+        let items: Vec<HashMap<String, Value>> = decode_json_array(&result.stdout).map_err(GitHubError::JsonParse)?;
         let mut labels = HashMap::new();
         for item in &items {
             let name = item.get("name").map(as_string).unwrap_or_default();
@@ -2493,10 +1729,7 @@ impl Gateway {
                     LabelDefinition {
                         name,
                         color: item.get("color").map(as_string).unwrap_or_default(),
-                        description: item
-                            .get("description")
-                            .map(as_string)
-                            .unwrap_or_default(),
+                        description: item.get("description").map(as_string).unwrap_or_default(),
                     },
                 );
             }
@@ -2521,9 +1754,7 @@ fn run_gh_command(gh_path: &str, opts: &ShellOptions) -> Result<ShellResult, Git
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| {
-        GitHubError::CommandExecution(format!("failed to spawn gh: {}", e))
-    })?;
+    let mut child = cmd.spawn().map_err(|e| GitHubError::CommandExecution(format!("failed to spawn gh: {}", e)))?;
 
     if let Some(ref stdin_data) = opts.stdin {
         if let Some(mut stdin) = child.stdin.take() {
@@ -2532,9 +1763,8 @@ fn run_gh_command(gh_path: &str, opts: &ShellOptions) -> Result<ShellResult, Git
         }
     }
 
-    let output = child.wait_with_output().map_err(|e| {
-        GitHubError::CommandExecution(format!("failed to wait for gh: {}", e))
-    })?;
+    let output =
+        child.wait_with_output().map_err(|e| GitHubError::CommandExecution(format!("failed to wait for gh: {}", e)))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -2543,26 +1773,17 @@ fn run_gh_command(gh_path: &str, opts: &ShellOptions) -> Result<ShellResult, Git
     if !output.status.success() {
         // Check for common transient patterns
         let combined = format!("{} {}", stdout, stderr).to_lowercase();
-        if crate::error::TRANSIENT_PATTERNS
-            .iter()
-            .any(|p| combined.contains(p))
-        {
-            return Err(GitHubError::Transient(TransientError::new(
-                format!("gh command failed: {} (exit: {})", stderr.trim(), exit_code),
-            )));
+        if crate::error::TRANSIENT_PATTERNS.iter().any(|p| combined.contains(p)) {
+            return Err(GitHubError::Transient(TransientError::new(format!(
+                "gh command failed: {} (exit: {})",
+                stderr.trim(),
+                exit_code
+            ))));
         }
-        return Err(GitHubError::CommandFailed(format!(
-            "gh command failed: {} (exit: {})",
-            stderr.trim(),
-            exit_code
-        )));
+        return Err(GitHubError::CommandFailed(format!("gh command failed: {} (exit: {})", stderr.trim(), exit_code)));
     }
 
-    Ok(ShellResult {
-        stdout,
-        stderr,
-        exit_code,
-    })
+    Ok(ShellResult { stdout, stderr, exit_code })
 }
 
 // ---------------------------------------------------------------------------
@@ -2570,11 +1791,7 @@ fn run_gh_command(gh_path: &str, opts: &ShellOptions) -> Result<ShellResult, Git
 // ---------------------------------------------------------------------------
 
 fn parse_pr_summary(data: HashMap<String, Value>) -> PullRequestSummary {
-    let has_conflicts = data
-        .get("mergeStateStatus")
-        .map(as_string)
-        .unwrap_or_default()
-        == "DIRTY";
+    let has_conflicts = data.get("mergeStateStatus").map(as_string).unwrap_or_default() == "DIRTY";
 
     PullRequestSummary {
         number: data.get("number").map(as_i64).unwrap_or(0),
@@ -2583,38 +1800,17 @@ fn parse_pr_summary(data: HashMap<String, Value>) -> PullRequestSummary {
         state: data.get("state").map(as_string).unwrap_or_default(),
         updated_at: data.get("updatedAt").map(as_string).unwrap_or_default(),
         is_draft: data.get("isDraft").map(as_bool).unwrap_or(false),
-        review_decision: data
-            .get("reviewDecision")
-            .map(as_string)
-            .unwrap_or_default(),
+        review_decision: data.get("reviewDecision").map(as_string).unwrap_or_default(),
         labels: data.get("labels").map(extract_label_names).unwrap_or_default(),
-        head_ref_name: data
-            .get("headRefName")
-            .map(as_string)
-            .unwrap_or_default(),
-        base_ref_name: data
-            .get("baseRefName")
-            .map(as_string)
-            .unwrap_or_default(),
-        head_sha: data
-            .get("headRefOid")
-            .map(as_string)
-            .unwrap_or_default(),
-        base_sha: data
-            .get("baseRefOid")
-            .map(as_string)
-            .unwrap_or_default(),
+        head_ref_name: data.get("headRefName").map(as_string).unwrap_or_default(),
+        base_ref_name: data.get("baseRefName").map(as_string).unwrap_or_default(),
+        head_sha: data.get("headRefOid").map(as_string).unwrap_or_default(),
+        base_sha: data.get("baseRefOid").map(as_string).unwrap_or_default(),
         has_conflicts,
         author: extract_author(data.get("author").unwrap_or(&Value::Null)),
         author_association: String::new(),
-        review_requests: data
-            .get("reviewRequests")
-            .map(extract_review_request_logins)
-            .unwrap_or_default(),
-        review_request_users: data
-            .get("reviewRequests")
-            .map(extract_review_request_users)
-            .unwrap_or_default(),
+        review_requests: data.get("reviewRequests").map(extract_review_request_logins).unwrap_or_default(),
+        review_request_users: data.get("reviewRequests").map(extract_review_request_users).unwrap_or_default(),
         reviews: to_object_slice(data.get("reviews").unwrap_or(&Value::Null)),
     }
 }
@@ -2624,25 +1820,12 @@ fn parse_pr_summary(data: HashMap<String, Value>) -> PullRequestSummary {
 // ---------------------------------------------------------------------------
 
 fn parse_pr_detail(data: &HashMap<String, Value>) -> Result<PullRequestDetail, GitHubError> {
-    let has_conflicts = data
-        .get("mergeStateStatus")
-        .map(as_string)
-        .unwrap_or_default()
-        == "DIRTY";
+    let has_conflicts = data.get("mergeStateStatus").map(as_string).unwrap_or_default() == "DIRTY";
 
-    let issue_comments: Vec<HashMap<String, Value>> = data
-        .get("comments")
-        .map(to_object_slice)
-        .unwrap_or_default();
-    let comment_infos: Vec<CommentInfo> = issue_comments
-        .iter()
-        .map(parse_comment_info)
-        .collect();
+    let issue_comments: Vec<HashMap<String, Value>> = data.get("comments").map(to_object_slice).unwrap_or_default();
+    let comment_infos: Vec<CommentInfo> = issue_comments.iter().map(parse_comment_info).collect();
 
-    let checks: Vec<HashMap<String, Value>> = data
-        .get("statusCheckRollup")
-        .map(to_object_slice)
-        .unwrap_or_default();
+    let checks: Vec<HashMap<String, Value>> = data.get("statusCheckRollup").map(to_object_slice).unwrap_or_default();
 
     Ok(PullRequestDetail {
         number: data.get("number").map(as_i64).unwrap_or(0),
@@ -2654,32 +1837,17 @@ fn parse_pr_detail(data: &HashMap<String, Value>) -> Result<PullRequestDetail, G
         updated_at: data.get("updatedAt").map(as_string).unwrap_or_default(),
         closed_at: data.get("closedAt").map(as_string).unwrap_or_default(),
         is_draft: data.get("isDraft").map(as_bool).unwrap_or(false),
-        review_decision: data
-            .get("reviewDecision")
-            .map(as_string)
-            .unwrap_or_default(),
+        review_decision: data.get("reviewDecision").map(as_string).unwrap_or_default(),
         labels: data.get("labels").map(extract_label_names).unwrap_or_default(),
-        head_ref_name: data
-            .get("headRefName")
-            .map(as_string)
-            .unwrap_or_default(),
-        base_ref_name: data
-            .get("baseRefName")
-            .map(as_string)
-            .unwrap_or_default(),
+        head_ref_name: data.get("headRefName").map(as_string).unwrap_or_default(),
+        base_ref_name: data.get("baseRefName").map(as_string).unwrap_or_default(),
         head_sha: data.get("headRefOid").map(as_string).unwrap_or_default(),
         base_sha: data.get("baseRefOid").map(as_string).unwrap_or_default(),
         author: extract_author(data.get("author").unwrap_or(&Value::Null)),
         author_association: String::new(),
         comment_count: comment_infos.len() as i32,
-        review_requests: data
-            .get("reviewRequests")
-            .map(extract_review_request_logins)
-            .unwrap_or_default(),
-        review_request_users: data
-            .get("reviewRequests")
-            .map(extract_review_request_users)
-            .unwrap_or_default(),
+        review_requests: data.get("reviewRequests").map(extract_review_request_logins).unwrap_or_default(),
+        review_request_users: data.get("reviewRequests").map(extract_review_request_users).unwrap_or_default(),
         has_conflicts,
         comments: to_object_slice(data.get("comments").unwrap_or(&Value::Null)),
         issue_comments: comment_infos,
@@ -2688,9 +1856,7 @@ fn parse_pr_detail(data: &HashMap<String, Value>) -> Result<PullRequestDetail, G
         mergeable: None,
         mergeable_state: String::new(),
         merged_at: data.get("mergedAt").map(as_string).unwrap_or_default(),
-        auto_merge: data
-            .get("autoMerge")
-            .and_then(extract_auto_merge),
+        auto_merge: data.get("autoMerge").and_then(extract_auto_merge),
     })
 }
 
@@ -2708,19 +1874,10 @@ fn parse_issue_summary(data: HashMap<String, Value>) -> IssueSummary {
         updated_at: data.get("updatedAt").map(as_string).unwrap_or_default(),
         author: extract_author(data.get("author").unwrap_or(&Value::Null)),
         author_association: String::new(),
-        assignees: data
-            .get("assignees")
-            .map(extract_actor_logins)
-            .unwrap_or_default(),
-        assignee_users: data
-            .get("assignees")
-            .map(extract_actor_users)
-            .unwrap_or_default(),
+        assignees: data.get("assignees").map(extract_actor_logins).unwrap_or_default(),
+        assignee_users: data.get("assignees").map(extract_actor_users).unwrap_or_default(),
         labels: data.get("labels").map(extract_label_names).unwrap_or_default(),
-        is_pull_request: data
-            .get("isPullRequest")
-            .map(as_bool)
-            .unwrap_or(false),
+        is_pull_request: data.get("isPullRequest").map(as_bool).unwrap_or(false),
     }
 }
 
@@ -2728,28 +1885,19 @@ fn parse_issue_summary(data: HashMap<String, Value>) -> IssueSummary {
 // Issue detail parser
 // ---------------------------------------------------------------------------
 
-fn parse_issue_detail(
-    data: &HashMap<String, Value>,
-    comments: Vec<CommentInfo>,
-) -> IssueDetail {
+fn parse_issue_detail(data: &HashMap<String, Value>, comments: Vec<CommentInfo>) -> IssueDetail {
     IssueDetail {
         number: data.get("number").map(as_i64).unwrap_or(0),
         title: data.get("title").map(as_string).unwrap_or_default(),
         body: data.get("body").map(as_string).unwrap_or_default(),
         url: data.get("html_url").map(as_string).unwrap_or_default(),
         state: data.get("state").map(as_string).unwrap_or_default(),
-        state_reason: data
-            .get("state_reason")
-            .map(as_string)
-            .unwrap_or_default(),
+        state_reason: data.get("state_reason").map(as_string).unwrap_or_default(),
         created_at: data.get("created_at").map(as_string).unwrap_or_default(),
         updated_at: data.get("updated_at").map(as_string).unwrap_or_default(),
         closed_at: data.get("closed_at").map(as_string).unwrap_or_default(),
         author: nested_string(data, &["user", "login"]),
-        author_association: data
-            .get("author_association")
-            .map(as_string)
-            .unwrap_or_default(),
+        author_association: data.get("author_association").map(as_string).unwrap_or_default(),
         assignees: data
             .get("assignees")
             .map(to_object_slice)
@@ -2767,14 +1915,8 @@ fn parse_issue_detail(
                 id: m.get("id").map(as_i64).unwrap_or(0),
             })
             .collect(),
-        labels: data
-            .get("labels")
-            .map(extract_label_names)
-            .unwrap_or_default(),
-        is_pull_request: data
-            .get("pull_request")
-            .map(|v| !v.is_null())
-            .unwrap_or(false),
+        labels: data.get("labels").map(extract_label_names).unwrap_or_default(),
+        is_pull_request: data.get("pull_request").map(|v| !v.is_null()).unwrap_or(false),
         comment_count: comments.len() as i32,
         comments,
     }
@@ -2788,10 +1930,7 @@ fn parse_comment_info(data: &HashMap<String, Value>) -> CommentInfo {
     CommentInfo {
         id: data.get("id").map(as_i64).unwrap_or(0),
         author: nested_string(data, &["user", "login"]),
-        author_association: data
-            .get("author_association")
-            .map(as_string)
-            .unwrap_or_default(),
+        author_association: data.get("author_association").map(as_string).unwrap_or_default(),
         body: data.get("body").map(as_string).unwrap_or_default(),
         created_at: data.get("created_at").map(as_string).unwrap_or_default(),
         updated_at: data.get("updated_at").map(as_string).unwrap_or_default(),
@@ -2814,102 +1953,48 @@ fn parse_search_pr_nodes(result: &Value) -> Result<Vec<HashMap<String, Value>>, 
                             let mut map = HashMap::new();
                             map.insert(
                                 "number".into(),
-                                Value::Number(
-                                    obj.get("number")
-                                        .and_then(|v| v.as_i64())
-                                        .unwrap_or(0).into(),
-                                ),
+                                Value::Number(obj.get("number").and_then(|v| v.as_i64()).unwrap_or(0).into()),
                             );
                             map.insert(
                                 "title".into(),
-                                Value::String(
-                                    obj.get("title")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("title").map(as_string).unwrap_or_default()),
                             );
-                            map.insert(
-                                "url".into(),
-                                Value::String(
-                                    obj.get("url").map(as_string).unwrap_or_default(),
-                                ),
-                            );
+                            map.insert("url".into(), Value::String(obj.get("url").map(as_string).unwrap_or_default()));
                             map.insert(
                                 "state".into(),
-                                Value::String(
-                                    obj.get("state").map(as_string).unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("state").map(as_string).unwrap_or_default()),
                             );
                             map.insert(
                                 "updatedAt".into(),
-                                Value::String(
-                                    obj.get("updatedAt")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("updatedAt").map(as_string).unwrap_or_default()),
                             );
-                            map.insert(
-                                "isDraft".into(),
-                                Value::Bool(
-                                    obj.get("isDraft").map(as_bool).unwrap_or(false),
-                                ),
-                            );
+                            map.insert("isDraft".into(), Value::Bool(obj.get("isDraft").map(as_bool).unwrap_or(false)));
                             map.insert(
                                 "reviewDecision".into(),
-                                Value::String(
-                                    obj.get("reviewDecision")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("reviewDecision").map(as_string).unwrap_or_default()),
                             );
-                            map.insert(
-                                "labels".into(),
-                                obj.get("labels").cloned().unwrap_or(Value::Null),
-                            );
+                            map.insert("labels".into(), obj.get("labels").cloned().unwrap_or(Value::Null));
                             map.insert(
                                 "headRefName".into(),
-                                Value::String(
-                                    obj.get("headRefName")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("headRefName").map(as_string).unwrap_or_default()),
                             );
                             map.insert(
                                 "baseRefName".into(),
-                                Value::String(
-                                    obj.get("baseRefName")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("baseRefName").map(as_string).unwrap_or_default()),
                             );
                             map.insert(
                                 "headRefOid".into(),
-                                Value::String(
-                                    obj.get("headRefOid")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("headRefOid").map(as_string).unwrap_or_default()),
                             );
                             map.insert(
                                 "baseRefOid".into(),
-                                Value::String(
-                                    obj.get("baseRefOid")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("baseRefOid").map(as_string).unwrap_or_default()),
                             );
                             map.insert(
                                 "mergeStateStatus".into(),
-                                Value::String(
-                                    obj.get("mergeStateStatus")
-                                        .map(as_string)
-                                        .unwrap_or_default(),
-                                ),
+                                Value::String(obj.get("mergeStateStatus").map(as_string).unwrap_or_default()),
                             );
-                            map.insert(
-                                "author".into(),
-                                obj.get("author").cloned().unwrap_or(Value::Null),
-                            );
+                            map.insert("author".into(), obj.get("author").cloned().unwrap_or(Value::Null));
                             results.push(map);
                         }
                     }

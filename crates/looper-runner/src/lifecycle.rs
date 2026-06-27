@@ -156,8 +156,8 @@ impl State {
             serde_json::Value::Object(m) => m,
             _ => return Err("expected JSON object".into()),
         };
-        let mut s: State = serde_json::from_value(serde_json::Value::Object(map.clone()))
-            .map_err(|e| format!("deserialize: {e}"))?;
+        let mut s: State =
+            serde_json::from_value(serde_json::Value::Object(map.clone())).map_err(|e| format!("deserialize: {e}"))?;
 
         // Check for camelCase keys that didn't match snake_case fields
         let camel_to_snake = |k: &str| -> String {
@@ -174,23 +174,94 @@ impl State {
         for (key, val) in map {
             let snake = camel_to_snake(key);
             match snake.as_str() {
-                "policy_version" => { if s.policy_version == 0 { s.policy_version = val.as_i64().unwrap_or(0) as i32; } }
-                "base_branch" => { if s.base_branch.is_empty() { s.base_branch = val.as_str().unwrap_or("").to_string(); } }
-                "planned_branch" => { if s.planned_branch.is_empty() { s.planned_branch = val.as_str().unwrap_or("").to_string(); } }
-                "planned_base_branch" => { if s.planned_base_branch.is_empty() { s.planned_base_branch = val.as_str().unwrap_or("").to_string(); } }
-                "agent_branch" => { if s.agent_branch.is_empty() { s.agent_branch = val.as_str().unwrap_or("").to_string(); } }
-                "agent_base_branch" => { if s.agent_base_branch.is_empty() { s.agent_base_branch = val.as_str().unwrap_or("").to_string(); } }
-                "active_branch" => { if s.active_branch.is_empty() { s.active_branch = val.as_str().unwrap_or("").to_string(); } }
-                "active_base_branch" => { if s.active_base_branch.is_empty() { s.active_base_branch = val.as_str().unwrap_or("").to_string(); } }
-                "branch_provenance" => { if s.branch_provenance.is_empty() { s.branch_provenance = val.as_str().unwrap_or("").to_string(); } }
-                "commit_shas" => { if s.commit_shas.is_empty() { s.commit_shas = val.as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default(); } }
-                "pr_number" => { if s.pr_number == 0 { s.pr_number = val.as_i64().unwrap_or(0); } }
-                "pr_url" => { if s.pr_url.is_empty() { s.pr_url = val.as_str().unwrap_or("").to_string(); } }
-                "pr_adopted" => { if !s.pr_adopted { s.pr_adopted = val.as_bool().unwrap_or(false); } }
-                "reconciled_at" => { if s.reconciled_at.is_empty() { s.reconciled_at = val.as_str().unwrap_or("").to_string(); } }
-                "reconciled_by" => { if s.reconciled_by.is_empty() { s.reconciled_by = val.as_str().unwrap_or("").to_string(); } }
-                "last_error" => { if s.last_error.is_empty() { s.last_error = val.as_str().unwrap_or("").to_string(); } }
-                "agent_ingested_at" => { if s.agent_ingested_at.is_empty() { s.agent_ingested_at = val.as_str().unwrap_or("").to_string(); } }
+                "policy_version" => {
+                    if s.policy_version == 0 {
+                        s.policy_version = val.as_i64().unwrap_or(0) as i32;
+                    }
+                }
+                "base_branch" => {
+                    if s.base_branch.is_empty() {
+                        s.base_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "planned_branch" => {
+                    if s.planned_branch.is_empty() {
+                        s.planned_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "planned_base_branch" => {
+                    if s.planned_base_branch.is_empty() {
+                        s.planned_base_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "agent_branch" => {
+                    if s.agent_branch.is_empty() {
+                        s.agent_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "agent_base_branch" => {
+                    if s.agent_base_branch.is_empty() {
+                        s.agent_base_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "active_branch" => {
+                    if s.active_branch.is_empty() {
+                        s.active_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "active_base_branch" => {
+                    if s.active_base_branch.is_empty() {
+                        s.active_base_branch = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "branch_provenance" => {
+                    if s.branch_provenance.is_empty() {
+                        s.branch_provenance = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "commit_shas" => {
+                    if s.commit_shas.is_empty() {
+                        s.commit_shas = val
+                            .as_array()
+                            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                            .unwrap_or_default();
+                    }
+                }
+                "pr_number" => {
+                    if s.pr_number == 0 {
+                        s.pr_number = val.as_i64().unwrap_or(0);
+                    }
+                }
+                "pr_url" => {
+                    if s.pr_url.is_empty() {
+                        s.pr_url = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "pr_adopted" => {
+                    if !s.pr_adopted {
+                        s.pr_adopted = val.as_bool().unwrap_or(false);
+                    }
+                }
+                "reconciled_at" => {
+                    if s.reconciled_at.is_empty() {
+                        s.reconciled_at = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "reconciled_by" => {
+                    if s.reconciled_by.is_empty() {
+                        s.reconciled_by = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "last_error" => {
+                    if s.last_error.is_empty() {
+                        s.last_error = val.as_str().unwrap_or("").to_string();
+                    }
+                }
+                "agent_ingested_at" => {
+                    if s.agent_ingested_at.is_empty() {
+                        s.agent_ingested_at = val.as_str().unwrap_or("").to_string();
+                    }
+                }
                 _ => {}
             }
         }
@@ -234,7 +305,11 @@ pub fn new_state(policy: &Policy, branch: &str, base_branch: &str) -> State {
         active_branch: branch,
         active_base_branch: base_branch,
         branch_provenance: BRANCH_PROVENANCE_PLANNED.into(),
-        actions: Actions { commit: ACTION_SOURCE_NONE.into(), push: ACTION_SOURCE_NONE.into(), pr: ACTION_SOURCE_NONE.into() },
+        actions: Actions {
+            commit: ACTION_SOURCE_NONE.into(),
+            push: ACTION_SOURCE_NONE.into(),
+            pr: ACTION_SOURCE_NONE.into(),
+        },
         ..Default::default()
     }
 }
@@ -406,7 +481,11 @@ impl State {
 // ---------------------------------------------------------------------------
 
 fn action_source_from_bool(done: bool) -> String {
-    if done { ACTION_SOURCE_AGENT.into() } else { ACTION_SOURCE_NONE.into() }
+    if done {
+        ACTION_SOURCE_AGENT.into()
+    } else {
+        ACTION_SOURCE_NONE.into()
+    }
 }
 
 fn source_or(value: &str, fallback: &str) -> String {
@@ -493,7 +572,11 @@ mod tests {
         let agent = State {
             commit_shas: vec!["abc123".into()],
             pushed: true,
-            actions: Actions { commit: ACTION_SOURCE_AGENT.into(), push: ACTION_SOURCE_AGENT.into(), pr: ACTION_SOURCE_NONE.into() },
+            actions: Actions {
+                commit: ACTION_SOURCE_AGENT.into(),
+                push: ACTION_SOURCE_AGENT.into(),
+                pr: ACTION_SOURCE_NONE.into(),
+            },
             ..Default::default()
         };
 
@@ -513,7 +596,11 @@ mod tests {
         let agent = State {
             pushed: true,
             commit_shas: vec!["abc".into()],
-            actions: Actions { commit: ACTION_SOURCE_AGENT.into(), push: ACTION_SOURCE_AGENT.into(), pr: ACTION_SOURCE_NONE.into() },
+            actions: Actions {
+                commit: ACTION_SOURCE_AGENT.into(),
+                push: ACTION_SOURCE_AGENT.into(),
+                pr: ACTION_SOURCE_NONE.into(),
+            },
             ..Default::default()
         };
 

@@ -16,11 +16,7 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
     info!(
         "Applied {} migration(s): {:?}",
         report.applied_migrations().len(),
-        report
-            .applied_migrations()
-            .iter()
-            .map(|m| m.version().to_string())
-            .collect::<Vec<_>>()
+        report.applied_migrations().iter().map(|m| m.version().to_string()).collect::<Vec<_>>()
     );
 
     Ok(())

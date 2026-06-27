@@ -41,11 +41,8 @@ pub struct BuiltBinaries {
 /// # Panics
 /// Panics if any env var is missing or empty.
 pub fn must_binaries() -> BuiltBinaries {
-    let read = |name: &str| -> PathBuf {
-        std::env::var(name)
-            .unwrap_or_else(|_| panic!("{} must be set", name))
-            .into()
-    };
+    let read =
+        |name: &str| -> PathBuf { std::env::var(name).unwrap_or_else(|_| panic!("{} must be set", name)).into() };
 
     BuiltBinaries {
         looper_path: read(ENV_LOOPER_PATH),

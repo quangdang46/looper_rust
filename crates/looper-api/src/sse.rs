@@ -72,10 +72,7 @@ pub fn project_event_stream(
                 });
 
                 let data = serde_json::to_string(&payload).unwrap_or_default();
-                let event = Event::default()
-                    .event("event")
-                    .data(data)
-                    .id(record.id.clone());
+                let event = Event::default().event("event").data(data).id(record.id.clone());
 
                 if tx.send(Ok(event)).is_err() {
                     tracing::debug!("SSE client disconnected, stopping poll");
@@ -87,11 +84,8 @@ pub fn project_event_stream(
         }
     });
 
-    Sse::new(UnboundedReceiverStream::new(rx)).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
-    )
+    Sse::new(UnboundedReceiverStream::new(rx))
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)).text("keep-alive"))
 }
 
 /// Build an SSE event stream for all projects (no filter).
@@ -132,10 +126,7 @@ pub fn global_event_stream(
                 });
 
                 let data = serde_json::to_string(&payload).unwrap_or_default();
-                let event = Event::default()
-                    .event("event")
-                    .data(data)
-                    .id(record.id.clone());
+                let event = Event::default().event("event").data(data).id(record.id.clone());
 
                 if tx.send(Ok(event)).is_err() {
                     tracing::debug!("SSE global client disconnected");
@@ -145,9 +136,6 @@ pub fn global_event_stream(
         }
     });
 
-    Sse::new(UnboundedReceiverStream::new(rx)).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("keep-alive"),
-    )
+    Sse::new(UnboundedReceiverStream::new(rx))
+        .keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)).text("keep-alive"))
 }

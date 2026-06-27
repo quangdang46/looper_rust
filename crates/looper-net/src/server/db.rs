@@ -65,18 +65,13 @@ impl Db {
     pub fn get_meta(&self, key: &str) -> Result<Option<String>, crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare("SELECT value FROM meta WHERE key = ?1")?;
-        let result = stmt
-            .query_row(params![key], |row| row.get::<_, String>(0))
-            .ok();
+        let result = stmt.query_row(params![key], |row| row.get::<_, String>(0)).ok();
         Ok(result)
     }
 
     pub fn set_meta(&self, key: &str, value: &str) -> Result<(), crate::NetworkError> {
         let conn = self.0.lock().unwrap();
-        conn.execute(
-            "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
-            params![key, value],
-        )?;
+        conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)", params![key, value])?;
         Ok(())
     }
 
@@ -85,18 +80,11 @@ impl Db {
     pub fn create_join_key(&self, key: &str) -> Result<(), crate::NetworkError> {
         let now = crate::helpers::now_iso();
         let conn = self.0.lock().unwrap();
-        conn.execute(
-            "INSERT INTO join_keys (join_key, created_at) VALUES (?1, ?2)",
-            params![key, now],
-        )?;
+        conn.execute("INSERT INTO join_keys (join_key, created_at) VALUES (?1, ?2)", params![key, now])?;
         Ok(())
     }
 
-    pub fn consume_join_key(
-        &self,
-        key: &str,
-        node_id: &str,
-    ) -> Result<bool, crate::NetworkError> {
+    pub fn consume_join_key(&self, key: &str, node_id: &str) -> Result<bool, crate::NetworkError> {
         let now = crate::helpers::now_iso();
         let conn = self.0.lock().unwrap();
         let affected = conn.execute(
@@ -152,10 +140,7 @@ impl Db {
         Ok(affected > 0)
     }
 
-    pub fn get_node_by_token(
-        &self,
-        token: &str,
-    ) -> Result<Option<NodeRow>, crate::NetworkError> {
+    pub fn get_node_by_token(&self, token: &str) -> Result<Option<NodeRow>, crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT node_id, node_name, node_token, daemon_version, github_numeric_id, github_login, target_labels, capabilities_json, joined_at, last_heartbeat_at, active FROM nodes WHERE node_token = ?1 AND active = 1",
@@ -178,10 +163,7 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn get_node_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Option<NodeRow>, crate::NetworkError> {
+    pub fn get_node_by_name(&self, name: &str) -> Result<Option<NodeRow>, crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT node_id, node_name, node_token, daemon_version, github_numeric_id, github_login, target_labels, capabilities_json, joined_at, last_heartbeat_at, active FROM nodes WHERE node_name = ?1 AND active = 1",
@@ -204,10 +186,7 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn get_inactive_node_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Option<NodeRow>, crate::NetworkError> {
+    pub fn get_inactive_node_by_name(&self, name: &str) -> Result<Option<NodeRow>, crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT node_id, node_name, node_token, daemon_version, github_numeric_id, github_login, target_labels, capabilities_json, joined_at, last_heartbeat_at, active FROM nodes WHERE node_name = ?1 AND active = 0",
@@ -255,11 +234,7 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn update_heartbeat(
-        &self,
-        node_id: &str,
-        capabilities: &NodeCapabilities,
-    ) -> Result<(), crate::NetworkError> {
+    pub fn update_heartbeat(&self, node_id: &str, capabilities: &NodeCapabilities) -> Result<(), crate::NetworkError> {
         let now = crate::helpers::now_iso();
         let caps_json = serde_json::to_string(capabilities)?;
         let conn = self.0.lock().unwrap();
@@ -270,15 +245,9 @@ impl Db {
         Ok(())
     }
 
-    pub fn deactivate_node(
-        &self,
-        node_id: &str,
-    ) -> Result<(), crate::NetworkError> {
+    pub fn deactivate_node(&self, node_id: &str) -> Result<(), crate::NetworkError> {
         let conn = self.0.lock().unwrap();
-        conn.execute(
-            "UPDATE nodes SET active = 0 WHERE node_id = ?1",
-            params![node_id],
-        )?;
+        conn.execute("UPDATE nodes SET active = 0 WHERE node_id = ?1", params![node_id])?;
         Ok(())
     }
 
@@ -300,11 +269,7 @@ impl Db {
         Ok(rows.next().transpose()?)
     }
 
-    pub fn acquire_lease(
-        &self,
-        holder_node_id: &str,
-        ttl_seconds: u64,
-    ) -> Result<(i64, String), crate::NetworkError> {
+    pub fn acquire_lease(&self, holder_node_id: &str, ttl_seconds: u64) -> Result<(i64, String), crate::NetworkError> {
         let now = crate::helpers::now_iso();
         let expires = crate::helpers::now_plus_seconds(ttl_seconds as i64);
         let conn = self.0.lock().unwrap();
@@ -315,15 +280,12 @@ impl Db {
         )?;
         if affected > 0 {
             // Read back
-            let mut stmt = conn.prepare("SELECT fencing_token, expires_at FROM coordinator_leases WHERE name = 'coordinator'")?;
-            let row = stmt.query_row([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?;
+            let mut stmt =
+                conn.prepare("SELECT fencing_token, expires_at FROM coordinator_leases WHERE name = 'coordinator'")?;
+            let row = stmt.query_row([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))?;
             Ok(row)
         } else {
-            Err(crate::NetworkError::Database(
-                "lease not vacant or expired".to_string(),
-            ))
+            Err(crate::NetworkError::Database("lease not vacant or expired".to_string()))
         }
     }
 
@@ -346,11 +308,7 @@ impl Db {
         }
     }
 
-    pub fn expire_lease(
-        &self,
-        holder_node_id: &str,
-        fencing_token: i64,
-    ) -> Result<(), crate::NetworkError> {
+    pub fn expire_lease(&self, holder_node_id: &str, fencing_token: i64) -> Result<(), crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let affected = conn.execute(
             "UPDATE coordinator_leases SET holder_node_id = NULL, expires_at = NULL WHERE name = 'coordinator' AND holder_node_id = ?1 AND fencing_token = ?2",
@@ -380,16 +338,12 @@ impl Db {
         Ok(())
     }
 
-    pub fn get_duplicate_github_ids(
-        &self,
-    ) -> Result<Vec<i64>, crate::NetworkError> {
+    pub fn get_duplicate_github_ids(&self) -> Result<Vec<i64>, crate::NetworkError> {
         let conn = self.0.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT github_numeric_id FROM nodes WHERE active = 1 AND github_numeric_id > 0 GROUP BY github_numeric_id HAVING COUNT(*) > 1",
         )?;
-        let ids = stmt
-            .query_map([], |row| row.get::<_, i64>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
+        let ids = stmt.query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?;
         Ok(ids)
     }
 }

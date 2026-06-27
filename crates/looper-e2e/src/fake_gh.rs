@@ -68,8 +68,7 @@ impl FakeGH {
         std::fs::create_dir_all(&root).expect("create fake-gh root");
 
         let schema_path = root.join("schema.json");
-        let payload =
-            serde_json::to_string_pretty(&schema).expect("serialise fake-gh schema");
+        let payload = serde_json::to_string_pretty(&schema).expect("serialise fake-gh schema");
         std::fs::write(&schema_path, &payload).expect("write fake-gh schema");
 
         Self {
@@ -92,22 +91,10 @@ impl FakeGH {
             ENV_FAKE_GH_GIT_PATH.to_string(),
             if self.git_path.is_empty() { "git".to_string() } else { self.git_path.clone() },
         );
-        m.insert(
-            ENV_FAKE_GH_ARTIFACT_DIR.to_string(),
-            self.artifact_dir.to_string_lossy().to_string(),
-        );
-        m.insert(
-            ENV_FAKE_GH_SCHEMA_PATH.to_string(),
-            self.schema_path.to_string_lossy().to_string(),
-        );
-        m.insert(
-            ENV_FAKE_GH_STATE_PATH.to_string(),
-            self.state_path.to_string_lossy().to_string(),
-        );
-        m.insert(
-            ENV_FAKE_GH_RECORD_PATH.to_string(),
-            self.record_path.to_string_lossy().to_string(),
-        );
+        m.insert(ENV_FAKE_GH_ARTIFACT_DIR.to_string(), self.artifact_dir.to_string_lossy().to_string());
+        m.insert(ENV_FAKE_GH_SCHEMA_PATH.to_string(), self.schema_path.to_string_lossy().to_string());
+        m.insert(ENV_FAKE_GH_STATE_PATH.to_string(), self.state_path.to_string_lossy().to_string());
+        m.insert(ENV_FAKE_GH_RECORD_PATH.to_string(), self.record_path.to_string_lossy().to_string());
         m
     }
 
@@ -120,8 +107,7 @@ impl FakeGH {
         if let Some(parent) = self.state_path.parent() {
             std::fs::create_dir_all(parent).expect("create fake-gh state dir");
         }
-        let payload =
-            serde_json::to_string_pretty(state).expect("serialise fake-gh state");
+        let payload = serde_json::to_string_pretty(state).expect("serialise fake-gh state");
         std::fs::write(&self.state_path, &payload).expect("write fake-gh state");
     }
 }
@@ -303,7 +289,6 @@ pub struct GHState {
     pub pull_requests: Option<HashMap<String, GHPullRequest>>,
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,9 +325,7 @@ mod tests {
 
     #[test]
     fn test_fake_gh_env_map() {
-        let schema = GHSchema {
-            json_field_allowlist: HashMap::new(),
-        };
+        let schema = GHSchema { json_field_allowlist: HashMap::new() };
         let bins = BuiltBinaries {
             looper_path: "/bin/looper".into(),
             looperd_path: "/bin/looperd".into(),

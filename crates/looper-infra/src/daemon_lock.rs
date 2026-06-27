@@ -53,14 +53,9 @@ impl DaemonLock {
         }
 
         // Open (or create) the PID file
-        let file = File::options()
-            .create(true)
-            .truncate(true)
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| BootError::SetupFailed {
-                detail: format!("cannot open PID file {}: {e}", path.display()),
+        let file =
+            File::options().create(true).truncate(true).read(true).write(true).open(path).map_err(|e| {
+                BootError::SetupFailed { detail: format!("cannot open PID file {}: {e}", path.display()) }
             })?;
 
         // Acquire exclusive flock
@@ -72,13 +67,9 @@ impl DaemonLock {
             if ret != 0 {
                 let err = io::Error::last_os_error();
                 return if err.kind() == io::ErrorKind::WouldBlock {
-                    Err(BootError::AlreadyRunning {
-                        pid_file: path.display().to_string(),
-                    })
+                    Err(BootError::AlreadyRunning { pid_file: path.display().to_string() })
                 } else {
-                    Err(BootError::SetupFailed {
-                        detail: format!("flock error on {}: {err}", path.display()),
-                    })
+                    Err(BootError::SetupFailed { detail: format!("flock error on {}: {err}", path.display()) })
                 };
             }
         }
@@ -86,25 +77,21 @@ impl DaemonLock {
         #[cfg(not(unix))]
         {
             let _ = &file; // suppress unused
-            // On non-Unix platforms, we skip the flock and just create the file.
-            // This is a best-effort lock; the binary is primarily deployed on Unix.
+                           // On non-Unix platforms, we skip the flock and just create the file.
+                           // This is a best-effort lock; the binary is primarily deployed on Unix.
         }
 
         // Write PID
         let pid = std::process::id();
         // Truncate first, then write
         file.set_len(0).ok();
-        writeln!(&file, "{pid}").map_err(|e| BootError::SetupFailed {
-            detail: format!("cannot write PID to {}: {e}", path.display()),
-        })?;
+        writeln!(&file, "{pid}")
+            .map_err(|e| BootError::SetupFailed { detail: format!("cannot write PID to {}: {e}", path.display()) })?;
 
         // Flush to ensure the content is on disk
         file.sync_all().ok();
 
-        Ok(Self {
-            path: path.to_path_buf(),
-            file,
-        })
+        Ok(Self { path: path.to_path_buf(), file })
     }
 }
 
@@ -158,10 +145,7 @@ mod tests {
 
         // Second lock on the same path should fail with AlreadyRunning
         let lock2 = DaemonLock::new(&pid_path);
-        assert!(
-            lock2.is_err(),
-            "concurrent lock acquisition should fail"
-        );
+        assert!(lock2.is_err(), "concurrent lock acquisition should fail");
         match lock2.unwrap_err() {
             BootError::AlreadyRunning { .. } => {} // expected
             other => panic!("expected AlreadyRunning, got: {other:?}"),

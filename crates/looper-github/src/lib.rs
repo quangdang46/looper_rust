@@ -24,21 +24,19 @@ pub mod helpers;
 pub mod types;
 
 pub use error::{error_message, GitHubError, TransientError};
-pub use types::{
-    BranchProtection, CapturePullRequestSnapshotInput, CommentInfo, CompareBranchesInput,
-    CompareBranchesResult, CreatePullRequestInput, CreatePullRequestResult, CurrentUserIdentity,
-    DependencyIssue, EnableAutoMergeInput, GetPullRequestDiffInput, GitHubUser, IssueCommentInput,
-    IssueCommentResult, IssueDependency, IssueDetail, IssueReaction, IssueRepository, IssueState,
-    IssueSummary, LabelDefinition, LabelInitItem, LabelInitResult, LabelInitSummary,
-    LinkedPullRequest, PullRequestAutoMerge, PullRequestCheckRun, PullRequestCheckRuns,
-    PullRequestCheckRunsInput, PullRequestCommentInput, PullRequestDetail, PullRequestHeadAndAuthor,
-    PullRequestLabelsInput, PullRequestReactionInput, PullRequestReviewState,
-    PullRequestReviewersInput, PullRequestSnapshotRecord, PullRequestStatus, PullRequestSummary,
-    RepositorySettings, ReviewComment, ReviewMarkerResult, ReviewThread, ReviewThreadComment,
-    SubmitReviewInput, UpdatePullRequestBodyInput, UpdatePullRequestTitleInput,
-    VerifyReviewMarkerInput, ViewPullRequestInput, standard_looper_labels,
-};
 pub use gateway::Gateway;
+pub use types::{
+    standard_looper_labels, BranchProtection, CapturePullRequestSnapshotInput, CommentInfo, CompareBranchesInput,
+    CompareBranchesResult, CreatePullRequestInput, CreatePullRequestResult, CurrentUserIdentity, DependencyIssue,
+    EnableAutoMergeInput, GetPullRequestDiffInput, GitHubUser, IssueCommentInput, IssueCommentResult, IssueDependency,
+    IssueDetail, IssueReaction, IssueRepository, IssueState, IssueSummary, LabelDefinition, LabelInitItem,
+    LabelInitResult, LabelInitSummary, LinkedPullRequest, PullRequestAutoMerge, PullRequestCheckRun,
+    PullRequestCheckRuns, PullRequestCheckRunsInput, PullRequestCommentInput, PullRequestDetail,
+    PullRequestHeadAndAuthor, PullRequestLabelsInput, PullRequestReactionInput, PullRequestReviewState,
+    PullRequestReviewersInput, PullRequestSnapshotRecord, PullRequestStatus, PullRequestSummary, RepositorySettings,
+    ReviewComment, ReviewMarkerResult, ReviewThread, ReviewThreadComment, SubmitReviewInput,
+    UpdatePullRequestBodyInput, UpdatePullRequestTitleInput, VerifyReviewMarkerInput, ViewPullRequestInput,
+};
 
 #[cfg(test)]
 mod tests;

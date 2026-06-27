@@ -8,14 +8,16 @@
 
 use std::sync::Arc;
 
-use looper_github::types::{ClosePullRequestInput, IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput, ViewPullRequestInput};
-use std::process::Command;
+use looper_github::types::{
+    ClosePullRequestInput, IssueLabelsInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewIssueInput,
+    ViewPullRequestInput,
+};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
-    Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult,
-    CoordinatorScheduler, SchedulerConfig,
+    Context, CoordinatorDiscoveryInput, CoordinatorDiscoveryResult, CoordinatorScheduler, SchedulerConfig,
 };
 use looper_storage::record::QueueItemRecord;
+use std::process::Command;
 
 use crate::types::{DispatchConfig, WatchAction, WatchActionKind};
 
@@ -38,26 +40,13 @@ impl Coordinator {
         github: Option<Arc<looper_github::Gateway>>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
-        Self {
-            config: config.clone(),
-            repos,
-            github,
-            tokio_handle,
-        }
+        Self { config: config.clone(), repos, github, tokio_handle }
     }
 }
 
 impl CoordinatorScheduler for Coordinator {
-    fn discover_issues(
-        &self,
-        ctx: &Context,
-        input: CoordinatorDiscoveryInput,
-    ) -> CoordinatorDiscoveryResult {
-        tracing::debug!(
-            "Coordinator discover_issues — project={}, repo={}",
-            input.project_id,
-            input.repo
-        );
+    fn discover_issues(&self, ctx: &Context, input: CoordinatorDiscoveryInput) -> CoordinatorDiscoveryResult {
+        tracing::debug!("Coordinator discover_issues — project={}, repo={}", input.project_id, input.repo);
 
         if ctx.is_cancelled() {
             return CoordinatorDiscoveryResult::default();
@@ -91,26 +80,62 @@ impl CoordinatorScheduler for Coordinator {
         let project_loops: Vec<_> = all_loops
             .into_iter()
             .filter(|l| {
-                l.project_id == input.project_id
-                    && l.pr_number.is_some()
-                    && !is_terminal_loop_status(&l.status)
+                l.project_id == input.project_id && l.pr_number.is_some() && !is_terminal_loop_status(&l.status)
             })
             .collect();
 
+        // Cache PR open status to avoid repeated API calls
+        let mut pr_open_cache: std::collections::HashMap<i64, bool> = std::collections::HashMap::new();
         for l in &project_loops {
             if ctx.is_cancelled() {
                 break;
             }
 
+            // If this loop references a PR, check if it's still open
+            if let Some(pr_num) = l.pr_number {
+                if !pr_open_cache.contains_key(&pr_num) {
+                    let is_open = if let Some(ref gw) = self.github {
+                        // Use the GitHub gateway to check if PR is open
+                        let pr_check = gw.view_pull_request(looper_github::types::ViewPullRequestInput {
+                            repo: input.repo.clone(),
+                            pr_number: pr_num,
+                            cwd: ".".to_string(),
+                        });
+                        match pr_check {
+                            Ok(pr) => pr.state == "OPEN",
+                            Err(_) => false,
+                        }
+                    } else {
+                        true // assume open if no github
+                    };
+                    pr_open_cache.insert(pr_num, is_open);
+                }
+                if !pr_open_cache.get(&pr_num).copied().unwrap_or(false) {
+                    // PR is closed - skip this loop
+                    continue;
+                }
+            }
+
             // Check if there's already a pending queue item for this loop
             // to avoid duplicates.
             let pending = match guard.queue.list() {
-                Ok(items) => items.iter().any(|q| {
-                    q.loop_id.as_deref() == Some(&l.id)
-                        && (q.status == "queued" || q.status == "running")
-                }),
+                Ok(items) => items
+                    .iter()
+                    .any(|q| q.loop_id.as_deref() == Some(&l.id) && (q.status == "queued" || q.status == "running")),
                 Err(_) => false,
             };
+
+            // If PR was checked and is not open, cancel the loop
+            if let Some(pr_num) = l.pr_number {
+                if let Some(false) = pr_open_cache.get(&pr_num) {
+                    let mut updated = l.clone();
+                    updated.status = "cancelled".to_string();
+                    updated.updated_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                    let _ = guard.loops.upsert(&updated);
+                    tracing::info!("Coordinator: cancelled loop {} for closed PR #{}", l.id, pr_num);
+                    continue;
+                }
+            }
 
             if !pending {
                 // Determine the runner type based on the loop type.
@@ -119,9 +144,7 @@ impl CoordinatorScheduler for Coordinator {
                     _ => "reviewer".to_string(),
                 };
 
-                let now_iso = chrono::Utc::now()
-                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                    .to_string();
+                let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
                 let item = QueueItemRecord {
                     id: format!("coord-{}-{}", l.id, queue_type),
@@ -150,11 +173,7 @@ impl CoordinatorScheduler for Coordinator {
                     updated_at: now_iso,
                 };
 
-                tracing::info!(
-                    "Coordinator enqueued {} item for loop {}",
-                    queue_type,
-                    l.id
-                );
+                tracing::info!("Coordinator enqueued {} item for loop {}", queue_type, l.id);
                 queue_items.push(item);
             }
         }
@@ -199,8 +218,9 @@ impl CoordinatorScheduler for Coordinator {
                                         // Look for "issue #N" anywhere in the line
                                         if let Some(pos) = line.find("issue #") {
                                             let after = &line[pos + 7..];
-                                            after.split_whitespace().next()
-                                                .and_then(|s| s.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<i64>().ok())
+                                            after.split_whitespace().next().and_then(|s| {
+                                                s.trim_end_matches(|c: char| !c.is_ascii_digit()).parse::<i64>().ok()
+                                            })
                                         } else {
                                             None
                                         }
@@ -212,8 +232,12 @@ impl CoordinatorScheduler for Coordinator {
                                     issue_number: linked_issue,
                                     cwd: ".".to_string(),
                                 }) {
-                                    let has_dispatch_plan = issue.labels.iter().any(|l| l == "dispatch/plan");
-                                    let has_dispatch_implement = issue.labels.iter().any(|l| l == "dispatch/implement");
+                                    let has_dispatch_plan =
+                                        issue.labels.iter().any(|l| l == "dispatch/plan" || l == "looper:plan");
+                                    let has_dispatch_implement = issue
+                                        .labels
+                                        .iter()
+                                        .any(|l| l == "dispatch/implement" || l == "looper:implement");
                                     if has_dispatch_plan && !has_dispatch_implement {
                                         tracing::info!(
                                             "Spec transition: PR #{} spec-ready → issue #{} dispatch/plan → dispatch/implement",
@@ -267,22 +291,21 @@ impl CoordinatorScheduler for Coordinator {
                             if elapsed.num_hours() as f64 >= SPEC_TIMEOUT_DAYS * 24.0 {
                                 tracing::info!(
                                     "Coordinator: spec-review timeout — PR #{} stale for {:.1}h, auto-closing",
-                                    pr_summary.number, elapsed.num_hours() as f64
+                                    pr_summary.number,
+                                    elapsed.num_hours() as f64
                                 );
                                 // Post a comment explaining the closure
-                                let _ = gw.create_issue_comment(
-                                    looper_github::types::IssueCommentInput {
-                                        repo: repo.clone(),
-                                        issue_number: pr_summary.number,
-                                        body: format!(
-                                            "Auto-closing this spec PR because it has been in `looper:spec-reviewing` \
+                                let _ = gw.create_issue_comment(looper_github::types::IssueCommentInput {
+                                    repo: repo.clone(),
+                                    issue_number: pr_summary.number,
+                                    body: format!(
+                                        "Auto-closing this spec PR because it has been in `looper:spec-reviewing` \
                                              for more than {:.0} days without activity. \
                                              The linked issue will remain open. Re-open if this spec still applies.",
-                                            SPEC_TIMEOUT_DAYS
-                                        ),
-                                        cwd: ".".to_string(),
-                                    }
-                                );
+                                        SPEC_TIMEOUT_DAYS
+                                    ),
+                                    cwd: ".".to_string(),
+                                });
                                 // Remove the spec-reviewing label
                                 let _ = gw.remove_issue_labels(IssueLabelsInput {
                                     repo: repo.clone(),
@@ -324,7 +347,10 @@ impl CoordinatorScheduler for Coordinator {
                         }) {
                             let has_plan = detail.labels.iter().any(|l| l == "looper:plan");
                             if !has_plan {
-                                tracing::info!("Dispatch: issue #{} has dispatch/plan, adding looper:plan", issue.number);
+                                tracing::info!(
+                                    "Dispatch: issue #{} has dispatch/plan, adding looper:plan",
+                                    issue.number
+                                );
                                 let _ = gw.add_issue_labels(IssueLabelsInput {
                                     repo: repo.clone(),
                                     issue_number: issue.number,
@@ -352,7 +378,10 @@ impl CoordinatorScheduler for Coordinator {
                         }) {
                             let has_implement = detail.labels.iter().any(|l| l == "looper:implement");
                             if !has_implement {
-                                tracing::info!("Dispatch: issue #{} has dispatch/implement, adding looper:implement", issue.number);
+                                tracing::info!(
+                                    "Dispatch: issue #{} has dispatch/implement, adding looper:implement",
+                                    issue.number
+                                );
                                 let _ = gw.add_issue_labels(IssueLabelsInput {
                                     repo: repo.clone(),
                                     issue_number: issue.number,
@@ -402,7 +431,8 @@ impl CoordinatorScheduler for Coordinator {
                                             needs_fixer = true;
                                             tracing::info!(
                                                 "Coordinator merged-watch: PR #{} → {:?}",
-                                                pr_summary.number, action.kind
+                                                pr_summary.number,
+                                                action.kind
                                             );
                                         }
                                         crate::types::WatchActionKind::MergeReady => {
@@ -411,10 +441,7 @@ impl CoordinatorScheduler for Coordinator {
                                                 "Coordinator: PR #{} is merge-ready, executing auto-merge",
                                                 pr_summary.number
                                             );
-                                            match execute_auto_merge(
-                                                pr_summary.number,
-                                                repo,
-                                            ) {
+                                            match execute_auto_merge(pr_summary.number, repo) {
                                                 Ok(()) => tracing::info!(
                                                     "Auto-merge enabled for PR #{} in {}",
                                                     pr_summary.number,
@@ -439,9 +466,7 @@ impl CoordinatorScheduler for Coordinator {
                             }
 
                             if needs_fixer {
-                                let now_iso = chrono::Utc::now()
-                                    .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                                    .to_string();
+                                let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                                 let fix_item = QueueItemRecord {
                                     id: format!("github-fix-{}", pr_summary.number),
                                     project_id: Some(input.project_id.clone()),
@@ -473,9 +498,7 @@ impl CoordinatorScheduler for Coordinator {
                             }
 
                             // Default: enqueue a reviewer item for this PR
-                            let now_iso = chrono::Utc::now()
-                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                                .to_string();
+                            let now_iso = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                             let item = QueueItemRecord {
                                 id: format!("github-review-{}", pr_summary.number),
                                 project_id: Some(input.project_id.clone()),
@@ -504,11 +527,7 @@ impl CoordinatorScheduler for Coordinator {
                             };
                             queue_items.push(item);
                         }
-                        tracing::debug!(
-                            "Coordinator GitHub PR discovery — {} open PRs for {}",
-                            prs.len(),
-                            repo
-                        );
+                        tracing::debug!("Coordinator GitHub PR discovery — {} open PRs for {}", prs.len(), repo);
                     }
                     Err(e) => {
                         tracing::warn!("Coordinator GitHub PR discovery failed: {e}");
@@ -517,11 +536,7 @@ impl CoordinatorScheduler for Coordinator {
             }
         }
 
-        tracing::debug!(
-            "Coordinator enqueued {} items for project {}",
-            queue_items.len(),
-            input.project_id
-        );
+        tracing::debug!("Coordinator enqueued {} items for project {}", queue_items.len(), input.project_id);
 
         CoordinatorDiscoveryResult { queue_items }
     }
@@ -533,9 +548,7 @@ fn is_terminal_loop_status(status: &str) -> bool {
 
 /// Main coordinator tick — called from the scheduler's coordinator
 /// integration point (if any).
-pub async fn execute_coordinator_tick(
-    _handler_map: &looper_scheduler::types::HandlerMap,
-) -> Result<(), String> {
+pub async fn execute_coordinator_tick(_handler_map: &looper_scheduler::types::HandlerMap) -> Result<(), String> {
     // This function is kept as an integration hook for future scheduler
     // versions that call the coordinator tick asynchronously.  Currently
     // the coordinator logic lives in `discover_issues` above.
@@ -546,29 +559,16 @@ pub async fn execute_coordinator_tick(
 /// Enqueue a queue item from a watch action.
 ///
 /// Maps each [`WatchActionKind`] to the appropriate queue dispatch type.
-pub fn action_to_queue_dispatch(
-    action: &WatchAction,
-    _dispatch_config: &DispatchConfig,
-) -> Option<String> {
+pub fn action_to_queue_dispatch(action: &WatchAction, _dispatch_config: &DispatchConfig) -> Option<String> {
     match action.kind {
-        WatchActionKind::MarkMerged => {
-            Some(format!("merge-snapshot: PR #{} ({})", action.pr_number, action.pr_title))
-        }
-        WatchActionKind::ClosePR => {
-            Some(format!("close-pr: PR #{} ({})", action.pr_number, action.pr_title))
-        }
+        WatchActionKind::MarkMerged => Some(format!("merge-snapshot: PR #{} ({})", action.pr_number, action.pr_title)),
+        WatchActionKind::ClosePR => Some(format!("close-pr: PR #{} ({})", action.pr_number, action.pr_title)),
         WatchActionKind::ReengageReview => {
             Some(format!("reengage-review: PR #{} ({})", action.pr_number, action.pr_title))
         }
-        WatchActionKind::MergeReady => {
-            Some(format!("merge-ready: PR #{} ({})", action.pr_number, action.pr_title))
-        }
-        WatchActionKind::RetryCheck => {
-            Some(format!("retry-check: PR #{} ({})", action.pr_number, action.pr_title))
-        }
-        WatchActionKind::Stuck => {
-            Some(format!("stuck: PR #{} ({})", action.pr_number, action.pr_title))
-        }
+        WatchActionKind::MergeReady => Some(format!("merge-ready: PR #{} ({})", action.pr_number, action.pr_title)),
+        WatchActionKind::RetryCheck => Some(format!("retry-check: PR #{} ({})", action.pr_number, action.pr_title)),
+        WatchActionKind::Stuck => Some(format!("stuck: PR #{} ({})", action.pr_number, action.pr_title)),
         _ => None,
     }
 }
@@ -579,15 +579,7 @@ pub fn action_to_queue_dispatch(
 /// auto-merge (merge-when-checks-pass) functionality with squash strategy.
 pub fn execute_auto_merge(pr_number: i64, repo: &str) -> Result<(), String> {
     let output = Command::new("gh")
-        .args([
-            "pr",
-            "merge",
-            &pr_number.to_string(),
-            "--auto",
-            "--squash",
-            "-R",
-            repo,
-        ])
+        .args(["pr", "merge", &pr_number.to_string(), "--auto", "--squash", "-R", repo])
         .output()
         .map_err(|e| format!("failed to execute gh pr merge: {e}"))?;
 

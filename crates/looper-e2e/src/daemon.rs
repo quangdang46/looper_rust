@@ -59,10 +59,8 @@ pub fn start_looperd(
     let stdout_path = home.artifacts_dir.join("looperd.stdout.log");
     let stderr_path = home.artifacts_dir.join("looperd.stderr.log");
 
-    let stdout_file = std::fs::File::create(&stdout_path)
-        .unwrap_or_else(|e| panic!("create looperd stdout log: {e}"));
-    let stderr_file = std::fs::File::create(&stderr_path)
-        .unwrap_or_else(|e| panic!("create looperd stderr log: {e}"));
+    let stdout_file = std::fs::File::create(&stdout_path).unwrap_or_else(|e| panic!("create looperd stdout log: {e}"));
+    let stderr_file = std::fs::File::create(&stderr_path).unwrap_or_else(|e| panic!("create looperd stderr log: {e}"));
 
     let mut cmd = Command::new(&bins.looperd_path);
     cmd.arg("--config")
@@ -77,11 +75,7 @@ pub fn start_looperd(
     }
 
     let child = cmd.spawn().unwrap_or_else(|e| {
-        panic!(
-            "start looperd (binary: {}) --config {}: {e}",
-            bins.looperd_path.display(),
-            config_path
-        )
+        panic!("start looperd (binary: {}) --config {}: {e}", bins.looperd_path.display(), config_path)
     });
 
     DaemonProcess {
@@ -113,9 +107,7 @@ impl DaemonProcess {
                 if let Some(ref mut child) = *guard {
                     match child.try_wait() {
                         Ok(Some(status)) => {
-                            return Err(format!(
-                                "looperd exited before readiness with status: {status}"
-                            ));
+                            return Err(format!("looperd exited before readiness with status: {status}"));
                         }
                         Ok(None) => {} // still running
                         Err(e) => {
@@ -131,9 +123,7 @@ impl DaemonProcess {
 
             match client.get(&status_url).send() {
                 Ok(resp) if resp.status().is_success() => {
-                    let body: serde_json::Value = resp
-                        .json()
-                        .map_err(|e| format!("parse status response: {e}"))?;
+                    let body: serde_json::Value = resp.json().map_err(|e| format!("parse status response: {e}"))?;
                     // Check for expected "ok" field in envelope
                     if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
                         return Ok(body);

@@ -30,10 +30,7 @@ pub fn validate_tools(_config: &Config) -> Result<(), BootError> {
         match result {
             Ok(r) if r.exit_code == 0 => {}
             _ => {
-                return Err(BootError::ToolNotFound {
-                    tool: tool.to_string(),
-                    path: PathBuf::from(tool),
-                });
+                return Err(BootError::ToolNotFound { tool: tool.to_string(), path: PathBuf::from(tool) });
             }
         }
     }
@@ -65,11 +62,7 @@ pub fn ensure_dirs(config: &Config) -> Result<(), BootError> {
 ///
 /// Returns a `WorkerGuard` that must be kept alive for the duration of the process.
 pub fn create_logger(config: &Config) -> Result<Option<WorkerGuard>, BootError> {
-    let log_level = config
-        .logging
-        .as_ref()
-        .map(|l| l.level.to_string())
-        .unwrap_or_else(|| "info".to_string());
+    let log_level = config.logging.as_ref().map(|l| l.level.to_string()).unwrap_or_else(|| "info".to_string());
 
     let env_filter = EnvFilter::try_new(&log_level)
         .or_else(|_| EnvFilter::try_new("info"))
@@ -105,12 +98,7 @@ pub fn create_logger(config: &Config) -> Result<Option<WorkerGuard>, BootError> 
 
     // stdout/stderr layer
     {
-        let stdout_layer = fmt::layer()
-            .json()
-            .with_writer(std::io::stdout)
-            .with_target(true)
-            .with_ansi(false)
-            .boxed();
+        let stdout_layer = fmt::layer().json().with_writer(std::io::stdout).with_target(true).with_ansi(false).boxed();
         layers.push(stdout_layer);
     }
 
@@ -131,16 +119,10 @@ pub fn create_logger(config: &Config) -> Result<Option<WorkerGuard>, BootError> 
 #[allow(dead_code)]
 fn validate_executable(name: &str, path: &Path) -> Result<(), BootError> {
     if !path.exists() {
-        return Err(BootError::ToolNotFound {
-            tool: name.to_string(),
-            path: path.to_path_buf(),
-        });
+        return Err(BootError::ToolNotFound { tool: name.to_string(), path: path.to_path_buf() });
     }
     if !path.is_file() {
-        return Err(BootError::ToolNotExecutable {
-            tool: name.to_string(),
-            path: path.to_path_buf(),
-        });
+        return Err(BootError::ToolNotExecutable { tool: name.to_string(), path: path.to_path_buf() });
     }
     // On Unix, check executable permission
     #[cfg(unix)]
@@ -149,10 +131,7 @@ fn validate_executable(name: &str, path: &Path) -> Result<(), BootError> {
         let meta = std::fs::metadata(path).map_err(BootError::Io)?;
         let mode = meta.permissions().mode();
         if mode & 0o111 == 0 {
-            return Err(BootError::ToolNotExecutable {
-                tool: name.to_string(),
-                path: path.to_path_buf(),
-            });
+            return Err(BootError::ToolNotExecutable { tool: name.to_string(), path: path.to_path_buf() });
         }
     }
     Ok(())
@@ -161,28 +140,18 @@ fn validate_executable(name: &str, path: &Path) -> Result<(), BootError> {
 fn ensure_writable_dir(path: &Path) -> Result<(), BootError> {
     if path.exists() {
         if !path.is_dir() {
-            return Err(BootError::DirError(DirError::IsFile {
-                path: path.to_path_buf(),
-            }));
+            return Err(BootError::DirError(DirError::IsFile { path: path.to_path_buf() }));
         }
     } else {
-        std::fs::create_dir_all(path).map_err(|e| {
-            BootError::DirError(DirError::Create {
-                path: path.to_path_buf(),
-                source: e,
-            })
-        })?;
+        std::fs::create_dir_all(path)
+            .map_err(|e| BootError::DirError(DirError::Create { path: path.to_path_buf(), source: e }))?;
     }
 
     // Verify writable with temp file
     let probe = tempfile::Builder::new()
         .prefix(".looper_writable_probe")
         .tempfile_in(path)
-        .map_err(|_| {
-            BootError::DirError(DirError::NotWritable {
-                path: path.to_path_buf(),
-            })
-        })?;
+        .map_err(|_| BootError::DirError(DirError::NotWritable { path: path.to_path_buf() }))?;
     let _ = probe; // auto-clean on drop
 
     Ok(())

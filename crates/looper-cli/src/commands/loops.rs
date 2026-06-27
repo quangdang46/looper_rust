@@ -38,15 +38,13 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &LoopCommand, json: bool) -> 
             output::print_output_vec(json, &loops);
         }
         LoopCommand::Create(args) => {
-            let metadata = args.metadata.as_ref()
+            let metadata = args
+                .metadata
+                .as_ref()
                 .map(|s| serde_json::from_str(s))
                 .transpose()
                 .map_err(|e| CliError::config(format!("invalid JSON metadata: {e}")))?;
-            let input = CreateLoopInput {
-                loop_type: args.r#type.clone(),
-                target: args.target.clone(),
-                metadata,
-            };
+            let input = CreateLoopInput { loop_type: args.r#type.clone(), target: args.target.clone(), metadata };
             let detail = client.create_loop(&args.project, &input).await?;
             output::print_output(json, &detail);
         }

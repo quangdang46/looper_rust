@@ -26,9 +26,7 @@ pub fn ensure_config_file_permissions(path: &Path) -> Result<Option<String>, Str
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let metadata = path.metadata().map_err(|e| {
-            format!("cannot stat config file {}: {e}", path.display())
-        })?;
+        let metadata = path.metadata().map_err(|e| format!("cannot stat config file {}: {e}", path.display()))?;
         let mode = metadata.permissions().mode();
 
         // Check for world-readable bits (S_IROTH = 0o004, S_IWOTH = 0o002)
@@ -78,10 +76,7 @@ mod tests {
         let (path, _dir) = tmp_file("world_readable.toml", b"secret = \"s3kr3t\"", 0o644);
 
         let result = ensure_config_file_permissions(&path).unwrap();
-        assert!(
-            result.is_some(),
-            "0644 should trigger a permissions warning"
-        );
+        assert!(result.is_some(), "0644 should trigger a permissions warning");
         let warning = result.unwrap();
         assert!(warning.contains("world"));
         assert!(warning.contains("0600"));

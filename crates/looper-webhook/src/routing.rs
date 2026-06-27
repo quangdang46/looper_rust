@@ -18,9 +18,7 @@ pub fn route_event(event_type: &str, action: Option<&str>) -> RoutingDecision {
         "pull_request" => match action {
             Some("review_requested") => lanes([Lane::Reviewer]),
             Some("labeled" | "unlabeled") => lanes([Lane::Fixer]),
-            Some("opened" | "reopened" | "ready_for_review" | "synchronize") => {
-                lanes([Lane::Reviewer, Lane::Fixer])
-            }
+            Some("opened" | "reopened" | "ready_for_review" | "synchronize") => lanes([Lane::Reviewer, Lane::Fixer]),
             Some(_) => ignore(),
             None => ignore(),
         },
@@ -79,10 +77,7 @@ fn ignore() -> RoutingDecision {
 
 /// Check if a check_run conclusion indicates a failure.
 pub fn is_failing_conclusion(conclusion: &str) -> bool {
-    matches!(
-        conclusion.to_uppercase().as_str(),
-        "FAILURE" | "FAILED" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED"
-    )
+    matches!(conclusion.to_uppercase().as_str(), "FAILURE" | "FAILED" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED")
 }
 
 /// Check if an error is likely transient (for retry logic).

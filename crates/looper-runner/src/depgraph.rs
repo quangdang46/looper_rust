@@ -36,10 +36,7 @@ impl fmt::Display for IssueRef {
 
 impl IssueRef {
     fn normalize(&self) -> Self {
-        Self {
-            repo: self.repo.trim().to_lowercase(),
-            number: self.number,
-        }
+        Self { repo: self.repo.trim().to_lowercase(), number: self.number }
     }
 }
 
@@ -106,7 +103,11 @@ pub fn build(tracked: &[IssueRef], snapshot: Snapshot) -> DependencyGraph {
         .iter()
         .filter_map(|r| {
             let r = r.normalize();
-            if r.number > 0 { Some(r) } else { None }
+            if r.number > 0 {
+                Some(r)
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -218,9 +219,7 @@ fn classify_blocker_state(state: &IssueState) -> BlockerDisposition {
     if state_norm == "closed" && reason_norm == "completed" {
         return BlockerDisposition { satisfied: true, requires_re_triage: false };
     }
-    if state_norm == "closed"
-        && (reason_norm == "not_planned" || reason_norm == "duplicate")
-    {
+    if state_norm == "closed" && (reason_norm == "not_planned" || reason_norm == "duplicate") {
         return BlockerDisposition { satisfied: false, requires_re_triage: true };
     }
     BlockerDisposition { satisfied: false, requires_re_triage: false }
@@ -290,8 +289,7 @@ fn detect_cycles(tracked: &[IssueRef], edges: &HashMap<IssueRef, Vec<IssueRef>>)
                     let mut cycle: Cycle = stack[idx..].to_vec();
                     cycle.push(next.clone());
                     let normalized = canonicalize_cycle(&cycle);
-                    seen.entry(cycle_key(&normalized))
-                        .or_insert_with(|| normalized);
+                    seen.entry(cycle_key(&normalized)).or_insert_with(|| normalized);
                     continue;
                 }
                 if *state.get(next).unwrap_or(&0) == 0 {
@@ -323,11 +321,7 @@ fn canonicalize_cycle(cycle: &[IssueRef]) -> Cycle {
     let nodes: Vec<IssueRef> = cycle[..cycle.len() - 1].to_vec();
     let mut best = nodes.clone();
     for index in 1..nodes.len() {
-        let candidate: Vec<IssueRef> = nodes[index..]
-            .iter()
-            .chain(nodes[..index].iter())
-            .cloned()
-            .collect();
+        let candidate: Vec<IssueRef> = nodes[index..].iter().chain(nodes[..index].iter()).cloned().collect();
         if refs_slice_less(&candidate, &best) {
             best = candidate;
         }
@@ -350,11 +344,7 @@ fn refs_slice_less(left: &[IssueRef], right: &[IssueRef]) -> bool {
 }
 
 fn cycle_key(cycle: &[IssueRef]) -> String {
-    cycle
-        .iter()
-        .map(|r| r.to_string())
-        .collect::<Vec<_>>()
-        .join("->")
+    cycle.iter().map(|r| r.to_string()).collect::<Vec<_>>().join("->")
 }
 
 // ---------------------------------------------------------------------------
@@ -373,9 +363,7 @@ fn normalize_blocked_by(input: &HashMap<IssueRef, Vec<IssueRef>>) -> HashMap<Iss
             if dep.number <= 0 {
                 continue;
             }
-            out.entry(issue.clone())
-                .or_insert_with(Vec::new)
-                .push(dep);
+            out.entry(issue.clone()).or_insert_with(Vec::new).push(dep);
         }
     }
     out
@@ -390,10 +378,7 @@ fn normalize_issue_states(input: &HashMap<IssueRef, IssueState>) -> HashMap<Issu
         }
         out.insert(
             ref_,
-            IssueState {
-                state: state.state.trim().to_string(),
-                state_reason: state.state_reason.trim().to_string(),
-            },
+            IssueState { state: state.state.trim().to_string(), state_reason: state.state_reason.trim().to_string() },
         );
     }
     out
@@ -412,13 +397,7 @@ fn unique_sorted_refs(input: &[IssueRef]) -> Vec<IssueRef> {
 
 fn refs_from_set(set: &HashSet<IssueRef>) -> Vec<IssueRef> {
     let mut out: Vec<IssueRef> = set.iter().cloned().collect();
-    out.sort_by(|a, b| {
-        if a.repo != b.repo {
-            a.repo.cmp(&b.repo)
-        } else {
-            a.number.cmp(&b.number)
-        }
-    });
+    out.sort_by(|a, b| if a.repo != b.repo { a.repo.cmp(&b.repo) } else { a.number.cmp(&b.number) });
     out
 }
 
@@ -491,10 +470,7 @@ mod tests {
         let g = build(
             &[issue(1), issue(2)],
             Snapshot {
-                blocked_by: HashMap::from([
-                    (issue(1), vec![issue(2)]),
-                    (issue(2), vec![issue(1)]),
-                ]),
+                blocked_by: HashMap::from([(issue(1), vec![issue(2)]), (issue(2), vec![issue(1)])]),
                 issues: HashMap::from([
                     (issue(1), IssueState { state: "open".into(), state_reason: String::new() }),
                     (issue(2), IssueState { state: "open".into(), state_reason: String::new() }),
@@ -546,12 +522,10 @@ mod tests {
         let g = build(
             &[issue(1)],
             Snapshot {
-                blocked_by: HashMap::from([
-                    (issue(1), vec![
-                        issue(2),
-                        IssueRef { repo: "other/repo".into(), number: 9 },
-                    ]),
-                ]),
+                blocked_by: HashMap::from([(
+                    issue(1),
+                    vec![issue(2), IssueRef { repo: "other/repo".into(), number: 9 }],
+                )]),
                 issues: HashMap::new(),
                 ..Default::default()
             },
@@ -585,30 +559,21 @@ mod tests {
 
     #[test]
     fn test_classify_completed() {
-        let r = classify_blocker_state(&IssueState {
-            state: "closed".into(),
-            state_reason: "completed".into(),
-        });
+        let r = classify_blocker_state(&IssueState { state: "closed".into(), state_reason: "completed".into() });
         assert!(r.satisfied);
         assert!(!r.requires_re_triage);
     }
 
     #[test]
     fn test_classify_not_planned() {
-        let r = classify_blocker_state(&IssueState {
-            state: "closed".into(),
-            state_reason: "not_planned".into(),
-        });
+        let r = classify_blocker_state(&IssueState { state: "closed".into(), state_reason: "not_planned".into() });
         assert!(!r.satisfied);
         assert!(r.requires_re_triage);
     }
 
     #[test]
     fn test_classify_open() {
-        let r = classify_blocker_state(&IssueState {
-            state: "open".into(),
-            state_reason: String::new(),
-        });
+        let r = classify_blocker_state(&IssueState { state: "open".into(), state_reason: String::new() });
         assert!(!r.satisfied);
         assert!(!r.requires_re_triage);
     }

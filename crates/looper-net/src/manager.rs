@@ -40,14 +40,7 @@ impl Manager {
         let (client, inner) = match &loaded {
             Some(s) => {
                 let client = NetworkClient::with_token(&s.url, &s.node_token);
-                (
-                    client,
-                    ManagerInner {
-                        joined: true,
-                        local_state: loaded,
-                        ..Default::default()
-                    },
-                )
+                (client, ManagerInner { joined: true, local_state: loaded, ..Default::default() })
             }
             None => {
                 let client = NetworkClient::new("");
@@ -55,11 +48,7 @@ impl Manager {
             }
         };
 
-        Ok(Manager {
-            client,
-            config,
-            state: tokio::sync::RwLock::new(inner),
-        })
+        Ok(Manager { client, config, state: tokio::sync::RwLock::new(inner) })
     }
 
     /// Join a network with a join key.
@@ -71,9 +60,7 @@ impl Manager {
             join_key: join_key.to_string(),
             node_name: self.config.node_name.clone(),
             github: self.config.github.clone(),
-            target_labels: vec![
-                format!("looper:target:{}", self.config.node_name),
-            ],
+            target_labels: vec![format!("looper:target:{}", self.config.node_name)],
         };
 
         let resp = client.join(&req).await?;
@@ -122,9 +109,8 @@ impl Manager {
             return Ok(());
         }
 
-        let mut interval = tokio::time::interval(
-            std::time::Duration::from_secs(self.config.heartbeat_interval_seconds),
-        );
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(self.config.heartbeat_interval_seconds));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
@@ -192,38 +178,28 @@ impl Manager {
         match (&status.lease, eligible) {
             // Currently hold lease and still eligible → renew
             (Some(lease), true) if lease.holder_node_id == Some(status.membership.node_id.clone()) => {
-                let req = CoordinatorLeaseRenewRequest {
-                    fencing_token: lease.fencing_token,
-                };
+                let req = CoordinatorLeaseRenewRequest { fencing_token: lease.fencing_token };
                 if let Err(e) = self.client.renew_lease(&req).await {
                     tracing::warn!("Failed to renew lease: {}", e);
                 }
             }
             // Don't hold lease but eligible → acquire
-            (Some(lease), true) if lease.holder_node_id.is_none()
-                || lease.holder_node_id.as_deref() == Some("") =>
-            {
-                let req = CoordinatorLeaseAcquireRequest {
-                    node_id: status.membership.node_id.clone(),
-                };
+            (Some(lease), true) if lease.holder_node_id.is_none() || lease.holder_node_id.as_deref() == Some("") => {
+                let req = CoordinatorLeaseAcquireRequest { node_id: status.membership.node_id.clone() };
                 if let Err(e) = self.client.acquire_lease(&req).await {
                     tracing::warn!("Failed to acquire lease: {}", e);
                 }
             }
             // Lease vacant or expired and eligible → acquire
             (None, true) => {
-                let req = CoordinatorLeaseAcquireRequest {
-                    node_id: status.membership.node_id.clone(),
-                };
+                let req = CoordinatorLeaseAcquireRequest { node_id: status.membership.node_id.clone() };
                 if let Err(e) = self.client.acquire_lease(&req).await {
                     tracing::warn!("Failed to acquire lease: {}", e);
                 }
             }
             // Hold lease but no longer eligible → expire
             (Some(lease), false) if lease.holder_node_id == Some(status.membership.node_id.clone()) => {
-                let req = FencingTokenRequest {
-                    fencing_token: lease.fencing_token,
-                };
+                let req = FencingTokenRequest { fencing_token: lease.fencing_token };
                 if let Err(e) = self.client.expire_lease(&req).await {
                     tracing::warn!("Failed to expire lease: {}", e);
                 }

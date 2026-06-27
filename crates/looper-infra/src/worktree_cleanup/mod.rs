@@ -16,10 +16,7 @@ use crate::error::CleanupError;
 // --------------------------------------------------------------------------
 
 /// Run a full plan → execute cycle.
-pub fn run_cycle(
-    repos: &Arc<Repositories>,
-    options: &CleanupOptions,
-) -> Result<RunResult, CleanupError> {
+pub fn run_cycle(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<RunResult, CleanupError> {
     let plan_result = plan(repos, options)?;
     let run_result = run(repos, &plan_result, options)?;
     Ok(run_result)

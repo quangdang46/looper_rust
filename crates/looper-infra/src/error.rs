@@ -110,10 +110,7 @@ pub enum RuntimeError {
     NotStarted,
 
     #[error("shutdown timeout for {component} after {timeout_ms}ms")]
-    ShutdownTimeout {
-        component: &'static str,
-        timeout_ms: u64,
-    },
+    ShutdownTimeout { component: &'static str, timeout_ms: u64 },
 
     #[error("startup phase failed: {0}")]
     Startup(String),

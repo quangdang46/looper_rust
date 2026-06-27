@@ -47,15 +47,7 @@ impl TempHome {
         let worktree_root = looper_home.join("worktrees");
         let working_dir = root.join("working");
 
-        for dir in [
-            &home_dir,
-            &looper_home,
-            &artifacts_dir,
-            &log_dir,
-            &backup_dir,
-            &worktree_root,
-            &working_dir,
-        ] {
+        for dir in [&home_dir, &looper_home, &artifacts_dir, &log_dir, &backup_dir, &worktree_root, &working_dir] {
             std::fs::create_dir_all(dir).expect("failed to create temp home directory");
         }
 
@@ -94,10 +86,7 @@ impl TempHome {
 
     fn create_temp_root(prefix: &str) -> PathBuf {
         let base = std::env::temp_dir();
-        let ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
+        let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
         let dir_name = format!("{}-{}", prefix, ts);
         let path = base.join(&dir_name);
         std::fs::create_dir_all(&path).expect("failed to create temp root");

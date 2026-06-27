@@ -1,23 +1,16 @@
-use std::sync::Arc;
 use clap::Parser;
-use tokio::sync::broadcast;
 use looper_net::{
-    server::{build_router, ServerState, Db},
+    server::{build_router, Db, ServerState},
     types::NetConfig,
 };
+use std::sync::Arc;
+use tokio::sync::broadcast;
 
 // Dependencies used by the library crate (not directly by this binary)
 #[allow(unused_imports)]
 use {
-    chrono as _,
-    futures as _,
-    looper_config as _,
-    reqwest as _,
-    rusqlite as _,
-    serde as _,
-    serde_json as _,
-    thiserror as _,
-    tokio_util as _,
+    chrono as _, futures as _, looper_config as _, reqwest as _, rusqlite as _, serde as _, serde_json as _,
+    thiserror as _, tokio_util as _,
 };
 
 /// Build-time version information.
@@ -33,9 +26,7 @@ mod version {
         option_env!("LOOPER_BUILD_API_VERSION").unwrap_or("1")
     }
     pub fn git_commit_sha() -> &'static str {
-        option_env!("LOOPER_BUILD_GIT_SHA")
-            .or(option_env!("VERGEN_GIT_SHA"))
-            .unwrap_or("unknown")
+        option_env!("LOOPER_BUILD_GIT_SHA").or(option_env!("VERGEN_GIT_SHA")).unwrap_or("unknown")
     }
     pub fn build_timestamp() -> &'static str {
         option_env!("LOOPER_BUILD_TIMESTAMP").unwrap_or("unknown")
@@ -83,9 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::from_default_env()).init();
 
     // Log version info
     tracing::info!(
@@ -153,18 +142,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(&config.listen_addr).await?;
     tracing::info!("Listening on {}", config.listen_addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
 
     Ok(())
 }
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        tokio::signal::ctrl_c().await.expect("failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]

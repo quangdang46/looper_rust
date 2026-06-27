@@ -31,9 +31,7 @@ impl OsascriptBackend {
 
         let throttle_key = format!("{}:{}", notification.event_type, notification.title);
 
-        let mut last_sent = self.last_sent.lock().map_err(|e| {
-            NotifyError::Throttle(format!("lock poisoned: {e}"))
-        })?;
+        let mut last_sent = self.last_sent.lock().map_err(|e| NotifyError::Throttle(format!("lock poisoned: {e}")))?;
 
         let now = std::time::Instant::now();
         if let Some(last) = last_sent.get(&throttle_key) {

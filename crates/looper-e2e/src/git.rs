@@ -48,15 +48,9 @@ pub fn create_seeded_repo(git_path: &str) -> SeededRepo {
     run_git(git_path, &repo_path, &["add", "README.md"]);
     run_git(git_path, &repo_path, &["commit", "-m", "initial commit"]);
 
-    let initial_commit = run_git(git_path, &repo_path, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
+    let initial_commit = run_git(git_path, &repo_path, &["rev-parse", "HEAD"]).trim().to_string();
 
-    SeededRepo {
-        path: repo_path.to_string_lossy().to_string(),
-        default_branch: "main".to_string(),
-        initial_commit,
-    }
+    SeededRepo { path: repo_path.to_string_lossy().to_string(), default_branch: "main".to_string(), initial_commit }
 }
 
 /// Snapshot the current state of the repository at `repo_path`.
@@ -65,29 +59,13 @@ pub fn create_seeded_repo(git_path: &str) -> SeededRepo {
 /// Panics if any git operation fails.
 pub fn snapshot_repo(git_path: &str, repo_path: impl AsRef<Path>) -> RepoSnapshot {
     let repo = repo_path.as_ref();
-    let head = run_git(git_path, repo, &["rev-parse", "HEAD"])
-        .trim()
-        .to_string();
-    let status_porcelain = run_git(git_path, repo, &[
-        "status",
-        "--porcelain=v1",
-        "--untracked-files=all",
-    ]);
-    let index_tree = run_git(git_path, repo, &["write-tree"])
-        .trim()
-        .to_string();
-    let current_branch = run_git(git_path, repo, &["branch", "--show-current"])
-        .trim()
-        .to_string();
+    let head = run_git(git_path, repo, &["rev-parse", "HEAD"]).trim().to_string();
+    let status_porcelain = run_git(git_path, repo, &["status", "--porcelain=v1", "--untracked-files=all"]);
+    let index_tree = run_git(git_path, repo, &["write-tree"]).trim().to_string();
+    let current_branch = run_git(git_path, repo, &["branch", "--show-current"]).trim().to_string();
     let worktree_list_text = run_git(git_path, repo, &["worktree", "list", "--porcelain"]);
 
-    RepoSnapshot {
-        head,
-        status_porcelain,
-        index_tree,
-        current_branch,
-        worktree_list_text,
-    }
+    RepoSnapshot { head, status_porcelain, index_tree, current_branch, worktree_list_text }
 }
 
 /// Run a git command and return its stdout.

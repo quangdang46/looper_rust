@@ -32,23 +32,37 @@ impl fmt::Display for CliError {
 impl std::error::Error for CliError {}
 
 impl From<reqwest::Error> for CliError {
-    fn from(e: reqwest::Error) -> Self { Self::Http(e) }
+    fn from(e: reqwest::Error) -> Self {
+        Self::Http(e)
+    }
 }
 
 impl From<serde_json::Error> for CliError {
-    fn from(e: serde_json::Error) -> Self { Self::Json(e) }
+    fn from(e: serde_json::Error) -> Self {
+        Self::Json(e)
+    }
 }
 
 impl From<std::io::Error> for CliError {
-    fn from(e: std::io::Error) -> Self { Self::Io(e) }
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
 }
 
 impl CliError {
     pub fn api<T: Into<String>>(code: T, message: T) -> Self {
         Self::Api { code: code.into(), message: message.into() }
     }
-    pub fn daemon_not_running() -> Self { Self::DaemonNotRunning }
-    pub fn config<T: Into<String>>(m: T) -> Self { Self::Config(m.into()) }
-    pub fn autoupgrade<T: Into<String>>(m: T) -> Self { Self::Autoupgrade(m.into()) }
-    pub fn daemon_lifecycle<T: Into<String>>(m: T) -> Self { Self::DaemonLifecycle(m.into()) }
+    pub fn daemon_not_running() -> Self {
+        Self::DaemonNotRunning
+    }
+    pub fn config<T: Into<String>>(m: T) -> Self {
+        Self::Config(m.into())
+    }
+    pub fn autoupgrade<T: Into<String>>(m: T) -> Self {
+        Self::Autoupgrade(m.into())
+    }
+    pub fn daemon_lifecycle<T: Into<String>>(m: T) -> Self {
+        Self::DaemonLifecycle(m.into())
+    }
 }

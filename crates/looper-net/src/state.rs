@@ -75,10 +75,7 @@ mod tests {
             node_id: "node_xyz".to_string(),
             node_name: "my-node".to_string(),
             node_token: "token_123".to_string(),
-            github: GitHubIdentity {
-                numeric_id: 12345,
-                login: "testuser".to_string(),
-            },
+            github: GitHubIdentity { numeric_id: 12345, login: "testuser".to_string() },
         };
 
         save_state_at(&state, &path).unwrap();

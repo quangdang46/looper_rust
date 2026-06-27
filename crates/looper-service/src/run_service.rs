@@ -9,9 +9,7 @@ use looper_storage::{
     record::{AppendInput, RunRecord},
     repos::Repositories,
 };
-use looper_types::{
-    assert_step_belongs_to_loop_type, LoopStatus, LoopType, RunStatus,
-};
+use looper_types::{assert_step_belongs_to_loop_type, LoopStatus, LoopType, RunStatus};
 
 use crate::error::{Result, ServiceError};
 use crate::loop_service::LoopService;
@@ -28,11 +26,7 @@ impl RunService {
     where
         F: Fn() -> DateTime<Utc> + 'static,
     {
-        Self {
-            repos,
-            _loops: loops,
-            now: Box::new(now),
-        }
+        Self { repos, _loops: loops, now: Box::new(now) }
     }
 
     // ── StartRun ────────────────────────────────────────────────────────
@@ -50,30 +44,25 @@ impl RunService {
 
         // 2. OneRunningRunPerLoop enforcement
         if self.repos.runs.has_running_by_loop_id(&input.loop_id)? {
-            return Err(ServiceError::LoopHasRunningRun {
-                loop_id: input.loop_id.clone(),
-            });
+            return Err(ServiceError::LoopHasRunningRun { loop_id: input.loop_id.clone() });
         }
 
         // 3. Validate loop status transition
         let loop_status: LoopStatus = loop_record.status.parse()?;
-        if loop_status != LoopStatus::Running
-            && !loop_status.can_transition_to(LoopStatus::Running) {
-                return Err(ServiceError::Other(format!(
-                    "cannot start run: loop status {} cannot transition to running",
-                    loop_status.as_str(),
-                )));
-            }
+        if loop_status != LoopStatus::Running && !loop_status.can_transition_to(LoopStatus::Running) {
+            return Err(ServiceError::Other(format!(
+                "cannot start run: loop status {} cannot transition to running",
+                loop_status.as_str(),
+            )));
+        }
 
         // 4. Validate steps if provided
         let loop_type: LoopType = loop_record.r#type.parse()?;
         if let Some(ref step) = input.current_step {
-            assert_step_belongs_to_loop_type(loop_type, step)
-                .map_err(|e| ServiceError::Other(e.to_string()))?;
+            assert_step_belongs_to_loop_type(loop_type, step).map_err(|e| ServiceError::Other(e.to_string()))?;
         }
         if let Some(ref step) = input.last_completed_step {
-            assert_step_belongs_to_loop_type(loop_type, step)
-                .map_err(|e| ServiceError::Other(e.to_string()))?;
+            assert_step_belongs_to_loop_type(loop_type, step).map_err(|e| ServiceError::Other(e.to_string()))?;
         }
 
         // 5. Update loop status BEFORE creating the run (otherwise
@@ -107,32 +96,41 @@ impl RunService {
         self.repos.runs.upsert(&run_record)?;
 
         // 8. Side effect — Event log (non-fatal: observability shouldn't block the run)
-        if let Err(e) = append(&self.repos.events, &AppendInput {
-            event_type: "loop.started".into(),
-            project_id: Some(loop_record.project_id.clone()),
-            loop_id: Some(input.loop_id.clone()),
-            run_id: Some(run_record.id.clone()),
-            entity_type: Some("loop".into()),
-            entity_id: Some(loop_record.id.clone()),
-            payload_json: Some(json!({ "status": "running" }).to_string()),
-            ..AppendInput::new("")
-        }) {
+        if let Err(e) = append(
+            &self.repos.events,
+            &AppendInput {
+                event_type: "loop.started".into(),
+                project_id: Some(loop_record.project_id.clone()),
+                loop_id: Some(input.loop_id.clone()),
+                run_id: Some(run_record.id.clone()),
+                entity_type: Some("loop".into()),
+                entity_id: Some(loop_record.id.clone()),
+                payload_json: Some(json!({ "status": "running" }).to_string()),
+                ..AppendInput::new("")
+            },
+        ) {
             tracing::warn!(error = %e, "Failed to emit loop.started event");
         }
 
-        if let Err(e) = append(&self.repos.events, &AppendInput {
-            event_type: "run.started".into(),
-            project_id: Some(loop_record.project_id.clone()),
-            loop_id: Some(input.loop_id.clone()),
-            run_id: Some(run_record.id.clone()),
-            entity_type: Some("run".into()),
-            entity_id: Some(run_record.id.clone()),
-            payload_json: Some(json!({
-                "currentStep": run_record.current_step,
-                "lastCompletedStep": run_record.last_completed_step,
-            }).to_string()),
-            ..AppendInput::new("")
-        }) {
+        if let Err(e) = append(
+            &self.repos.events,
+            &AppendInput {
+                event_type: "run.started".into(),
+                project_id: Some(loop_record.project_id.clone()),
+                loop_id: Some(input.loop_id.clone()),
+                run_id: Some(run_record.id.clone()),
+                entity_type: Some("run".into()),
+                entity_id: Some(run_record.id.clone()),
+                payload_json: Some(
+                    json!({
+                        "currentStep": run_record.current_step,
+                        "lastCompletedStep": run_record.last_completed_step,
+                    })
+                    .to_string(),
+                ),
+                ..AppendInput::new("")
+            },
+        ) {
             tracing::warn!(error = %e, "Failed to emit run.started event");
         }
 
@@ -152,20 +150,15 @@ impl RunService {
         let now_iso = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
         // 1. Fetch run
-        let mut run_record = self
-            .repos
-            .runs
-            .get_by_id(&input.run_id)?
-            .ok_or_else(|| ServiceError::RunNotFound(input.run_id.clone()))?;
+        let mut run_record =
+            self.repos.runs.get_by_id(&input.run_id)?.ok_or_else(|| ServiceError::RunNotFound(input.run_id.clone()))?;
 
         // 2. Validate steps if provided
         if let Some(ref step) = input.current_step {
-            assert_step_belongs_to_loop_type(input.loop_type, step)
-                .map_err(|e| ServiceError::Other(e.to_string()))?;
+            assert_step_belongs_to_loop_type(input.loop_type, step).map_err(|e| ServiceError::Other(e.to_string()))?;
         }
         if let Some(ref step) = input.last_completed_step {
-            assert_step_belongs_to_loop_type(input.loop_type, step)
-                .map_err(|e| ServiceError::Other(e.to_string()))?;
+            assert_step_belongs_to_loop_type(input.loop_type, step).map_err(|e| ServiceError::Other(e.to_string()))?;
         }
 
         // 3. Update run record
@@ -187,17 +180,11 @@ impl RunService {
         run_record.updated_at = now_iso.clone();
 
         // 4. Fetch loop for project_id
-        let loop_record = self
-            .repos
-            .loops
-            .get_by_id(&run_record.loop_id)?;
+        let loop_record = self.repos.loops.get_by_id(&run_record.loop_id)?;
 
         // 5. Side effect — Event log (non-fatal)
         if let Some(event_type) = input.event_type {
-            let payload = input
-                .event_payload
-                .unwrap_or_else(|| json!({}))
-                .to_string();
+            let payload = input.event_payload.unwrap_or_else(|| json!({})).to_string();
 
             if let Err(e) = append(
                 &self.repos.events,
@@ -229,11 +216,8 @@ impl RunService {
         let now_iso = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
         // 1. Fetch run
-        let mut run_record = self
-            .repos
-            .runs
-            .get_by_id(run_id)?
-            .ok_or_else(|| ServiceError::RunNotFound(run_id.to_string()))?;
+        let mut run_record =
+            self.repos.runs.get_by_id(run_id)?.ok_or_else(|| ServiceError::RunNotFound(run_id.to_string()))?;
 
         // 2. Validate run status transition
         let from_status: RunStatus = run_record.status.parse()?;
@@ -258,11 +242,7 @@ impl RunService {
         let loop_record = self.repos.loops.get_by_id(&run_record.loop_id)?;
 
         // 5. Side effect — Event log (non-fatal)
-        let event_type = if input.status == RunStatus::Success {
-            "run.completed"
-        } else {
-            "run.failed"
-        };
+        let event_type = if input.status == RunStatus::Success { "run.completed" } else { "run.failed" };
 
         let payload = json!({
             "summary": run_record.summary,
@@ -334,8 +314,7 @@ mod tests {
 
     fn repos_setup() -> Arc<Repositories> {
         let mut conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&mut conn).unwrap();
         Arc::new(Repositories::new(conn))
     }
@@ -592,10 +571,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(run_svc.list().unwrap().len(), 1);
-        assert_eq!(
-            run_svc.list_by_loop(&loop_.id).unwrap().len(),
-            1
-        );
+        assert_eq!(run_svc.list_by_loop(&loop_.id).unwrap().len(), 1);
     }
 
     #[test]

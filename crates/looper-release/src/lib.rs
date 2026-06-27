@@ -102,7 +102,11 @@ pub fn build_manifest(input: BuildManifestInput) -> Result<Manifest, String> {
     }
 
     let channel = if input.channel.trim().is_empty() {
-        if version.contains('-') { "beta" } else { "stable" }
+        if version.contains('-') {
+            "beta"
+        } else {
+            "stable"
+        }
     } else {
         input.channel.trim()
     };
@@ -146,10 +150,8 @@ fn collect_artifacts(assets_dir: &str, repo: &str, tag: &str) -> Result<HashMap<
         return Err("assets directory is required".into());
     }
     let dir = Path::new(assets_dir);
-    let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .map_err(|e| format!("read assets directory: {e}"))?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries: Vec<_> =
+        std::fs::read_dir(dir).map_err(|e| format!("read assets directory: {e}"))?.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.file_name());
 
     let mut artifacts = HashMap::new();
@@ -167,18 +169,20 @@ fn collect_artifacts(assets_dir: &str, repo: &str, tag: &str) -> Result<HashMap<
         let info = entry.metadata().map_err(|e| format!("stat {name}: {e}"))?;
 
         let sha_path = path.with_extension("sha256");
-        let sha_bytes = std::fs::read_to_string(&sha_path)
-            .map_err(|e| format!("read checksum for {name}: {e}"))?;
+        let sha_bytes = std::fs::read_to_string(&sha_path).map_err(|e| format!("read checksum for {name}: {e}"))?;
         let sha = parse_sha256(&sha_bytes);
         if sha.is_empty() {
             return Err(format!("invalid checksum format for {name}"));
         }
 
-        artifacts.insert(name.clone(), Artifact {
-            url: format!("https://github.com/{repo}/releases/download/{tag}/{name}"),
-            sha256: sha,
-            size: info.len() as i64,
-        });
+        artifacts.insert(
+            name.clone(),
+            Artifact {
+                url: format!("https://github.com/{repo}/releases/download/{tag}/{name}"),
+                sha256: sha,
+                size: info.len() as i64,
+            },
+        );
     }
 
     Ok(artifacts)

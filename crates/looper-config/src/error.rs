@@ -52,19 +52,11 @@ pub struct ValidationIssue {
 
 impl ValidationIssue {
     pub fn error(path: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            message: message.into(),
-            severity: ValidationSeverity::Error,
-        }
+        Self { path: path.into(), message: message.into(), severity: ValidationSeverity::Error }
     }
 
     pub fn warning(path: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            path: path.into(),
-            message: message.into(),
-            severity: ValidationSeverity::Warning,
-        }
+        Self { path: path.into(), message: message.into(), severity: ValidationSeverity::Warning }
     }
 }
 
@@ -99,23 +91,15 @@ impl ConfigValidation {
     }
 
     pub fn is_valid(&self) -> bool {
-        self.issues
-            .iter()
-            .all(|i| i.severity != ValidationSeverity::Error)
+        self.issues.iter().all(|i| i.severity != ValidationSeverity::Error)
     }
 
     pub fn errors(&self) -> Vec<&ValidationIssue> {
-        self.issues
-            .iter()
-            .filter(|i| i.severity == ValidationSeverity::Error)
-            .collect()
+        self.issues.iter().filter(|i| i.severity == ValidationSeverity::Error).collect()
     }
 
     pub fn warnings(&self) -> Vec<&ValidationIssue> {
-        self.issues
-            .iter()
-            .filter(|i| i.severity == ValidationSeverity::Warning)
-            .collect()
+        self.issues.iter().filter(|i| i.severity == ValidationSeverity::Warning).collect()
     }
 
     /// Consume self and return an error if any `Error`-severity issues exist.
@@ -129,10 +113,7 @@ impl ConfigValidation {
                 .filter(|i| i.severity == ValidationSeverity::Error)
                 .map(|i| format!("{}: {}", i.path, i.message))
                 .collect();
-            Err(ConfigError::Validation {
-                path: "root".into(),
-                message: errors.join("; "),
-            })
+            Err(ConfigError::Validation { path: "root".into(), message: errors.join("; ") })
         }
     }
 }

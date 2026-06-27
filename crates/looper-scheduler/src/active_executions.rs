@@ -14,9 +14,7 @@ pub struct ActiveExecutionRegistry {
 
 impl ActiveExecutionRegistry {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { inner: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     /// Format: `{loop_id}\x00{run_id}\x00{execution_id}`

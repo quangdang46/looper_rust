@@ -25,13 +25,7 @@ pub struct CleanupOptions {
 
 impl Default for CleanupOptions {
     fn default() -> Self {
-        Self {
-            include_orphans: true,
-            retention_days: 7,
-            max_per_tick: 10,
-            dry_run: false,
-            project_id: None,
-        }
+        Self { include_orphans: true, retention_days: 7, max_per_tick: 10, dry_run: false, project_id: None }
     }
 }
 
@@ -62,10 +56,7 @@ pub fn run(
     plan_result: &PlanResult,
     options: &CleanupOptions,
 ) -> Result<RunResult, CleanupError> {
-    let mut result = RunResult {
-        summary: plan_result.summary.clone(),
-        ..Default::default()
-    };
+    let mut result = RunResult { summary: plan_result.summary.clone(), ..Default::default() };
 
     let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
@@ -87,7 +78,7 @@ pub fn run(
         }
 
         // 1. Try git worktree remove --force (handles git's internal worktree tracking)
-        let git_remove_ok = if let Some(repo_path) = wt.repo_path.strip_suffix('/').or(Some(&wt.repo_path)) {
+        let _git_remove_ok = if let Some(_repo_path) = wt.repo_path.strip_suffix('/').or(Some(&wt.repo_path)) {
             // Try removing from the repo's parent git context if possible
             let repo_dir = if !wt.repo_path.is_empty() && std::path::Path::new(&wt.repo_path).join(".git").exists() {
                 wt.repo_path.clone()
@@ -144,15 +135,8 @@ pub fn run(
         }
 
         // 3. Update DB record to mark cleaned
-        let cleaned = WorktreeRecord {
-            cleaned_at: Some(now_iso.clone()),
-            status: "cleaned".to_string(),
-            ..wt.clone()
-        };
-        repos
-            .worktrees
-            .upsert(&cleaned)
-            .map_err(|e| CleanupError::Database(format!("update worktree: {e}")))?;
+        let cleaned = WorktreeRecord { cleaned_at: Some(now_iso.clone()), status: "cleaned".to_string(), ..wt.clone() };
+        repos.worktrees.upsert(&cleaned).map_err(|e| CleanupError::Database(format!("update worktree: {e}")))?;
 
         result.cleaned_count += 1;
     }

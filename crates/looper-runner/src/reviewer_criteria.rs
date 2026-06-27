@@ -117,7 +117,11 @@ pub fn extract(issue_body: &str) -> Vec<AcceptanceCriterion> {
 }
 
 /// Verify all criteria against the diff using the given verifier.
-pub fn verify(criteria: &[AcceptanceCriterion], diff: &PRDiff, verifier: &dyn Verifier) -> Result<VerificationResult, String> {
+pub fn verify(
+    criteria: &[AcceptanceCriterion],
+    diff: &PRDiff,
+    verifier: &dyn Verifier,
+) -> Result<VerificationResult, String> {
     let mut results = Vec::with_capacity(criteria.len());
     let mut disposition = AggregateDisposition::Pass;
 
@@ -331,9 +335,7 @@ fn criterion_tokens(value: &str) -> Vec<String> {
         .filter(|c| c.is_ascii_alphanumeric())
         .collect::<String>()
         .split(|c: char| !c.is_ascii_alphanumeric() && c != ' ')
-        .flat_map(|s| {
-            if s.len() >= 4 { Some(s.to_lowercase()) } else { None }
-        })
+        .flat_map(|s| if s.len() >= 4 { Some(s.to_lowercase()) } else { None })
         .collect()
 }
 
@@ -413,7 +415,11 @@ fn strategy_allowed(strategy: AutoMergeStrategy, settings: &RepoSettingsSnapshot
     }
 }
 
-fn validate_assessment(criterion: &AcceptanceCriterion, assessment: &CriterionAssessment, diff: &PRDiff) -> Result<(), String> {
+fn validate_assessment(
+    criterion: &AcceptanceCriterion,
+    assessment: &CriterionAssessment,
+    diff: &PRDiff,
+) -> Result<(), String> {
     match assessment.verdict {
         Verdict::Pass | Verdict::Fail | Verdict::Unverifiable => {}
     }
@@ -496,10 +502,7 @@ mod tests {
     #[test]
     fn test_default_verifier_unverifiable() {
         let diff = PRDiff {
-            files: vec![DiffFile {
-                path: "src/other.rs".into(),
-                patch: "@@ -0,0 +1 @@\n+fn unrelated() {}\n".into(),
-            }],
+            files: vec![DiffFile { path: "src/other.rs".into(), patch: "@@ -0,0 +1 @@\n+fn unrelated() {}\n".into() }],
         };
         let verifier = DefaultVerifier::new();
         let criterion = AcceptanceCriterion("User can log in".into());
@@ -525,10 +528,8 @@ mod tests {
             }],
         };
         let verifier = DefaultVerifier::new();
-        let criteria = vec![
-            AcceptanceCriterion("User can log in".into()),
-            AcceptanceCriterion("Send email notification".into()),
-        ];
+        let criteria =
+            vec![AcceptanceCriterion("User can log in".into()), AcceptanceCriterion("Send email notification".into())];
         let result = verify(&criteria, &diff, &verifier).unwrap();
         assert_eq!(result.disposition, AggregateDisposition::Unverifiable);
         assert_eq!(result.criteria.len(), 2);
@@ -540,7 +541,12 @@ mod tests {
     fn test_auto_merge_opt_in() {
         let pr = PRSnapshot { labels: vec!["looper:worker-ready".into()], has_tracked_issue_link: true };
         let protection = BranchProtectionSnapshot { exists: true, has_required_checks: true };
-        let settings = RepoSettingsSnapshot { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true, allow_auto_merge: true };
+        let settings = RepoSettingsSnapshot {
+            allow_squash_merge: true,
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            allow_auto_merge: true,
+        };
         let d = decide_auto_merge(&pr, true, AutoMergeStrategy::Squash, true, &protection, &settings);
         assert_eq!(d, AutoMergeDecision::OptIn(AutoMergeStrategy::Squash));
     }
@@ -549,7 +555,12 @@ mod tests {
     fn test_auto_merge_disabled() {
         let pr = PRSnapshot { labels: vec!["looper:worker-ready".into()], has_tracked_issue_link: true };
         let protection = BranchProtectionSnapshot { exists: true, has_required_checks: true };
-        let settings = RepoSettingsSnapshot { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true, allow_auto_merge: true };
+        let settings = RepoSettingsSnapshot {
+            allow_squash_merge: true,
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            allow_auto_merge: true,
+        };
         let d = decide_auto_merge(&pr, false, AutoMergeStrategy::Squash, true, &protection, &settings);
         assert_eq!(d, AutoMergeDecision::Refuse(RefusalReason::Disabled));
     }
@@ -558,7 +569,12 @@ mod tests {
     fn test_auto_merge_no_looper_label() {
         let pr = PRSnapshot { labels: vec!["bug".into()], has_tracked_issue_link: true };
         let protection = BranchProtectionSnapshot { exists: true, has_required_checks: true };
-        let settings = RepoSettingsSnapshot { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true, allow_auto_merge: true };
+        let settings = RepoSettingsSnapshot {
+            allow_squash_merge: true,
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            allow_auto_merge: true,
+        };
         let d = decide_auto_merge(&pr, true, AutoMergeStrategy::Squash, true, &protection, &settings);
         assert_eq!(d, AutoMergeDecision::Refuse(RefusalReason::Scope));
     }
@@ -567,7 +583,12 @@ mod tests {
     fn test_auto_merge_no_branch_protection() {
         let pr = PRSnapshot { labels: vec!["looper:worker-ready".into()], has_tracked_issue_link: true };
         let protection = BranchProtectionSnapshot { exists: false, has_required_checks: false };
-        let settings = RepoSettingsSnapshot { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true, allow_auto_merge: true };
+        let settings = RepoSettingsSnapshot {
+            allow_squash_merge: true,
+            allow_merge_commit: true,
+            allow_rebase_merge: true,
+            allow_auto_merge: true,
+        };
         let d = decide_auto_merge(&pr, true, AutoMergeStrategy::Squash, true, &protection, &settings);
         assert_eq!(d, AutoMergeDecision::Refuse(RefusalReason::NoBranchProtection));
     }

@@ -22,35 +22,16 @@ pub fn new_event_id(prefix: &str) -> String {
 /// Append a structured event to the event log.
 /// Handles ID generation, timestamp formatting, actor defaults, and payload resolution.
 pub fn append(events: &EventsRepository, input: &AppendInput) -> Result<EventLogRecord> {
-    let created_at = input
-        .created_at
-        .clone()
-        .unwrap_or_else(format_javascript_iso_string);
+    let created_at = input.created_at.clone().unwrap_or_else(format_javascript_iso_string);
 
-    let id = input
-        .id
-        .clone()
-        .unwrap_or_else(|| new_event_id("event"));
+    let id = input.id.clone().unwrap_or_else(|| new_event_id("event"));
 
-    let payload_json = if let Some(ref pj) = input.payload_json {
-        pj.clone()
-    } else {
-        "{}".to_string()
-    };
+    let payload_json = if let Some(ref pj) = input.payload_json { pj.clone() } else { "{}".to_string() };
 
     // Actor defaults
-    let actor_type = input
-        .actor_type
-        .clone()
-        .or_else(|| Some("system".to_string()));
-    let actor_id = input
-        .actor_id
-        .clone()
-        .or_else(|| Some("looperd".to_string()));
-    let actor_display_name = input
-        .actor_display_name
-        .clone()
-        .or_else(|| Some("looperd".to_string()));
+    let actor_type = input.actor_type.clone().or_else(|| Some("system".to_string()));
+    let actor_id = input.actor_id.clone().or_else(|| Some("looperd".to_string()));
+    let actor_display_name = input.actor_display_name.clone().or_else(|| Some("looperd".to_string()));
 
     let record = EventLogRecord {
         id,

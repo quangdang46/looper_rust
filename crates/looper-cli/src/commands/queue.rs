@@ -34,7 +34,9 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &QueueCommand, json: bool) ->
             output::print_output_vec(json, &items);
         }
         QueueCommand::Enqueue(args) => {
-            let payload = args.payload.as_ref()
+            let payload = args
+                .payload
+                .as_ref()
                 .map(|s| serde_json::from_str(s))
                 .transpose()
                 .map_err(|e| CliError::config(format!("invalid JSON payload: {e}")))?;

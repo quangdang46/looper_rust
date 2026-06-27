@@ -59,16 +59,10 @@ pub fn build_command_env(
     env_map.insert("LOOPER_PROMPT".to_string(), prompt.to_string());
 
     // Set LOOPER_COMPLETION_MARKER
-    env_map.insert(
-        "LOOPER_COMPLETION_MARKER".to_string(),
-        crate::types::COMPLETION_MARKER.to_string(),
-    );
+    env_map.insert("LOOPER_COMPLETION_MARKER".to_string(), crate::types::COMPLETION_MARKER.to_string());
 
     // Convert to KEY=VALUE format and sort
-    let mut result: Vec<String> = env_map
-        .into_iter()
-        .map(|(k, v)| format!("{}={}", k, v))
-        .collect();
+    let mut result: Vec<String> = env_map.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect();
     result.sort();
 
     result
@@ -85,18 +79,11 @@ pub fn detect_agent_setup_failure(message: &str) -> bool {
     }
 
     // Model setup failures
-    let setup_phrases = [
-        "unsupported model",
-        "unknown model",
-        "invalid model",
-        "model is not supported",
-        "unrecognized model",
-    ];
+    let setup_phrases =
+        ["unsupported model", "unknown model", "invalid model", "model is not supported", "unrecognized model"];
 
     let has_setup_phrase = setup_phrases.iter().any(|p| lower.contains(p));
-    let has_agent_name = ["codex", "claude", "opencode", "cursor", "hermes"]
-        .iter()
-        .any(|n| lower.contains(n));
+    let has_agent_name = ["codex", "claude", "opencode", "cursor", "hermes"].iter().any(|n| lower.contains(n));
     let has_model_context = lower.contains("model");
 
     has_setup_phrase && has_agent_name && has_model_context
@@ -141,12 +128,8 @@ mod tests {
 
     #[test]
     fn test_setup_failure_detection_codex() {
-        assert!(detect_agent_setup_failure(
-            "This model requires a newer version of codex"
-        ));
-        assert!(detect_agent_setup_failure(
-            "unsupported model gpt-5 for codex"
-        ));
+        assert!(detect_agent_setup_failure("This model requires a newer version of codex"));
+        assert!(detect_agent_setup_failure("unsupported model gpt-5 for codex"));
         assert!(!detect_agent_setup_failure("unknown command: foobar"));
         assert!(!detect_agent_setup_failure("connection refused"));
     }

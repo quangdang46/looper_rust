@@ -388,6 +388,13 @@ pub struct ClosePullRequestInput {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct MarkPullRequestReadyForReviewInput {
+    pub repo: String,
+    pub pr_number: i64,
+    pub cwd: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct EnableAutoMergeInput {
     pub repo: String,
     pub pr_number: i64,
@@ -495,6 +502,7 @@ pub struct CreatePullRequestInput {
     pub base_branch: String,
     pub title: String,
     pub body: String,
+    pub draft: bool,
     pub cwd: String,
 }
 

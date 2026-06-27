@@ -68,19 +68,15 @@ pub async fn check() -> Result<(), CliError> {
         .build()
         .map_err(|e| CliError::autoupgrade(format!("HTTP client error: {e}")))?;
 
-    let resp = client.get(url).send().await.map_err(|e| {
-        CliError::autoupgrade(format!("cannot check for updates: {e}"))
-    })?;
+    let resp =
+        client.get(url).send().await.map_err(|e| CliError::autoupgrade(format!("cannot check for updates: {e}")))?;
 
     if !resp.status().is_success() {
-        return Err(CliError::autoupgrade(
-            format!("GitHub API returned {}", resp.status()),
-        ));
+        return Err(CliError::autoupgrade(format!("GitHub API returned {}", resp.status())));
     }
 
-    let release: serde_json::Value = resp.json().await.map_err(|e| {
-        CliError::autoupgrade(format!("cannot parse release info: {e}"))
-    })?;
+    let release: serde_json::Value =
+        resp.json().await.map_err(|e| CliError::autoupgrade(format!("cannot parse release info: {e}")))?;
 
     let tag = release["tag_name"].as_str().unwrap_or("unknown");
     let html_url = release["html_url"].as_str().unwrap_or("");
@@ -127,9 +123,7 @@ pub async fn status() -> Result<(), CliError> {
 pub async fn upgrade() -> Result<(), CliError> {
     let state = read_state()?;
     let Some(version) = &state.available_version else {
-        return Err(CliError::autoupgrade(
-            "no available version known; run `looper autoupgrade check` first",
-        ));
+        return Err(CliError::autoupgrade("no available version known; run `looper autoupgrade check` first"));
     };
     let Some(url) = &state.download_url else {
         return Err(CliError::autoupgrade("no download URL available"));
@@ -138,9 +132,7 @@ pub async fn upgrade() -> Result<(), CliError> {
     // Acquire lock
     let lock = lock_path()?;
     if lock.exists() {
-        return Err(CliError::autoupgrade(
-            "upgrade lock exists — another upgrade may be in progress",
-        ));
+        return Err(CliError::autoupgrade("upgrade lock exists — another upgrade may be in progress"));
     }
     std::fs::write(&lock, "")?;
 
@@ -150,8 +142,8 @@ pub async fn upgrade() -> Result<(), CliError> {
 }
 
 async fn perform_download_and_swap(_version: &str, url: &str) -> Result<(), CliError> {
-    let current_exe = std::env::current_exe()
-        .map_err(|e| CliError::autoupgrade(format!("cannot determine current binary: {e}")))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| CliError::autoupgrade(format!("cannot determine current binary: {e}")))?;
 
     // Build asset URL (assuming GitHub release tar.gz or binary)
     // For simplicity, report the download URL — actual download is platform-specific
@@ -159,7 +151,5 @@ async fn perform_download_and_swap(_version: &str, url: &str) -> Result<(), CliE
     println!("Replace binary at: {}", current_exe.display());
 
     // Placeholder: in production, detect platform → construct asset URL → download → verify → swap
-    Err(CliError::autoupgrade(
-        "automatic download not yet implemented; download the release manually",
-    ))
+    Err(CliError::autoupgrade("automatic download not yet implemented; download the release manually"))
 }

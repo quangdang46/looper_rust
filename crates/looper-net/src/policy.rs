@@ -1,6 +1,5 @@
 use crate::types::{
-    has_exact_target, parse_target_label, ClaimDecision, GitHubIdentity, MatchMode, NetworkMode,
-    ProjectPolicy,
+    has_exact_target, parse_target_label, ClaimDecision, GitHubIdentity, MatchMode, NetworkMode, ProjectPolicy,
 };
 
 /// Evaluate whether a node can claim a worker role on a PR.
@@ -10,11 +9,7 @@ use crate::types::{
 /// 2. Must have label `looper:worker-ready`
 /// 3. Must have exactly one `looper:target:<node_name>` label matching the local node
 /// 4. Local GitHub identity must be in the PR assignees list
-pub fn evaluate_worker(
-    policy: &ProjectPolicy,
-    labels: &[String],
-    assignees: &[GitHubIdentity],
-) -> ClaimDecision {
+pub fn evaluate_worker(policy: &ProjectPolicy, labels: &[String], assignees: &[GitHubIdentity]) -> ClaimDecision {
     if !matches!(policy.mode, NetworkMode::Routed) {
         return ClaimDecision {
             allowed: true,
@@ -39,10 +34,7 @@ pub fn evaluate_worker(
     if targets.len() != 1 {
         return ClaimDecision {
             allowed: false,
-            reason: format!(
-                "expected exactly 1 target label, found {}",
-                targets.len()
-            ),
+            reason: format!("expected exactly 1 target label, found {}", targets.len()),
             match_mode: MatchMode::None,
             target_label: String::new(),
         };
@@ -50,10 +42,7 @@ pub fn evaluate_worker(
     if targets[0] != policy.node_name {
         return ClaimDecision {
             allowed: false,
-            reason: format!(
-                "target label '{}' does not match local node '{}'",
-                targets[0], policy.node_name
-            ),
+            reason: format!("target label '{}' does not match local node '{}'", targets[0], policy.node_name),
             match_mode: MatchMode::None,
             target_label: targets[0].to_string(),
         };
@@ -101,10 +90,7 @@ pub fn evaluate_reviewer(
     if targets.len() != 1 {
         return ClaimDecision {
             allowed: false,
-            reason: format!(
-                "expected exactly 1 target label, found {}",
-                targets.len()
-            ),
+            reason: format!("expected exactly 1 target label, found {}", targets.len()),
             match_mode: MatchMode::None,
             target_label: String::new(),
         };
@@ -112,10 +98,7 @@ pub fn evaluate_reviewer(
     if targets[0] != policy.node_name {
         return ClaimDecision {
             allowed: false,
-            reason: format!(
-                "target label '{}' does not match local node '{}'",
-                targets[0], policy.node_name
-            ),
+            reason: format!("target label '{}' does not match local node '{}'", targets[0], policy.node_name),
             match_mode: MatchMode::None,
             target_label: targets[0].to_string(),
         };
@@ -145,8 +128,7 @@ pub fn evaluate_reviewer(
 /// 2. Login fallback (case-insensitive login comparison)
 fn match_local_identity(policy: &ProjectPolicy, users: &[GitHubIdentity]) -> Option<MatchMode> {
     for user in users {
-        if policy.github_user_id > 0 && user.numeric_id > 0 && policy.github_user_id == user.numeric_id
-        {
+        if policy.github_user_id > 0 && user.numeric_id > 0 && policy.github_user_id == user.numeric_id {
             return Some(MatchMode::Numeric);
         }
     }
@@ -178,10 +160,7 @@ mod tests {
     }
 
     fn make_identity(id: i64, login: &str) -> GitHubIdentity {
-        GitHubIdentity {
-            numeric_id: id,
-            login: login.to_string(),
-        }
+        GitHubIdentity { numeric_id: id, login: login.to_string() }
     }
 
     #[test]
@@ -202,11 +181,8 @@ mod tests {
     #[test]
     fn test_worker_no_worker_ready_label() {
         let policy = make_policy();
-        let decision = evaluate_worker(
-            &policy,
-            &["looper:target:my-node".to_string()],
-            &[make_identity(12345, "testuser")],
-        );
+        let decision =
+            evaluate_worker(&policy, &["looper:target:my-node".to_string()], &[make_identity(12345, "testuser")]);
         assert!(!decision.allowed);
         assert!(decision.reason.contains("worker-ready"));
     }
@@ -214,11 +190,8 @@ mod tests {
     #[test]
     fn test_worker_no_target_label() {
         let policy = make_policy();
-        let decision = evaluate_worker(
-            &policy,
-            &["looper:worker-ready".to_string()],
-            &[make_identity(12345, "testuser")],
-        );
+        let decision =
+            evaluate_worker(&policy, &["looper:worker-ready".to_string()], &[make_identity(12345, "testuser")]);
         assert!(!decision.allowed);
     }
 
@@ -227,10 +200,7 @@ mod tests {
         let policy = make_policy();
         let decision = evaluate_worker(
             &policy,
-            &[
-                "looper:worker-ready".to_string(),
-                "looper:target:other-node".to_string(),
-            ],
+            &["looper:worker-ready".to_string(), "looper:target:other-node".to_string()],
             &[make_identity(12345, "testuser")],
         );
         assert!(!decision.allowed);
@@ -242,10 +212,7 @@ mod tests {
         let policy = make_policy();
         let decision = evaluate_worker(
             &policy,
-            &[
-                "looper:worker-ready".to_string(),
-                "looper:target:my-node".to_string(),
-            ],
+            &["looper:worker-ready".to_string(), "looper:target:my-node".to_string()],
             &[make_identity(99999, "other")],
         );
         assert!(!decision.allowed);
@@ -257,10 +224,7 @@ mod tests {
         let policy = make_policy();
         let decision = evaluate_worker(
             &policy,
-            &[
-                "looper:worker-ready".to_string(),
-                "looper:target:my-node".to_string(),
-            ],
+            &["looper:worker-ready".to_string(), "looper:target:my-node".to_string()],
             &[make_identity(12345, "testuser")],
         );
         assert!(decision.allowed);
@@ -272,10 +236,7 @@ mod tests {
         let policy = make_policy();
         let decision = evaluate_worker(
             &policy,
-            &[
-                "looper:worker-ready".to_string(),
-                "looper:target:my-node".to_string(),
-            ],
+            &["looper:worker-ready".to_string(), "looper:target:my-node".to_string()],
             &[make_identity(0, "TestUser")],
         );
         assert!(decision.allowed);
@@ -285,22 +246,16 @@ mod tests {
     #[test]
     fn test_reviewer_match() {
         let policy = make_policy();
-        let decision = evaluate_reviewer(
-            &policy,
-            &["looper:target:my-node".to_string()],
-            &[make_identity(12345, "testuser")],
-        );
+        let decision =
+            evaluate_reviewer(&policy, &["looper:target:my-node".to_string()], &[make_identity(12345, "testuser")]);
         assert!(decision.allowed);
     }
 
     #[test]
     fn test_reviewer_no_match() {
         let policy = make_policy();
-        let decision = evaluate_reviewer(
-            &policy,
-            &["looper:target:my-node".to_string()],
-            &[make_identity(99999, "other")],
-        );
+        let decision =
+            evaluate_reviewer(&policy, &["looper:target:my-node".to_string()], &[make_identity(99999, "other")]);
         assert!(!decision.allowed);
     }
 }

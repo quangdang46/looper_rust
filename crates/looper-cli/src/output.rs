@@ -65,27 +65,31 @@ pub fn print_err(err: &crate::error::CliError, json: bool) {
 fn print_table<T: Output>(item: &T) {
     let header = T::table_header();
     let row = item.table_row();
-    let widths: Vec<usize> = header.iter().zip(row.iter())
-        .map(|(h, r)| h.len().max(r.len()))
-        .collect();
+    let widths: Vec<usize> = header.iter().zip(row.iter()).map(|(h, r)| h.len().max(r.len())).collect();
 
     // Print header
     for (i, h) in header.iter().enumerate() {
-        if i > 0 { print!("  "); }
+        if i > 0 {
+            print!("  ");
+        }
         print!("{:<width$}", h, width = widths[i]);
     }
     println!();
 
     // Separator
     for (i, w) in widths.iter().enumerate() {
-        if i > 0 { print!("  "); }
+        if i > 0 {
+            print!("  ");
+        }
         print!("{}", "-".repeat(*w));
     }
     println!();
 
     // Row
     for (i, r) in row.iter().enumerate() {
-        if i > 0 { print!("  "); }
+        if i > 0 {
+            print!("  ");
+        }
         print!("{:<width$}", r, width = widths[i]);
     }
     println!();
@@ -98,7 +102,9 @@ fn print_table_vec<T: Output>(items: &[T]) {
     }
     let header = T::table_header();
     let rows: Vec<Vec<String>> = items.iter().map(|i| i.table_row()).collect();
-    let widths: Vec<usize> = header.iter().enumerate()
+    let widths: Vec<usize> = header
+        .iter()
+        .enumerate()
         .map(|(col, h)| {
             let max_data = rows.iter().map(|r| r[col].len()).max().unwrap_or(0);
             h.len().max(max_data)
@@ -107,14 +113,18 @@ fn print_table_vec<T: Output>(items: &[T]) {
 
     // Header
     for (i, h) in header.iter().enumerate() {
-        if i > 0 { print!("  "); }
+        if i > 0 {
+            print!("  ");
+        }
         print!("{:<width$}", h, width = widths[i]);
     }
     println!();
 
     // Separator
     for (i, w) in widths.iter().enumerate() {
-        if i > 0 { print!("  "); }
+        if i > 0 {
+            print!("  ");
+        }
         print!("{}", "-".repeat(*w));
     }
     println!();
@@ -122,7 +132,9 @@ fn print_table_vec<T: Output>(items: &[T]) {
     // Rows
     for row in &rows {
         for (i, r) in row.iter().enumerate() {
-            if i > 0 { print!("  "); }
+            if i > 0 {
+                print!("  ");
+            }
             print!("{:<width$}", r, width = widths[i]);
         }
         println!();
@@ -134,23 +146,27 @@ fn print_table_vec<T: Output>(items: &[T]) {
 // ---------------------------------------------------------------------------
 
 impl Output for HealthResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Status", "Uptime", "Version"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Status", "Uptime", "Version"]
+    }
     fn table_row(&self) -> Vec<String> {
-        vec![
-            self.status.clone(),
-            format!("{}s", self.uptime_seconds),
-            self.version.clone(),
-        ]
+        vec![self.status.clone(), format!("{}s", self.uptime_seconds), self.version.clone()]
     }
 }
 
 impl Output for VersionResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Version"] }
-    fn table_row(&self) -> Vec<String> { vec![self.version.clone()] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Version"]
+    }
+    fn table_row(&self) -> Vec<String> {
+        vec![self.version.clone()]
+    }
 }
 
 impl Output for ProjectSummary {
-    fn table_header() -> Vec<&'static str> { vec!["Name", "Path", "Schedule", "Enabled"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Name", "Path", "Schedule", "Enabled"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             self.name.clone(),
@@ -162,19 +178,18 @@ impl Output for ProjectSummary {
 }
 
 impl Output for LoopSummary {
-    fn table_header() -> Vec<&'static str> { vec!["Seq", "Type", "Status", "Created"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Seq", "Type", "Status", "Created"]
+    }
     fn table_row(&self) -> Vec<String> {
-        vec![
-            self.seq.to_string(),
-            self.loop_type.clone(),
-            self.status.clone(),
-            self.created_at.clone(),
-        ]
+        vec![self.seq.to_string(), self.loop_type.clone(), self.status.clone(), self.created_at.clone()]
     }
 }
 
 impl Output for LoopDetail {
-    fn table_header() -> Vec<&'static str> { vec!["Seq", "Type", "Status", "Target", "Created"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Seq", "Type", "Status", "Target", "Created"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             self.seq.to_string(),
@@ -187,19 +202,18 @@ impl Output for LoopDetail {
 }
 
 impl Output for RunSummary {
-    fn table_header() -> Vec<&'static str> { vec!["Run ID", "Step", "Status", "Created"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Run ID", "Step", "Status", "Created"]
+    }
     fn table_row(&self) -> Vec<String> {
-        vec![
-            truncate(&self.run_id, 12),
-            self.step_name.clone(),
-            self.status.clone(),
-            self.created_at.clone(),
-        ]
+        vec![truncate(&self.run_id, 12), self.step_name.clone(), self.status.clone(), self.created_at.clone()]
     }
 }
 
 impl Output for RunDetail {
-    fn table_header() -> Vec<&'static str> { vec!["Run ID", "Step", "Vendor", "Status", "Created"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Run ID", "Step", "Vendor", "Status", "Created"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             truncate(&self.run_id, 12),
@@ -212,7 +226,9 @@ impl Output for RunDetail {
 }
 
 impl Output for QueueItemResponse {
-    fn table_header() -> Vec<&'static str> { vec!["ID", "Type", "Status", "Priority", "Attempts"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["ID", "Type", "Status", "Priority", "Attempts"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             truncate(&self.id, 12),
@@ -225,7 +241,9 @@ impl Output for QueueItemResponse {
 }
 
 impl Output for EventLogResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Timestamp", "Type", "Actor", "Details"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Timestamp", "Type", "Actor", "Details"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             truncate(&self.timestamp, 19),
@@ -237,31 +255,36 @@ impl Output for EventLogResponse {
 }
 
 impl Output for LockResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Resource", "Holder", "Expires"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Resource", "Holder", "Expires"]
+    }
     fn table_row(&self) -> Vec<String> {
-        vec![
-            self.resource.clone(),
-            self.holder.clone(),
-            self.expires_at.as_deref().unwrap_or("-").into(),
-        ]
+        vec![self.resource.clone(), self.holder.clone(), self.expires_at.as_deref().unwrap_or("-").into()]
     }
 }
 
 impl Output for ConfigResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Config keys"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Config keys"]
+    }
     fn table_row(&self) -> Vec<String> {
         let keys: Vec<&str> = [
             self.server.as_ref().map(|_| "server"),
             self.storage.as_ref().map(|_| "storage"),
             self.agent.as_ref().map(|_| "agent"),
             self.logging.as_ref().map(|_| "logging"),
-        ].into_iter().flatten().collect();
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         vec![keys.join(", ")]
     }
 }
 
 impl Output for AgentConfigResponse {
-    fn table_header() -> Vec<&'static str> { vec!["Project", "Vendor", "Model", "Timeout"] }
+    fn table_header() -> Vec<&'static str> {
+        vec!["Project", "Vendor", "Model", "Timeout"]
+    }
     fn table_row(&self) -> Vec<String> {
         vec![
             self.project_name.clone(),
@@ -273,8 +296,11 @@ impl Output for AgentConfigResponse {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}…", &s[..max]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,9 +318,7 @@ pub fn pretty_value(v: &Value) -> String {
             format!("[{}]", items.join(", "))
         }
         Value::Object(map) => {
-            let items: Vec<String> = map.iter()
-                .map(|(k, v)| format!("{k}: {}", pretty_value(v)))
-                .collect();
+            let items: Vec<String> = map.iter().map(|(k, v)| format!("{k}: {}", pretty_value(v))).collect();
             format!("{{{}}}", items.join(", "))
         }
     }

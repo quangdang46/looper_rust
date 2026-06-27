@@ -1,11 +1,11 @@
 use std::fmt;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use async_trait::async_trait;
 
 use crate::envelope::Envelope;
 use crate::error::ApiError;

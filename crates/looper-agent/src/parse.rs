@@ -33,14 +33,7 @@ pub fn parse_completion(output: &str) -> (CompletionParseStatus, Option<Completi
 /// Scans line-by-line for JSON keys: nativeSessionId, native_session_id, sessionId, session_id, chatId, chat_id.
 /// Falls back to key:value / key=value extraction.
 pub fn extract_native_session_id(output: &str) -> Option<String> {
-    let session_keys = &[
-        "nativeSessionId",
-        "native_session_id",
-        "sessionId",
-        "session_id",
-        "chatId",
-        "chat_id",
-    ];
+    let session_keys = &["nativeSessionId", "native_session_id", "sessionId", "session_id", "chatId", "chat_id"];
 
     for line in output.lines() {
         let trimmed = line.trim();
@@ -116,8 +109,7 @@ mod tests {
     fn test_parse_completion_last_occurrence_wins() {
         let output = format!(
             "{}\nanother line\n{}",
-            r#"__LOOPER_RESULT__={"summary":"first"}"#,
-            r#"__LOOPER_RESULT__={"summary":"second"}"#
+            r#"__LOOPER_RESULT__={"summary":"first"}"#, r#"__LOOPER_RESULT__={"summary":"second"}"#
         );
         let (status, payload) = parse_completion(&output);
         assert_eq!(status, CompletionParseStatus::Parsed);
@@ -139,8 +131,7 @@ mod tests {
 
     #[test]
     fn test_parse_completion_template_placeholder() {
-        let output =
-            r#"__LOOPER_RESULT__={"summary":"<one-sentence summary>"}"#;
+        let output = r#"__LOOPER_RESULT__={"summary":"<one-sentence summary>"}"#;
         let (status, _) = parse_completion(output);
         assert_eq!(status, CompletionParseStatus::Missing);
     }
@@ -148,28 +139,19 @@ mod tests {
     #[test]
     fn test_extract_native_session_id_json_line() {
         let output = r#"{"session_id":"abc-123","status":"running"}"#;
-        assert_eq!(
-            extract_native_session_id(output),
-            Some("abc-123".to_string())
-        );
+        assert_eq!(extract_native_session_id(output), Some("abc-123".to_string()));
     }
 
     #[test]
     fn test_extract_native_session_id_key_value() {
         let output = "session_id: abc-123";
-        assert_eq!(
-            extract_native_session_id(output),
-            Some("abc-123".to_string())
-        );
+        assert_eq!(extract_native_session_id(output), Some("abc-123".to_string()));
     }
 
     #[test]
     fn test_extract_native_session_id_key_equals() {
         let output = "session_id=abc-123";
-        assert_eq!(
-            extract_native_session_id(output),
-            Some("abc-123".to_string())
-        );
+        assert_eq!(extract_native_session_id(output), Some("abc-123".to_string()));
     }
 
     #[test]
@@ -181,10 +163,7 @@ mod tests {
     fn test_extract_multiple_keys_order_preference() {
         let output = r#"{"nativeSessionId":"ns-1","sessionId":"ss-1"}"#;
         // nativeSessionId should be found first
-        assert_eq!(
-            extract_native_session_id(output),
-            Some("ns-1".to_string())
-        );
+        assert_eq!(extract_native_session_id(output), Some("ns-1".to_string()));
     }
 
     #[test]

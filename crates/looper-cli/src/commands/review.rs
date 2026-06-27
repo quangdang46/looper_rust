@@ -1,9 +1,9 @@
 //! Review commands: submit review, get review status.
 
-use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum ReviewCommand {
@@ -14,7 +14,9 @@ pub enum ReviewCommand {
         #[arg(long, default_value = "comment")]
         event: String,
     },
-    Status { pr: i64 },
+    Status {
+        pr: i64,
+    },
 }
 
 pub async fn handle(_client: &DaemonAPIClient, cmd: &ReviewCommand, json: bool) -> Result<(), CliError> {

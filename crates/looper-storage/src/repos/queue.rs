@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::{Result, StorageError};
-use crate::helpers::{chunk_strings, sql_placeholders, is_queue_active_dedupe_constraint_error, SQLITE_MAX_VARIABLES};
-use crate::record::{QueueItemRecord, QueueMarkRetryInput, QueueFailInput, QueueStats};
+use crate::helpers::{chunk_strings, is_queue_active_dedupe_constraint_error, sql_placeholders, SQLITE_MAX_VARIABLES};
+use crate::record::{QueueFailInput, QueueItemRecord, QueueMarkRetryInput, QueueStats};
+use rusqlite::Connection;
 
 fn scan_queue_item(row: &rusqlite::Row) -> rusqlite::Result<QueueItemRecord> {
     Ok(QueueItemRecord {
@@ -200,10 +200,8 @@ impl QueueRepository {
     }
 
     pub fn get_latest_by_loop_id(&self, loop_id: &str) -> Result<Option<QueueItemRecord>> {
-        let sql = format!(
-            "SELECT {} FROM queue_items WHERE loop_id = ?1 ORDER BY created_at DESC LIMIT 1",
-            QUEUE_COLUMNS
-        );
+        let sql =
+            format!("SELECT {} FROM queue_items WHERE loop_id = ?1 ORDER BY created_at DESC LIMIT 1", QUEUE_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(rusqlite::params![loop_id], scan_queue_item)?;
         match rows.next() {
@@ -237,10 +235,7 @@ impl QueueRepository {
                 QUEUE_COLUMNS, inside,
             );
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(
-                rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())),
-                scan_queue_item,
-            )?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_queue_item)?;
             for row in rows {
                 results.push(row?);
             }
@@ -268,10 +263,7 @@ impl QueueRepository {
                 inside,
             );
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(
-                rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())),
-                scan_queue_item,
-            )?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_queue_item)?;
             for row in rows {
                 results.push(row?);
             }
@@ -280,9 +272,7 @@ impl QueueRepository {
     }
 
     pub fn count_by_all_statuses(&self) -> Result<HashMap<String, i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT status, COUNT(*) as cnt FROM queue_items GROUP BY status",
-        )?;
+        let mut stmt = self.conn.prepare("SELECT status, COUNT(*) as cnt FROM queue_items GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             let status: String = row.get("status")?;
             let cnt: i64 = row.get("cnt")?;
@@ -351,17 +341,11 @@ impl QueueRepository {
     }
 
     pub fn stats(&self, now_iso: &str) -> Result<QueueStats> {
-        let total_queued: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM queue_items WHERE status = 'queued'",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_queued: i64 =
+            self.conn.query_row("SELECT COUNT(*) FROM queue_items WHERE status = 'queued'", [], |row| row.get(0))?;
 
         let eligible_queued: i64 = self.conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM queue_items qi WHERE {}",
-                scheduled_queue_conditions(),
-            ),
+            &format!("SELECT COUNT(*) FROM queue_items qi WHERE {}", scheduled_queue_conditions(),),
             rusqlite::params![now_iso],
             |row| row.get(0),
         )?;
@@ -445,10 +429,8 @@ impl QueueRepository {
             extra_where,
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows = stmt.query_map(
-            rusqlite::params![now_iso, claimed_by, now_iso, now_iso, now_iso],
-            scan_queue_item,
-        )?;
+        let mut rows =
+            stmt.query_map(rusqlite::params![now_iso, claimed_by, now_iso, now_iso, now_iso], scan_queue_item)?;
         match rows.next() {
             Some(Ok(record)) => Ok(Some(record)),
             Some(Err(e)) => Err(e.into()),
@@ -464,10 +446,7 @@ impl QueueRepository {
         self.claim_next_impl(
             now_iso,
             claimed_by,
-            &format!(
-                " AND (qi.attempts < {} OR qi.last_error_kind IS NULL)",
-                QUEUE_LONG_TERM_RETRY_ATTEMPT_THRESHOLD,
-            ),
+            &format!(" AND (qi.attempts < {} OR qi.last_error_kind IS NULL)", QUEUE_LONG_TERM_RETRY_ATTEMPT_THRESHOLD,),
         )
     }
 
@@ -482,7 +461,12 @@ impl QueueRepository {
         )
     }
 
-    pub fn claim_next_of_type(&self, now_iso: &str, claimed_by: &str, queue_type: &str) -> Result<Option<QueueItemRecord>> {
+    pub fn claim_next_of_type(
+        &self,
+        now_iso: &str,
+        claimed_by: &str,
+        queue_type: &str,
+    ) -> Result<Option<QueueItemRecord>> {
         let sql = format!(
             "WITH candidate AS (
                 SELECT id FROM queue_items qi
@@ -573,7 +557,13 @@ impl QueueRepository {
         Ok(rows as i64)
     }
 
-    pub fn requeue_failed_by_id_with_attempts(&self, loop_id: &str, queue_id: &str, queued_at: &str, attempts: i64) -> Result<i64> {
+    pub fn requeue_failed_by_id_with_attempts(
+        &self,
+        loop_id: &str,
+        queue_id: &str,
+        queued_at: &str,
+        attempts: i64,
+    ) -> Result<i64> {
         let rows = self.conn.execute(
             "UPDATE queue_items SET status='queued', available_at=?3, updated_at=?3, attempts=?4 WHERE loop_id=?1 AND id=?2 AND status='failed'",
             rusqlite::params![loop_id, queue_id, queued_at, attempts],
@@ -597,7 +587,13 @@ impl QueueRepository {
         Ok(rows as i64)
     }
 
-    pub fn cancel_active_by_loop_except(&self, loop_id: &str, keep_id: &str, finished_at: &str, reason: Option<&str>) -> Result<i64> {
+    pub fn cancel_active_by_loop_except(
+        &self,
+        loop_id: &str,
+        keep_id: &str,
+        finished_at: &str,
+        reason: Option<&str>,
+    ) -> Result<i64> {
         let rows = self.conn.execute(
             "UPDATE queue_items SET status='cancelled', finished_at=?3, last_error=?4, updated_at=?3 WHERE loop_id=?1 AND status IN ('queued','running') AND id != ?2",
             rusqlite::params![loop_id, keep_id, finished_at, reason],

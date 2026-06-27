@@ -45,10 +45,7 @@ impl WebhookError {
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
-            WebhookError::Timeout
-                | WebhookError::RateLimited
-                | WebhookError::Io(_)
-                | WebhookError::Storage(_)
+            WebhookError::Timeout | WebhookError::RateLimited | WebhookError::Io(_) | WebhookError::Storage(_)
         )
     }
 }
@@ -59,8 +56,5 @@ pub fn is_transient_error(err: &WebhookError) -> bool {
         return true;
     }
     let msg = err.to_string().to_lowercase();
-    msg.contains("timeout")
-        || msg.contains("tempor")
-        || msg.contains("rate limit")
-        || msg.contains("retry after")
+    msg.contains("timeout") || msg.contains("tempor") || msg.contains("rate limit") || msg.contains("retry after")
 }

@@ -1,21 +1,22 @@
-use std::sync::Arc;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 use axum::{
     extract::State,
-    http::{HeaderMap, StatusCode, Request},
+    http::{HeaderMap, Request, StatusCode},
     middleware::{self, Next},
     response::{
-        sse::{Event, Sse}, Json, Response,
+        sse::{Event, Sse},
+        Json, Response,
     },
     routing::{get, post},
     Router,
 };
 use futures::stream::Stream;
-use tokio::sync::broadcast;
 use serde_json::json;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tokio::sync::broadcast;
 
-use crate::server::db::{self, Db, CoordinatorLeaseData};
+use crate::server::db::{self, CoordinatorLeaseData, Db};
 use crate::types::*;
 
 // ── Shared server state ──────────────────────────────────────────────────────
@@ -48,9 +49,7 @@ impl Stream for EventStream {
             match this.rx.try_recv() {
                 Ok(envelope) => {
                     let data = serde_json::to_string(&envelope).unwrap_or_default();
-                    let event = Event::default()
-                        .event(envelope.event.clone())
-                        .data(data);
+                    let event = Event::default().event(envelope.event.clone()).data(data);
                     return Poll::Ready(Some(Ok(event)));
                 }
                 Err(broadcast::error::TryRecvError::Empty) => {
@@ -83,10 +82,7 @@ pub async fn admin_auth(
         .unwrap_or("");
 
     if auth != state.admin_token || auth.is_empty() {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"message": "invalid admin token"})),
-        ));
+        return Err((StatusCode::UNAUTHORIZED, Json(json!({"message": "invalid admin token"}))));
     }
 
     Ok(next.run(request).await)
@@ -105,12 +101,10 @@ pub async fn node_auth(
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    let node = state.db.get_node_by_token(auth).map_err(|_| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"message": "database error"})),
-        )
-    })?;
+    let node = state
+        .db
+        .get_node_by_token(auth)
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"message": "database error"}))))?;
 
     match node {
         Some(n) => {
@@ -119,10 +113,7 @@ pub async fn node_auth(
             req.extensions_mut().insert(n);
             Ok(next.run(req).await)
         }
-        None => Err((
-            StatusCode::UNAUTHORIZED,
-            Json(json!({"message": "invalid node token"})),
-        )),
+        None => Err((StatusCode::UNAUTHORIZED, Json(json!({"message": "invalid node token"})))),
     }
 }
 
@@ -151,19 +142,14 @@ fn api_err(status: StatusCode, message: &str) -> (StatusCode, Json<serde_json::V
 }
 
 fn node_row_to_membership(row: &db::NodeRow) -> Membership {
-    let capabilities: NodeCapabilities =
-        serde_json::from_str(&row.capabilities_json).unwrap_or_default();
-    let target_labels: Vec<String> =
-        serde_json::from_str(&row.target_labels_json).unwrap_or_default();
+    let capabilities: NodeCapabilities = serde_json::from_str(&row.capabilities_json).unwrap_or_default();
+    let target_labels: Vec<String> = serde_json::from_str(&row.target_labels_json).unwrap_or_default();
 
     Membership {
         node_id: row.node_id.clone(),
         node_name: row.node_name.clone(),
         daemon_version: row.daemon_version.clone(),
-        github: GitHubIdentity {
-            numeric_id: row.github_numeric_id,
-            login: row.github_login.clone(),
-        },
+        github: GitHubIdentity { numeric_id: row.github_numeric_id, login: row.github_login.clone() },
         capabilities,
         target_labels,
         joined_at: row.joined_at.clone(),
@@ -181,10 +167,7 @@ fn lease_data_to_coordinator_lease(data: CoordinatorLeaseData) -> CoordinatorLea
     }
 }
 
-fn detect_duplicate_github_warnings(
-    node: &db::NodeRow,
-    duplicates: &[i64],
-) -> bool {
+fn detect_duplicate_github_warnings(node: &db::NodeRow, duplicates: &[i64]) -> bool {
     duplicates.contains(&node.github_numeric_id)
 }
 
@@ -199,10 +182,7 @@ pub async fn handle_join(
     if req.protocol_version != state.protocol_version {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
-            &format!(
-                "protocol version mismatch: expected {}, got {}",
-                state.protocol_version, req.protocol_version
-            ),
+            &format!("protocol version mismatch: expected {}, got {}", state.protocol_version, req.protocol_version),
         ));
     }
 
@@ -215,10 +195,7 @@ pub async fn handle_join(
         if !is_version_at_least(&req.daemon_version, min_version) {
             return Err(api_err(
                 StatusCode::BAD_REQUEST,
-                &format!(
-                    "daemon version {} is below minimum {}",
-                    req.daemon_version, min_version
-                ),
+                &format!("daemon version {} is below minimum {}", req.daemon_version, min_version),
             ));
         }
     }
@@ -265,10 +242,7 @@ pub async fn handle_join(
             .get_node_by_name(&req.node_name)
             .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         {
-            return Err(api_err(
-                StatusCode::CONFLICT,
-                &format!("node name '{}' is already active", req.node_name),
-            ));
+            return Err(api_err(StatusCode::CONFLICT, &format!("node name '{}' is already active", req.node_name)));
         }
 
         // Fresh insert
@@ -287,12 +261,7 @@ pub async fn handle_join(
     }
 
     let warnings: Vec<String> = Vec::new();
-    let resp = JoinResponse {
-        network_id: state.network_id.clone(),
-        node_id,
-        node_token,
-        warnings,
-    };
+    let resp = JoinResponse { network_id: state.network_id.clone(), node_id, node_token, warnings };
 
     // Emit audit event
     let _ = state.event_tx.send(AuditEnvelope {
@@ -333,10 +302,7 @@ pub async fn handle_heartbeat(
     if req.protocol_version != state.protocol_version {
         return Err(api_err(
             StatusCode::BAD_REQUEST,
-            &format!(
-                "protocol version mismatch: expected {}, got {}",
-                state.protocol_version, req.protocol_version
-            ),
+            &format!("protocol version mismatch: expected {}, got {}", state.protocol_version, req.protocol_version),
         ));
     }
 
@@ -346,10 +312,7 @@ pub async fn handle_heartbeat(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // Check duplicate GitHub IDs
-    let dup_ids = state
-        .db
-        .get_duplicate_github_ids()
-        .unwrap_or_default();
+    let dup_ids = state.db.get_duplicate_github_ids().unwrap_or_default();
     let mut warnings: Vec<String> = Vec::new();
     if detect_duplicate_github_warnings(&node, &dup_ids) {
         warnings.push(format!(
@@ -360,20 +323,14 @@ pub async fn handle_heartbeat(
 
     // Detect identity drift
     let (drifted, reason) = detect_identity_drift(
-        &GitHubIdentity {
-            numeric_id: node.github_numeric_id,
-            login: node.github_login.clone(),
-        },
+        &GitHubIdentity { numeric_id: node.github_numeric_id, login: node.github_login.clone() },
         &req.github,
     );
     if drifted {
         warnings.push(reason);
     }
 
-    Ok(api_ok(HeartbeatResponse {
-        recorded_at: crate::helpers::now_iso(),
-        warnings,
-    }))
+    Ok(api_ok(HeartbeatResponse { recorded_at: crate::helpers::now_iso(), warnings }))
 }
 
 /// POST /v1/leave - Deregister a node (node auth)
@@ -393,10 +350,7 @@ pub async fn handle_leave(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "invalid node token"))?;
 
-    state
-        .db
-        .deactivate_node(&node.node_id)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    state.db.deactivate_node(&node.node_id).map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     // If this node held the lease, expire it
     if let Ok(Some(lease)) = state.db.get_lease() {
@@ -437,15 +391,10 @@ pub async fn handle_status(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "invalid node token"))?;
 
-    let all_nodes = state
-        .db
-        .list_active_nodes()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let all_nodes =
+        state.db.list_active_nodes().map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let dup_ids = state
-        .db
-        .get_duplicate_github_ids()
-        .unwrap_or_default();
+    let dup_ids = state.db.get_duplicate_github_ids().unwrap_or_default();
 
     let memberships: Vec<Membership> = all_nodes
         .iter()
@@ -457,11 +406,7 @@ pub async fn handle_status(
         .collect();
 
     let membership = node_row_to_membership(&node);
-    let lease = state
-        .db
-        .get_lease()
-        .unwrap_or(None)
-        .map(lease_data_to_coordinator_lease);
+    let lease = state.db.get_lease().unwrap_or(None).map(lease_data_to_coordinator_lease);
 
     let mut warnings = Vec::new();
     if detect_duplicate_github_warnings(&node, &dup_ids) {
@@ -479,10 +424,7 @@ pub async fn handle_status(
         webhook: None,
         warnings,
         cloud_reachable: true,
-        current_github: Some(GitHubIdentity {
-            numeric_id: node.github_numeric_id,
-            login: node.github_login.clone(),
-        }),
+        current_github: Some(GitHubIdentity { numeric_id: node.github_numeric_id, login: node.github_login.clone() }),
         identity_drift: false,
         identity_drift_reason: String::new(),
     }))
@@ -496,10 +438,7 @@ pub async fn handle_acquire_lease(
     headers: HeaderMap,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let node = extract_node(&state, &headers)?;
-    match state
-        .db
-        .acquire_lease(&node.node_id, state.lease_ttl_seconds)
-    {
+    match state.db.acquire_lease(&node.node_id, state.lease_ttl_seconds) {
         Ok((token, expires)) => {
             emit_lease_event(&state, "lease.acquired", &node.node_id, token);
             Ok(api_ok(CoordinatorLease {
@@ -520,22 +459,14 @@ pub async fn handle_renew_lease(
     Json(req): Json<CoordinatorLeaseRenewRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let node = extract_node(&state, &headers)?;
-    match state
-        .db
-        .renew_lease(&node.node_id, req.fencing_token, state.lease_ttl_seconds)
-    {
-        Ok((token, expires)) => {
-            Ok(api_ok(CoordinatorLease {
-                name: "coordinator".to_string(),
-                holder_node_id: Some(node.node_id),
-                fencing_token: token,
-                expires_at: Some(expires),
-            }))
-        }
-        Err(_) => Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            "stale coordinator lease token",
-        )),
+    match state.db.renew_lease(&node.node_id, req.fencing_token, state.lease_ttl_seconds) {
+        Ok((token, expires)) => Ok(api_ok(CoordinatorLease {
+            name: "coordinator".to_string(),
+            holder_node_id: Some(node.node_id),
+            fencing_token: token,
+            expires_at: Some(expires),
+        })),
+        Err(_) => Err(api_err(StatusCode::PRECONDITION_FAILED, "stale coordinator lease token")),
     }
 }
 
@@ -546,18 +477,12 @@ pub async fn handle_handoff_lease(
     Json(req): Json<CoordinatorLeaseHandoffRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let node = extract_node(&state, &headers)?;
-    match state
-        .db
-        .handoff_lease(&node.node_id, req.fencing_token, &req.target_node_id)
-    {
+    match state.db.handoff_lease(&node.node_id, req.fencing_token, &req.target_node_id) {
         Ok(()) => {
             emit_lease_event(&state, "lease.handoff", &node.node_id, req.fencing_token);
             Ok(api_ok(json!({})))
         }
-        Err(_) => Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            "stale coordinator lease token",
-        )),
+        Err(_) => Err(api_err(StatusCode::PRECONDITION_FAILED, "stale coordinator lease token")),
     }
 }
 
@@ -578,10 +503,7 @@ pub async fn handle_expire_lease(
                 expires_at: None,
             }))
         }
-        Err(_) => Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            "stale coordinator lease token",
-        )),
+        Err(_) => Err(api_err(StatusCode::PRECONDITION_FAILED, "stale coordinator lease token")),
     }
 }
 
@@ -600,12 +522,8 @@ pub async fn handle_revalidate_lease(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?
         .ok_or_else(|| api_err(StatusCode::NOT_FOUND, "no lease found"))?;
 
-    if lease.holder_node_id.as_deref() != Some(&node.node_id) || lease.fencing_token != req.fencing_token
-    {
-        return Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            "stale coordinator lease token",
-        ));
+    if lease.holder_node_id.as_deref() != Some(&node.node_id) || lease.fencing_token != req.fencing_token {
+        return Err(api_err(StatusCode::PRECONDITION_FAILED, "stale coordinator lease token"));
     }
 
     // Probe external URL
@@ -617,31 +535,20 @@ pub async fn handle_revalidate_lease(
         .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
     let resp = client
-        .request(
-            reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET),
-            &req.url,
-        )
+        .request(reqwest::Method::from_bytes(method.as_bytes()).unwrap_or(reqwest::Method::GET), &req.url)
         .header("X-Looper-Coordinator-Fencing-Token", req.fencing_token.to_string())
         .send()
         .await;
 
     match resp {
         Ok(r) if r.status().is_success() => Ok(api_ok(json!({}))),
-        Ok(r) => Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            &format!("revalidation probe returned {}", r.status()),
-        )),
-        Err(e) => Err(api_err(
-            StatusCode::PRECONDITION_FAILED,
-            &format!("revalidation probe failed: {}", e),
-        )),
+        Ok(r) => Err(api_err(StatusCode::PRECONDITION_FAILED, &format!("revalidation probe returned {}", r.status()))),
+        Err(e) => Err(api_err(StatusCode::PRECONDITION_FAILED, &format!("revalidation probe failed: {}", e))),
     }
 }
 
 /// GET /v1/events - SSE event stream (node auth)
-pub async fn handle_events(
-    State(state): State<Arc<ServerState>>,
-) -> Sse<EventStream> {
+pub async fn handle_events(State(state): State<Arc<ServerState>>) -> Sse<EventStream> {
     let rx = state.event_tx.subscribe();
     Sse::new(EventStream { rx })
 }
@@ -650,11 +557,7 @@ pub async fn handle_events(
 pub async fn handle_webhook_secret(
     State(state): State<Arc<ServerState>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let secret = state
-        .db
-        .get_meta("webhook_secret")
-        .unwrap_or(None)
-        .unwrap_or_default();
+    let secret = state.db.get_meta("webhook_secret").unwrap_or(None).unwrap_or_default();
     Ok(api_ok(WebhookSecretResponse { secret }))
 }
 
@@ -664,16 +567,8 @@ pub async fn handle_webhook_forward(
     Json(payload): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     // Emit event to subscribers
-    let event_type = payload
-        .get("event")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let delivery_id = payload
-        .get("deliveryId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let event_type = payload.get("event").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+    let delivery_id = payload.get("deliveryId").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
     let _ = state.event_tx.send(AuditEnvelope {
         event: "webhook.received".to_string(),
@@ -706,15 +601,10 @@ pub async fn handle_healthz() -> (StatusCode, Json<serde_json::Value>) {
 pub async fn handle_admin_status(
     State(state): State<Arc<ServerState>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    let all_nodes = state
-        .db
-        .list_active_nodes()
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    let all_nodes =
+        state.db.list_active_nodes().map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
 
-    let dup_ids = state
-        .db
-        .get_duplicate_github_ids()
-        .unwrap_or_default();
+    let dup_ids = state.db.get_duplicate_github_ids().unwrap_or_default();
 
     let memberships: Vec<Membership> = all_nodes
         .iter()
@@ -725,25 +615,12 @@ pub async fn handle_admin_status(
         })
         .collect();
 
-    let lease = state
-        .db
-        .get_lease()
-        .unwrap_or(None)
-        .map(lease_data_to_coordinator_lease);
+    let lease = state.db.get_lease().unwrap_or(None).map(lease_data_to_coordinator_lease);
 
     // Count duplicate warnings for response
-    let warnings: Vec<String> = dup_ids
-        .iter()
-        .map(|id| format!("duplicate GitHub identity for ID {}", id))
-        .collect();
+    let warnings: Vec<String> = dup_ids.iter().map(|id| format!("duplicate GitHub identity for ID {}", id)).collect();
 
-    Ok(api_ok(StatusResponse {
-        network_id: state.network_id.clone(),
-        lease,
-        memberships,
-        webhook: None,
-        warnings,
-    }))
+    Ok(api_ok(StatusResponse { network_id: state.network_id.clone(), lease, memberships, webhook: None, warnings }))
 }
 
 /// POST /v1/join-keys - Create a new join key (admin)
@@ -751,10 +628,7 @@ pub async fn handle_create_join_key(
     State(state): State<Arc<ServerState>>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let key = format!("join_{}", uuid::Uuid::new_v4().to_string().replace('-', ""));
-    state
-        .db
-        .create_join_key(&key)
-        .map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
+    state.db.create_join_key(&key).map_err(|e| api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()))?;
     Ok(api_ok(JoinKeyResponse { join_key: key }))
 }
 
@@ -781,15 +655,10 @@ pub fn build_router(state: Arc<ServerState>) -> Router {
         .route("/v1/github/webhook-secret", get(handle_webhook_secret))
         .layer(middleware::from_fn_with_state(state.clone(), node_auth));
 
-    let public_routes = Router::new()
-        .route("/v1/join", post(handle_join))
-        .route("/v1/github/webhook", post(handle_webhook_forward));
+    let public_routes =
+        Router::new().route("/v1/join", post(handle_join)).route("/v1/github/webhook", post(handle_webhook_forward));
 
-    Router::new()
-        .merge(admin_routes)
-        .merge(node_routes)
-        .merge(public_routes)
-        .with_state(state)
+    Router::new().merge(admin_routes).merge(node_routes).merge(public_routes).with_state(state)
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -811,12 +680,7 @@ fn extract_node<'a>(
         .ok_or_else(|| api_err(StatusCode::UNAUTHORIZED, "invalid node token"))
 }
 
-fn emit_lease_event(
-    state: &ServerState,
-    event: &str,
-    node_id: &str,
-    fencing_token: i64,
-) {
+fn emit_lease_event(state: &ServerState, event: &str, node_id: &str, fencing_token: i64) {
     let _ = state.event_tx.send(AuditEnvelope {
         event: event.to_string(),
         actor: String::new(),

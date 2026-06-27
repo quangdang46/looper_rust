@@ -89,7 +89,7 @@ pub struct Outcome {
     pub event_type: Option<String>,
     pub action: Option<String>,
     pub delivery_id: Option<String>,
-    pub status: String,         // "succeeded" | "failed"
+    pub status: String, // "succeeded" | "failed"
     pub attempts: i32,
     pub error: Option<String>,
 }
@@ -98,15 +98,13 @@ impl Outcome {
     /// Brief human-readable summary of this outcome for stats/logging.
     pub fn summary(&self) -> String {
         if self.status == "succeeded" {
-            format!(
-                "ok  {} {} {} (#{})",
-                self.repo, self.object_type, self.number,
-                self.lanes.join(",")
-            )
+            format!("ok  {} {} {} (#{})", self.repo, self.object_type, self.number, self.lanes.join(","))
         } else {
             format!(
                 "FAIL {} {} {} (#{}) attempts={} err={:?}",
-                self.repo, self.object_type, self.number,
+                self.repo,
+                self.object_type,
+                self.number,
                 self.lanes.join(","),
                 self.attempts,
                 self.error,
@@ -251,16 +249,34 @@ pub struct CheckSuite {
 #[async_trait::async_trait]
 pub trait TargetedReviewer: Send + Sync {
     /// Create a queue item for a reviewer-targeted discovery.
-    async fn enqueue_review(&self, project_id: &str, repo: &str, pr_number: i64, delivery_id: &str) -> Result<(), WebhookError>;
+    async fn enqueue_review(
+        &self,
+        project_id: &str,
+        repo: &str,
+        pr_number: i64,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError>;
 }
 
 /// Callback invoked by the forwarder to queue a fixer discovery.
 #[async_trait::async_trait]
 pub trait TargetedFixer: Send + Sync {
     /// Create a queue item for a fixer-targeted discovery on a PR.
-    async fn enqueue_fix_pr(&self, project_id: &str, repo: &str, pr_number: i64, delivery_id: &str) -> Result<(), WebhookError>;
+    async fn enqueue_fix_pr(
+        &self,
+        project_id: &str,
+        repo: &str,
+        pr_number: i64,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError>;
     /// Create a queue item for a fixer-targeted discovery on a base branch.
-    async fn enqueue_fix_branch(&self, project_id: &str, repo: &str, branch: &str, delivery_id: &str) -> Result<(), WebhookError>;
+    async fn enqueue_fix_branch(
+        &self,
+        project_id: &str,
+        repo: &str,
+        branch: &str,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -362,11 +378,15 @@ impl DefaultTargetedReviewer {
 
 #[async_trait::async_trait]
 impl TargetedReviewer for DefaultTargetedReviewer {
-    async fn enqueue_review(&self, project_id: &str, repo: &str, pr_number: i64, delivery_id: &str) -> Result<(), WebhookError> {
+    async fn enqueue_review(
+        &self,
+        project_id: &str,
+        repo: &str,
+        pr_number: i64,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError> {
         let now = (self.now)();
-        let record = build_queue_item(
-            project_id, repo, Some(pr_number), None, &Lane::Reviewer, delivery_id, &now,
-        );
+        let record = build_queue_item(project_id, repo, Some(pr_number), None, &Lane::Reviewer, delivery_id, &now);
         let repos = self.repos.0.lock().unwrap();
         repos.queue.upsert_active_by_dedupe_or_get_existing(&record)?;
         Ok(())
@@ -387,21 +407,29 @@ impl DefaultTargetedFixer {
 
 #[async_trait::async_trait]
 impl TargetedFixer for DefaultTargetedFixer {
-    async fn enqueue_fix_pr(&self, project_id: &str, repo: &str, pr_number: i64, delivery_id: &str) -> Result<(), WebhookError> {
+    async fn enqueue_fix_pr(
+        &self,
+        project_id: &str,
+        repo: &str,
+        pr_number: i64,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError> {
         let now = (self.now)();
-        let record = build_queue_item(
-            project_id, repo, Some(pr_number), None, &Lane::Fixer, delivery_id, &now,
-        );
+        let record = build_queue_item(project_id, repo, Some(pr_number), None, &Lane::Fixer, delivery_id, &now);
         let repos = self.repos.0.lock().unwrap();
         repos.queue.upsert_active_by_dedupe_or_get_existing(&record)?;
         Ok(())
     }
 
-    async fn enqueue_fix_branch(&self, project_id: &str, repo: &str, branch: &str, delivery_id: &str) -> Result<(), WebhookError> {
+    async fn enqueue_fix_branch(
+        &self,
+        project_id: &str,
+        repo: &str,
+        branch: &str,
+        delivery_id: &str,
+    ) -> Result<(), WebhookError> {
         let now = (self.now)();
-        let record = build_queue_item(
-            project_id, repo, None, Some(branch), &Lane::Fixer, delivery_id, &now,
-        );
+        let record = build_queue_item(project_id, repo, None, Some(branch), &Lane::Fixer, delivery_id, &now);
         let repos = self.repos.0.lock().unwrap();
         repos.queue.upsert_active_by_dedupe_or_get_existing(&record)?;
         Ok(())

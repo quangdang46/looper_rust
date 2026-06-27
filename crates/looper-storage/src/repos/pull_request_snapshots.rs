@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::PullRequestSnapshotRecord;
+use rusqlite::Connection;
 
 fn scan_pr_snapshot_row(row: &rusqlite::Row) -> rusqlite::Result<PullRequestSnapshotRecord> {
     Ok(PullRequestSnapshotRecord {
@@ -100,8 +100,7 @@ impl PullRequestSnapshotsRepository {
             PRS_COLUMNS
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut rows =
-            stmt.query_map(rusqlite::params![project_id, repo, pr_number], scan_pr_snapshot_row)?;
+        let mut rows = stmt.query_map(rusqlite::params![project_id, repo, pr_number], scan_pr_snapshot_row)?;
         match rows.next() {
             Some(Ok(record)) => Ok(Some(record)),
             Some(Err(e)) => Err(e.into()),

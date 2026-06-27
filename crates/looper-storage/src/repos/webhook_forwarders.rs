@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::WebhookForwarderRecord;
+use rusqlite::Connection;
 
 fn scan_webhook_forwarder(row: &rusqlite::Row) -> rusqlite::Result<WebhookForwarderRecord> {
     Ok(WebhookForwarderRecord {
@@ -56,10 +56,7 @@ impl WebhookForwardersRepository {
     }
 
     pub fn delete(&self, repo: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM webhook_forwarders WHERE repo = ?1",
-            rusqlite::params![repo],
-        )?;
+        self.conn.execute("DELETE FROM webhook_forwarders WHERE repo = ?1", rusqlite::params![repo])?;
         Ok(())
     }
 }

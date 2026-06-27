@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::helpers::{chunk_strings, sql_placeholders, SQLITE_MAX_VARIABLES};
 use crate::record::{LoopRecord, TypeStatusCountMap};
+use rusqlite::Connection;
 
 fn scan_loop_row(row: &rusqlite::Row) -> rusqlite::Result<LoopRecord> {
     Ok(LoopRecord {
@@ -114,14 +114,10 @@ impl LoopsRepository {
         let chunks = chunk_strings(statuses, SQLITE_MAX_VARIABLES);
         let mut results = Vec::new();
         for chunk in &chunks {
-            let sql = format!(
-                "SELECT {} FROM loops WHERE status IN ({})",
-                LOOP_COLUMNS,
-                sql_placeholders(chunk.len()),
-            );
+            let sql =
+                format!("SELECT {} FROM loops WHERE status IN ({})", LOOP_COLUMNS, sql_placeholders(chunk.len()),);
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows =
-                stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_loop_row)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_loop_row)?;
             for row in rows {
                 results.push(row?);
             }
@@ -136,14 +132,9 @@ impl LoopsRepository {
         let chunks = chunk_strings(ids, SQLITE_MAX_VARIABLES);
         let mut results = Vec::new();
         for chunk in &chunks {
-            let sql = format!(
-                "SELECT {} FROM loops WHERE id IN ({})",
-                LOOP_COLUMNS,
-                sql_placeholders(chunk.len()),
-            );
+            let sql = format!("SELECT {} FROM loops WHERE id IN ({})", LOOP_COLUMNS, sql_placeholders(chunk.len()),);
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows =
-                stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_loop_row)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_loop_row)?;
             for row in rows {
                 results.push(row?);
             }
@@ -152,9 +143,7 @@ impl LoopsRepository {
     }
 
     pub fn count_by_type_and_status(&self) -> Result<TypeStatusCountMap> {
-        let mut stmt = self.conn.prepare(
-            "SELECT type, status, COUNT(*) as cnt FROM loops GROUP BY type, status",
-        )?;
+        let mut stmt = self.conn.prepare("SELECT type, status, COUNT(*) as cnt FROM loops GROUP BY type, status")?;
         let rows = stmt.query_map([], |row| {
             let r#type: String = row.get("type")?;
             let status: String = row.get("status")?;

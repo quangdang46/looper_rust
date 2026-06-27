@@ -18,14 +18,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use looper_e2e::*;
 use looper_e2e::binaries::BuiltBinaries;
 use looper_e2e::config::{default_config, write_config, ConfigOptions, TestToolPaths};
 use looper_e2e::daemon::start_looperd;
-use looper_e2e::fake_gh::{FakeGH, GHState, GHPullRequest};
+use looper_e2e::fake_gh::{FakeGH, GHPullRequest, GHState};
 use looper_e2e::git::{create_seeded_repo, run_git};
 use looper_e2e::ports::must_free_port;
 use looper_e2e::temp_home::TempHome;
+use looper_e2e::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,9 +51,7 @@ fn wait_for_health_ok(base_url: &str, timeout: Duration) -> Result<serde_json::V
         }
         match client.get(&health_url).send() {
             Ok(resp) if resp.status().is_success() => {
-                let body: serde_json::Value = resp
-                    .json()
-                    .map_err(|e| format!("parse /health response: {e}"))?;
+                let body: serde_json::Value = resp.json().map_err(|e| format!("parse /health response: {e}"))?;
                 if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
                     return Ok(body);
                 }
@@ -103,10 +101,7 @@ fn poll_fake_gh_labels(
 }
 
 /// Poll fake-gh state for a PR with the `looper:spec-reviewing` label.
-fn poll_for_spec_reviewing(
-    state_path: &std::path::Path,
-    timeout: Duration,
-) -> Option<Vec<String>> {
+fn poll_for_spec_reviewing(state_path: &std::path::Path, timeout: Duration) -> Option<Vec<String>> {
     use looper_e2e::fake_gh::GHState;
 
     let deadline = std::time::Instant::now() + timeout;
@@ -127,10 +122,7 @@ fn poll_for_spec_reviewing(
             if let Some(ref prs) = state.pull_requests {
                 for (_key, pr) in prs {
                     if let Some(ref labels) = pr.labels {
-                        if labels
-                            .iter()
-                            .any(|l| l.contains("looper:spec-reviewing"))
-                        {
+                        if labels.iter().any(|l| l.contains("looper:spec-reviewing")) {
                             return Some(labels.clone());
                         }
                     }
@@ -149,12 +141,10 @@ fn symlink_test_bins(bins: &BuiltBinaries) -> (std::path::PathBuf, String) {
     std::fs::create_dir_all(&dir).expect("create test bin dir");
 
     // Symlink claude -> fake-agent
-    std::os::unix::fs::symlink(&bins.fake_agent_path, &dir.join("claude"))
-        .expect("symlink claude -> fake-agent");
+    std::os::unix::fs::symlink(&bins.fake_agent_path, &dir.join("claude")).expect("symlink claude -> fake-agent");
 
     // Symlink gh -> fake-gh
-    std::os::unix::fs::symlink(&bins.fake_gh_path, &dir.join("gh"))
-        .expect("symlink gh -> fake-gh");
+    std::os::unix::fs::symlink(&bins.fake_gh_path, &dir.join("gh")).expect("symlink gh -> fake-gh");
 
     let path_val = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
     (dir, path_val)
@@ -235,21 +225,12 @@ fn test_dispatch_plan_to_implementation() {
 
     let seeded = create_seeded_repo(git_path);
 
-    let origin_path =
-        std::env::temp_dir().join(format!("origin-{}", uuid::Uuid::new_v4()));
+    let origin_path = std::env::temp_dir().join(format!("origin-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&origin_path).expect("create origin dir");
     run_git(git_path, &origin_path, &["init", "--bare"]);
 
-    run_git(
-        git_path,
-        std::path::Path::new(&seeded.path),
-        &["remote", "add", "origin", origin_path.to_str().unwrap()],
-    );
-    run_git(
-        git_path,
-        std::path::Path::new(&seeded.path),
-        &["push", "origin", "main"],
-    );
+    run_git(git_path, std::path::Path::new(&seeded.path), &["remote", "add", "origin", origin_path.to_str().unwrap()]);
+    run_git(git_path, std::path::Path::new(&seeded.path), &["push", "origin", "main"]);
 
     let origin_url = origin_path.to_string_lossy().to_string();
 
@@ -261,11 +242,26 @@ fn test_dispatch_plan_to_implementation() {
             (
                 "pr view".to_string(),
                 vec![
-                    "number", "title", "body", "url", "state", "createdAt",
-                    "updatedAt", "headRefName", "baseRefName", "headRefOid",
-                    "baseRefOid", "author", "mergeStateStatus", "isDraft",
-                    "reviewDecision", "labels", "reviewRequests", "comments",
-                    "reviews", "statusCheckRollup",
+                    "number",
+                    "title",
+                    "body",
+                    "url",
+                    "state",
+                    "createdAt",
+                    "updatedAt",
+                    "headRefName",
+                    "baseRefName",
+                    "headRefOid",
+                    "baseRefOid",
+                    "author",
+                    "mergeStateStatus",
+                    "isDraft",
+                    "reviewDecision",
+                    "labels",
+                    "reviewRequests",
+                    "comments",
+                    "reviews",
+                    "statusCheckRollup",
                 ]
                 .into_iter()
                 .map(String::from)
@@ -274,10 +270,22 @@ fn test_dispatch_plan_to_implementation() {
             (
                 "pr list".to_string(),
                 vec![
-                    "number", "title", "url", "state", "updatedAt", "isDraft",
-                    "reviewDecision", "labels", "headRefName", "baseRefName",
-                    "headRefOid", "baseRefOid", "author", "reviewRequests",
-                    "reviews", "mergeStateStatus",
+                    "number",
+                    "title",
+                    "url",
+                    "state",
+                    "updatedAt",
+                    "isDraft",
+                    "reviewDecision",
+                    "labels",
+                    "headRefName",
+                    "baseRefName",
+                    "headRefOid",
+                    "baseRefOid",
+                    "author",
+                    "reviewRequests",
+                    "reviews",
+                    "mergeStateStatus",
                 ]
                 .into_iter()
                 .map(String::from)
@@ -285,13 +293,10 @@ fn test_dispatch_plan_to_implementation() {
             ),
             (
                 "issue list".to_string(),
-                vec![
-                    "number", "title", "url", "state", "updatedAt", "labels",
-                    "author", "body",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+                vec!["number", "title", "url", "state", "updatedAt", "labels", "author", "body"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
             ),
         ]),
     };
@@ -309,7 +314,7 @@ fn test_dispatch_plan_to_implementation() {
     let write_file = home.working_dir.join("docs").join("specs").join("widget-system.md");
 
     let (_vendor, _agent_bin, mut agent_env) = fake_agent.agent_config(
-        "write-file",   // mode: write a file and succeed
+        "write-file", // mode: write a file and succeed
         "/usr/bin/git",
         fgh.path.to_str().unwrap(),
     );
@@ -330,59 +335,30 @@ fn test_dispatch_plan_to_implementation() {
         ("PATH", &path_val),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_MODE,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_MODE)
-                .map(|s| s.as_str())
-                .unwrap_or("strict"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_MODE).map(|s| s.as_str()).unwrap_or("strict"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR)
-                .expect("fake-gh artifact dir"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR).expect("fake-gh artifact dir"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH)
-                .expect("fake-gh state path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH).expect("fake-gh state path"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH)
-                .expect("fake-gh schema path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH).expect("fake-gh schema path"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH)
-                .expect("fake-gh record path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH).expect("fake-gh record path"),
         ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_MODE,
-            "write-file",
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_ARTIFACT_DIR,
-            fake_agent.artifact_dir.to_str().expect("artifact dir"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_STATE_PATH,
-            fake_agent.state_path.to_str().expect("state path"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_WRITE_FILE,
-            write_file.to_str().expect("write file"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_GIT_PATH,
-            "/usr/bin/git",
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_GH_PATH,
-            fgh.path.to_str().expect("fake-gh path"),
-        ),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_MODE, "write-file"),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_ARTIFACT_DIR, fake_agent.artifact_dir.to_str().expect("artifact dir")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_STATE_PATH, fake_agent.state_path.to_str().expect("state path")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_WRITE_FILE, write_file.to_str().expect("write file")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_GIT_PATH, "/usr/bin/git"),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_GH_PATH, fgh.path.to_str().expect("fake-gh path")),
     ];
 
     // -----------------------------------------------------------------------
@@ -433,14 +409,7 @@ fn test_dispatch_plan_to_implementation() {
     // -----------------------------------------------------------------------
     // 6. Start looperd
     // -----------------------------------------------------------------------
-    let daemon = start_looperd(
-        &bins,
-        &home,
-        home.config_path.to_str().unwrap(),
-        &extra_env,
-        "127.0.0.1",
-        port,
-    );
+    let daemon = start_looperd(&bins, &home, home.config_path.to_str().unwrap(), &extra_env, "127.0.0.1", port);
 
     let base = daemon.base_url().to_string();
 
@@ -448,11 +417,7 @@ fn test_dispatch_plan_to_implementation() {
     // 7. Wait for daemon ready
     // -----------------------------------------------------------------------
     let result = wait_for_health_ok(&base, Duration::from_secs(30));
-    assert!(
-        result.is_ok(),
-        "daemon should become ready within 30s: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "daemon should become ready within 30s: {:?}", result.err());
 
     // -----------------------------------------------------------------------
     // 8. Add project via API (in case config didn't register it)
@@ -464,10 +429,7 @@ fn test_dispatch_plan_to_implementation() {
         "default_branch": "main",
         "enabled": true,
     });
-    let _add_resp = client
-        .post(format!("{base}/api/projects"))
-        .json(&add_body)
-        .send();
+    let _add_resp = client.post(format!("{base}/api/projects")).json(&add_body).send();
 
     // -----------------------------------------------------------------------
     // 9. Wait for the coordinator to pick up the dispatch/plan issue

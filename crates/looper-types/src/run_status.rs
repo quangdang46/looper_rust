@@ -22,7 +22,11 @@ impl RunStatus {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            RunStatus::Success | RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted | RunStatus::ParseFailed
+            RunStatus::Success
+                | RunStatus::Failed
+                | RunStatus::Cancelled
+                | RunStatus::Interrupted
+                | RunStatus::ParseFailed
         )
     }
 

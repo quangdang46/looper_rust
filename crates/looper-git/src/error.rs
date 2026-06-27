@@ -39,30 +39,19 @@ impl std::error::Error for RemoteHeadChangedError {}
 #[derive(Debug, Error)]
 pub enum GitError {
     #[error("git command exited with code {exit_code}: {stderr}")]
-    CommandError {
-        exit_code: i32,
-        stderr: String,
-    },
+    CommandError { exit_code: i32, stderr: String },
 
     #[error("git command timed out: {command}")]
-    Timeout {
-        command: String,
-    },
+    Timeout { command: String },
 
     #[error("worktree path is invalid: {detail}")]
-    InvalidWorktreePath {
-        detail: String,
-    },
+    InvalidWorktreePath { detail: String },
 
     #[error("worktree not found: {path}")]
-    WorktreeNotFound {
-        path: String,
-    },
+    WorktreeNotFound { path: String },
 
     #[error("worktree is dirty: {path}")]
-    DirtyWorktree {
-        path: String,
-    },
+    DirtyWorktree { path: String },
 
     #[error("protected branch: {0}")]
     ProtectedBranch(#[from] ProtectedBranchError),
@@ -71,19 +60,13 @@ pub enum GitError {
     RemoteHeadChanged(#[from] RemoteHeadChangedError),
 
     #[error("branch not found: {branch}")]
-    BranchNotFound {
-        branch: String,
-    },
+    BranchNotFound { branch: String },
 
     #[error("remote not found: {remote}")]
-    RemoteNotFound {
-        remote: String,
-    },
+    RemoteNotFound { remote: String },
 
     #[error("worktree safety check failed: {detail}")]
-    SafetyCheckFailed {
-        detail: String,
-    },
+    SafetyCheckFailed { detail: String },
 
     #[error("storage error: {0}")]
     Storage(#[from] looper_storage::StorageError),
@@ -169,9 +152,7 @@ mod tests {
 
     #[test]
     fn test_push_conflict_patterns() {
-        assert!(is_push_conflict_error(
-            "! [rejected] branch -> branch (non-fast-forward)"
-        ));
+        assert!(is_push_conflict_error("! [rejected] branch -> branch (non-fast-forward)"));
         assert!(is_push_conflict_error("failed to push some refs"));
         assert!(is_push_conflict_error("stale info"));
         assert!(!is_push_conflict_error("everything up-to-date"));
@@ -179,9 +160,7 @@ mod tests {
 
     #[test]
     fn test_fetch_lock_race() {
-        assert!(is_fetch_lock_race(
-            "cannot lock ref 'refs/heads/main': 'refs/heads/main' but expected 'abc123'"
-        ));
+        assert!(is_fetch_lock_race("cannot lock ref 'refs/heads/main': 'refs/heads/main' but expected 'abc123'"));
         assert!(!is_fetch_lock_race("cannot lock ref 'refs/heads/main'"));
     }
 

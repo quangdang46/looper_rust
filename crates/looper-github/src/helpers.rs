@@ -3,8 +3,8 @@
 use std::collections::HashMap;
 
 use crate::types::{
-    CommentInfo, DependencyIssue, GitHubUser, IssueRepository, LabelInitSummary,
-    PullRequestAutoMerge, ReviewComment, ReviewIdempotencyMarker, ReviewThreadComment,
+    CommentInfo, DependencyIssue, GitHubUser, IssueRepository, LabelInitSummary, PullRequestAutoMerge, ReviewComment,
+    ReviewIdempotencyMarker, ReviewThreadComment,
 };
 use serde_json::Value;
 
@@ -22,33 +22,26 @@ pub fn decode_json_array(value: &str) -> Result<Vec<HashMap<String, Value>>, ser
     let arr: Vec<Value> = serde_json::from_str(value)?;
     Ok(arr
         .into_iter()
-        .filter_map(|v| v.as_object().map(|o| {
-            o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-        }))
+        .filter_map(|v| v.as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
         .collect())
 }
 
 /// Decode a JSON string that may be a single array or paginated (slurped) arrays.
-pub fn decode_json_array_or_pages(
-    value: &str,
-) -> Result<Vec<HashMap<String, Value>>, serde_json::Error> {
+pub fn decode_json_array_or_pages(value: &str) -> Result<Vec<HashMap<String, Value>>, serde_json::Error> {
     let v: Value = serde_json::from_str(value)?;
     match v {
         Value::Array(arr) => {
             let mut result = Vec::new();
             for item in arr {
                 if let Some(map) = item.as_object() {
-                    let m: HashMap<String, Value> =
-                        map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let m: HashMap<String, Value> = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                     result.push(m);
                 } else if item.is_array() {
                     if let Some(sub_arr) = item.as_array() {
                         for sub in sub_arr {
                             if let Some(sub_map) = sub.as_object() {
-                                let m: HashMap<String, Value> = sub_map
-                                    .iter()
-                                    .map(|(k, v)| (k.clone(), v.clone()))
-                                    .collect();
+                                let m: HashMap<String, Value> =
+                                    sub_map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
                                 result.push(m);
                             }
                         }
@@ -105,9 +98,7 @@ pub fn to_object_slice(value: &Value) -> Vec<HashMap<String, Value>> {
     match value {
         Value::Array(arr) => arr
             .iter()
-            .filter_map(|v| v.as_object().map(|o| {
-                o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
-            }))
+            .filter_map(|v| v.as_object().map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect()))
             .collect(),
         _ => vec![],
     }
@@ -142,12 +133,7 @@ pub fn first_non_nil<'a>(values: &'a [&'a Value]) -> Option<&'a Value> {
 
 pub fn extract_author(value: &Value) -> String {
     match value {
-        Value::Object(map) => {
-            map.get("login")
-                .or_else(|| map.get("name"))
-                .map(as_string)
-                .unwrap_or_default()
-        }
+        Value::Object(map) => map.get("login").or_else(|| map.get("name")).map(as_string).unwrap_or_default(),
         _ => String::new(),
     }
 }
@@ -165,12 +151,7 @@ pub fn extract_label_names(value: &Value) -> Vec<String> {
         _ => return vec![],
     };
     arr.iter()
-        .filter_map(|v| {
-            v.as_object()
-                .and_then(|m| m.get("name"))
-                .map(as_string)
-                .filter(|s| !s.is_empty())
-        })
+        .filter_map(|v| v.as_object().and_then(|m| m.get("name")).map(as_string).filter(|s| !s.is_empty()))
         .collect()
 }
 
@@ -182,12 +163,7 @@ pub fn extract_label_names_from_connection(value: &Value) -> Vec<String> {
     match nodes {
         Some(Value::Array(arr)) => arr
             .iter()
-            .filter_map(|v| {
-                v.as_object()
-                    .and_then(|m| m.get("name"))
-                    .map(as_string)
-                    .filter(|s| !s.is_empty())
-            })
+            .filter_map(|v| v.as_object().and_then(|m| m.get("name")).map(as_string).filter(|s| !s.is_empty()))
             .collect(),
         _ => vec![],
     }
@@ -214,13 +190,10 @@ pub fn extract_review_request_users(value: &Value) -> Vec<GitHubUser> {
         Value::Array(arr) => arr
             .iter()
             .filter_map(|v| {
-                v.as_object()
-                    .and_then(|m| m.get("requestedReviewer"))
-                    .and_then(|r| r.as_object())
-                    .map(|r| GitHubUser {
-                        login: r.get("login").map(as_string).unwrap_or_default(),
-                        id: r.get("id").map(as_i64).unwrap_or(0),
-                    })
+                v.as_object().and_then(|m| m.get("requestedReviewer")).and_then(|r| r.as_object()).map(|r| GitHubUser {
+                    login: r.get("login").map(as_string).unwrap_or_default(),
+                    id: r.get("id").map(as_i64).unwrap_or(0),
+                })
             })
             .collect(),
         _ => vec![],
@@ -270,10 +243,7 @@ pub fn extract_comment_infos(value: &Value) -> Vec<CommentInfo> {
                 v.as_object().map(|m| CommentInfo {
                     id: m.get("id").map(as_i64).unwrap_or(0),
                     author: extract_author(&m.get("author").cloned().unwrap_or(Value::Null)),
-                    author_association: m
-                        .get("authorAssociation")
-                        .map(as_string)
-                        .unwrap_or_default(),
+                    author_association: m.get("authorAssociation").map(as_string).unwrap_or_default(),
                     body: m.get("body").map(as_string).unwrap_or_default(),
                     created_at: m.get("createdAt").map(as_string).unwrap_or_default(),
                     updated_at: m.get("updatedAt").map(as_string).unwrap_or_default(),
@@ -295,15 +265,12 @@ pub fn extract_dependency_issue(value: &HashMap<String, Value>, default_repo: &s
         repository_url: value.get("repositoryUrl").map(as_string).unwrap_or_default(),
         state: value.get("state").map(as_string).unwrap_or_default(),
         state_reason: value.get("stateReason").map(as_string).unwrap_or_default(),
-        repository: value
-            .get("repository")
-            .map(extract_issue_repository)
-            .unwrap_or_else(|| IssueRepository {
-                name: String::new(),
-                full_name: default_repo.to_string(),
-                url: String::new(),
-                html_url: String::new(),
-            }),
+        repository: value.get("repository").map(extract_issue_repository).unwrap_or_else(|| IssueRepository {
+            name: String::new(),
+            full_name: default_repo.to_string(),
+            url: String::new(),
+            html_url: String::new(),
+        }),
     }
 }
 
@@ -327,16 +294,10 @@ pub fn extract_issue_repository(value: &Value) -> IssueRepository {
 pub fn extract_auto_merge(value: &Value) -> Option<PullRequestAutoMerge> {
     match value {
         Value::Object(map) => {
-            let enabled_by = map
-                .get("enabledBy")
-                .and_then(|v| v.as_object())
-                .and_then(|m| m.get("login"))
-                .map(as_string)?;
+            let enabled_by =
+                map.get("enabledBy").and_then(|v| v.as_object()).and_then(|m| m.get("login")).map(as_string)?;
             let merge_method = map.get("mergeMethod").map(as_string)?;
-            Some(PullRequestAutoMerge {
-                enabled_by,
-                merge_method,
-            })
+            Some(PullRequestAutoMerge { enabled_by, merge_method })
         }
         _ => None,
     }
@@ -407,10 +368,7 @@ pub fn validate_github_repo_slug(repo: &str) -> Result<(), String> {
     }
     for part in &parts {
         if part.is_empty() {
-            return Err(format!(
-                "repo slug has empty segment: {}",
-                repo
-            ));
+            return Err(format!("repo slug has empty segment: {}", repo));
         }
     }
     Ok(())
@@ -421,10 +379,7 @@ pub fn validate_github_repo_slug(repo: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Find a review idempotency marker in a review body.
-pub fn find_review_idempotency_marker(
-    body: &str,
-    marker: &str,
-) -> Option<ReviewIdempotencyMarker> {
+pub fn find_review_idempotency_marker(body: &str, marker: &str) -> Option<ReviewIdempotencyMarker> {
     let markers = parse_review_idempotency_markers(body);
     markers.into_iter().find(|m| m.id == marker)
 }
@@ -438,9 +393,7 @@ pub fn parse_review_idempotency_markers(body: &str) -> Vec<ReviewIdempotencyMark
     for line in body.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("<!-- looper-review:") && trimmed.ends_with("-->") {
-            let inner = trimmed
-                .trim_start_matches("<!-- looper-review:")
-                .trim_end_matches("-->");
+            let inner = trimmed.trim_start_matches("<!-- looper-review:").trim_end_matches("-->");
             let parts: Vec<&str> = inner.splitn(3, ':').collect();
             if parts.len() == 3 {
                 results.push(ReviewIdempotencyMarker {
@@ -551,14 +504,8 @@ pub fn summarize_checks(checks: &[HashMap<String, Value>]) -> String {
     }
     let mut parts: Vec<String> = Vec::new();
     for check in checks {
-        let name = check
-            .get("name")
-            .map(as_string)
-            .unwrap_or_default();
-        let conclusion = check
-            .get("conclusion")
-            .map(as_string)
-            .unwrap_or_default();
+        let name = check.get("name").map(as_string).unwrap_or_default();
+        let conclusion = check.get("conclusion").map(as_string).unwrap_or_default();
         if !name.is_empty() {
             parts.push(format!("{}: {}", name, conclusion));
         }
@@ -636,10 +583,7 @@ pub fn normalize_label_color(value: &str) -> String {
     let trimmed = value.trim_start_matches('#');
     if trimmed.len() == 3 {
         // Expand 3-digit hex to 6-digit
-        trimmed
-            .chars()
-            .flat_map(|c| std::iter::repeat_n(c, 2))
-            .collect()
+        trimmed.chars().flat_map(|c| std::iter::repeat_n(c, 2)).collect()
     } else {
         trimmed.to_uppercase()
     }
@@ -664,21 +608,10 @@ pub fn increment_label_summary(summary: &mut LabelInitSummary, status: &str) {
 pub fn review_submit_request(input: &crate::types::SubmitReviewInput) -> HashMap<String, Value> {
     let mut map = HashMap::new();
     map.insert("event".into(), Value::String(input.event.clone()));
-    map.insert(
-        "body".into(),
-        if input.body.is_empty() {
-            Value::Null
-        } else {
-            Value::String(input.body.clone())
-        },
-    );
+    map.insert("body".into(), if input.body.is_empty() { Value::Null } else { Value::String(input.body.clone()) });
     map.insert(
         "commit_id".into(),
-        if input.commit_id.is_empty() {
-            Value::Null
-        } else {
-            Value::String(input.commit_id.clone())
-        },
+        if input.commit_id.is_empty() { Value::Null } else { Value::String(input.commit_id.clone()) },
     );
     if !input.comments.is_empty() {
         let comments: Vec<Value> = input
@@ -691,16 +624,10 @@ pub fn review_submit_request(input: &crate::types::SubmitReviewInput) -> HashMap
                 cm.insert("line".into(), Value::Number(c.line.into()));
                 cm.insert("side".into(), Value::String(c.side.clone()));
                 if c.start_line > 0 {
-                    cm.insert(
-                        "start_line".into(),
-                        Value::Number(c.start_line.into()),
-                    );
+                    cm.insert("start_line".into(), Value::Number(c.start_line.into()));
                 }
                 if !c.start_side.is_empty() {
-                    cm.insert(
-                        "start_side".into(),
-                        Value::String(c.start_side.clone()),
-                    );
+                    cm.insert("start_side".into(), Value::String(c.start_side.clone()));
                 }
                 Value::Object(cm)
             })
@@ -713,29 +640,18 @@ pub fn review_submit_request(input: &crate::types::SubmitReviewInput) -> HashMap
 /// Build a summary map of the review body for diagnostics.
 pub fn review_submit_body_marker_summary(body: &str) -> HashMap<String, Value> {
     let mut map = HashMap::new();
-    map.insert(
-        "length".into(),
-        Value::Number(body.len().into()),
-    );
-    map.insert(
-        "has_marker".into(),
-        Value::Bool(body.contains("looper-review:")),
-    );
+    map.insert("length".into(), Value::Number(body.len().into()));
+    map.insert("has_marker".into(), Value::Bool(body.contains("looper-review:")));
     map
 }
 
 /// Build a summary of the review comments for diagnostics.
-pub fn review_submit_comments_summary(
-    comments: &[ReviewComment],
-) -> Vec<HashMap<String, Value>> {
+pub fn review_submit_comments_summary(comments: &[ReviewComment]) -> Vec<HashMap<String, Value>> {
     comments
         .iter()
         .map(|c| {
             let mut map = HashMap::new();
-            map.insert(
-                "path".into(),
-                Value::String(c.path.clone()),
-            );
+            map.insert("path".into(), Value::String(c.path.clone()));
             map.insert("line".into(), Value::Number(c.line.into()));
             map.insert("side".into(), Value::String(c.side.clone()));
             map
@@ -756,8 +672,7 @@ pub fn normalize_inline_review_disclosure(
 
 /// Check if a review body has an inline disclosure stamp.
 pub fn has_inline_review_disclosure(body: &str) -> bool {
-    contains_visible_inline_review_disclosure(body)
-        || body.contains("<!-- looper:disclosure")
+    contains_visible_inline_review_disclosure(body) || body.contains("<!-- looper:disclosure")
 }
 
 /// Check if there's a visible (non-HTML-comment) disclosure.
@@ -806,31 +721,10 @@ pub fn strip_inline_review_disclosure(body: &str) -> String {
 pub fn normalize_review_thread(value: &Value) -> Option<HashMap<String, Value>> {
     let obj = value.as_object()?;
     let mut result = HashMap::new();
-    result.insert(
-        "id".into(),
-        Value::String(
-            obj.get("id").map(as_string).unwrap_or_default(),
-        ),
-    );
-    result.insert(
-        "isResolved".into(),
-        Value::Bool(as_bool(obj.get("isResolved").unwrap_or(&Value::Bool(false)))),
-    );
-    result.insert(
-        "path".into(),
-        Value::String(
-            obj.get("path").map(as_string).unwrap_or_default(),
-        ),
-    );
-    result.insert(
-        "line".into(),
-        Value::Number(
-            obj.get("line")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0)
-                .into(),
-        ),
-    );
+    result.insert("id".into(), Value::String(obj.get("id").map(as_string).unwrap_or_default()));
+    result.insert("isResolved".into(), Value::Bool(as_bool(obj.get("isResolved").unwrap_or(&Value::Bool(false)))));
+    result.insert("path".into(), Value::String(obj.get("path").map(as_string).unwrap_or_default()));
+    result.insert("line".into(), Value::Number(obj.get("line").and_then(|v| v.as_i64()).unwrap_or(0).into()));
     // Extract comments from the nested comments connection
     if let Some(comments_conn) = obj.get("comments") {
         if let Some(comments_obj) = comments_conn.as_object() {
@@ -844,21 +738,14 @@ pub fn normalize_review_thread(value: &Value) -> Option<HashMap<String, Value>> 
 
 /// Produce a fingerprint of review thread nodes for deduplication.
 pub fn review_thread_fingerprint_from_nodes(nodes: &[Value]) -> String {
-    let mut ids: Vec<String> = nodes
-        .iter()
-        .filter_map(|v| v.as_object())
-        .filter_map(|m| m.get("id"))
-        .map(as_string)
-        .collect();
+    let mut ids: Vec<String> =
+        nodes.iter().filter_map(|v| v.as_object()).filter_map(|m| m.get("id")).map(as_string).collect();
     ids.sort();
     ids.join(",")
 }
 
 /// Append review thread comments from GraphQL nodes.
-pub fn append_review_thread_comment(
-    dst: &mut Vec<ReviewThreadComment>,
-    nodes: &[Value],
-) {
+pub fn append_review_thread_comment(dst: &mut Vec<ReviewThreadComment>, nodes: &[Value]) {
     for node in nodes {
         if let Some(obj) = node.as_object() {
             dst.push(ReviewThreadComment {
@@ -870,18 +757,9 @@ pub fn append_review_thread_comment(
                     .and_then(|a| a.get("login"))
                     .map(as_string)
                     .unwrap_or_default(),
-                author_association: obj
-                    .get("authorAssociation")
-                    .map(as_string)
-                    .unwrap_or_default(),
-                created_at: obj
-                    .get("createdAt")
-                    .map(as_string)
-                    .unwrap_or_default(),
-                updated_at: obj
-                    .get("updatedAt")
-                    .map(as_string)
-                    .unwrap_or_default(),
+                author_association: obj.get("authorAssociation").map(as_string).unwrap_or_default(),
+                created_at: obj.get("createdAt").map(as_string).unwrap_or_default(),
+                updated_at: obj.get("updatedAt").map(as_string).unwrap_or_default(),
                 path: obj.get("path").map(as_string).unwrap_or_default(),
                 line: obj.get("line").map(as_i64).unwrap_or(0),
                 original_commit_oid: obj
@@ -906,9 +784,6 @@ pub fn append_review_thread_comment(
 pub fn get_review_thread_node(value: &Value) -> Option<crate::types::ReviewThreadNode> {
     let obj = value.as_object()?;
     let id = obj.get("id").map(as_string)?;
-    let is_resolved = obj
-        .get("isResolved")
-        .map(as_bool)
-        .unwrap_or(false);
+    let is_resolved = obj.get("isResolved").map(as_bool).unwrap_or(false);
     Some(crate::types::ReviewThreadNode { id, is_resolved })
 }

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::AgentExecutionRecord;
+use rusqlite::Connection;
 
 fn scan_agent_execution_row(row: &rusqlite::Row) -> rusqlite::Result<AgentExecutionRecord> {
     Ok(AgentExecutionRecord {
@@ -94,10 +94,8 @@ impl AgentExecutionsRepository {
     }
 
     pub fn get_latest_by_run_id(&self, run_id: &str) -> Result<Option<AgentExecutionRecord>> {
-        let sql = format!(
-            "SELECT {} FROM agent_executions WHERE run_id = ?1 ORDER BY started_at DESC LIMIT 1",
-            AE_COLUMNS
-        );
+        let sql =
+            format!("SELECT {} FROM agent_executions WHERE run_id = ?1 ORDER BY started_at DESC LIMIT 1", AE_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(rusqlite::params![run_id], scan_agent_execution_row)?;
         match rows.next() {
@@ -122,10 +120,8 @@ impl AgentExecutionsRepository {
     }
 
     pub fn get_latest_by_loop_id(&self, loop_id: &str) -> Result<Option<AgentExecutionRecord>> {
-        let sql = format!(
-            "SELECT {} FROM agent_executions WHERE loop_id = ?1 ORDER BY started_at DESC LIMIT 1",
-            AE_COLUMNS
-        );
+        let sql =
+            format!("SELECT {} FROM agent_executions WHERE loop_id = ?1 ORDER BY started_at DESC LIMIT 1", AE_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(rusqlite::params![loop_id], scan_agent_execution_row)?;
         match rows.next() {
@@ -161,10 +157,8 @@ impl AgentExecutionsRepository {
     }
 
     pub fn list_since(&self, since_iso: &str) -> Result<Vec<AgentExecutionRecord>> {
-        let sql = format!(
-            "SELECT {} FROM agent_executions WHERE created_at >= ?1 ORDER BY created_at DESC",
-            AE_COLUMNS
-        );
+        let sql =
+            format!("SELECT {} FROM agent_executions WHERE created_at >= ?1 ORDER BY created_at DESC", AE_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![since_iso], scan_agent_execution_row)?;
         let mut records = Vec::new();

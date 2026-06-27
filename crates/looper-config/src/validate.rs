@@ -138,11 +138,7 @@ mod tests {
 
     fn minimal_valid_config() -> Config {
         Config {
-            server: Some(ServerConfig {
-                host: "127.0.0.1".into(),
-                port: 7391,
-                ..Default::default()
-            }),
+            server: Some(ServerConfig { host: "127.0.0.1".into(), port: 7391, ..Default::default() }),
             ..Default::default()
         }
     }
@@ -178,10 +174,7 @@ mod tests {
     #[test]
     fn test_zero_workers_is_error() {
         let mut config = minimal_valid_config();
-        config.scheduler = Some(SchedulerConfig {
-            max_workers: 0,
-            ..Default::default()
-        });
+        config.scheduler = Some(SchedulerConfig { max_workers: 0, ..Default::default() });
         let validation = validate_config(&config);
         assert!(validation.has_errors());
     }
@@ -189,10 +182,7 @@ mod tests {
     #[test]
     fn test_zero_timeout_is_error() {
         let mut config = minimal_valid_config();
-        config.agent = Some(AgentConfig {
-            timeout_secs: 0,
-            ..Default::default()
-        });
+        config.agent = Some(AgentConfig { timeout_secs: 0, ..Default::default() });
         let validation = validate_config(&config);
         assert!(validation.has_errors());
     }
@@ -200,10 +190,7 @@ mod tests {
     #[test]
     fn test_empty_project_name_is_error() {
         let mut config = minimal_valid_config();
-        config.projects = vec![ProjectConfig {
-            name: String::new(),
-            ..Default::default()
-        }];
+        config.projects = vec![ProjectConfig { name: String::new(), ..Default::default() }];
         let validation = validate_config(&config);
         assert!(validation.has_errors());
     }
@@ -211,10 +198,7 @@ mod tests {
     #[test]
     fn test_warnings_do_not_cause_has_errors() {
         let mut config = minimal_valid_config();
-        config.agent = Some(AgentConfig {
-            parallel_runs: 0,
-            ..Default::default()
-        });
+        config.agent = Some(AgentConfig { parallel_runs: 0, ..Default::default() });
         let validation = validate_config(&config);
         assert!(!validation.has_errors(), "warnings should not cause errors");
     }

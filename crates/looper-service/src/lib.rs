@@ -26,11 +26,10 @@ pub mod run_service;
 
 pub use error::{Result, ServiceError};
 pub use loop_service::{
-    CreateInput, LoopService, PauseInput, PauseResult, TerminateInput, TerminateResult,
-    TransitionInput,
+    CreateInput, LoopService, PauseInput, PauseResult, TerminateInput, TerminateResult, TransitionInput,
 };
 pub use project_service::{
-    AddInput, AddResult, BranchProtection, ProjectService, ProjectServiceCallbacks,
-    PullRequestEntry, RepositorySettings, SnapshotMode, WorktreeEntry, CallbackResult,
+    AddInput, AddResult, BranchProtection, CallbackResult, ProjectService, ProjectServiceCallbacks, PullRequestEntry,
+    RepositorySettings, SnapshotMode, WorktreeEntry,
 };
 pub use run_service::{CompleteInput, RecordStepInput, RunService, StartInput};

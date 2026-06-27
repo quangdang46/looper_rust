@@ -65,7 +65,9 @@ impl GhWebhookClient {
         Self { gh_path: gh_path.to_string() }
     }
 
-    fn repo_path(repo: &str) -> String { repo.trim().to_lowercase() }
+    fn repo_path(repo: &str) -> String {
+        repo.trim().to_lowercase()
+    }
 
     pub fn get_hook(&self, repo: &str, id: i64) -> Result<Option<GitHubHook>, String> {
         let rp = Self::repo_path(repo);
@@ -93,11 +95,20 @@ impl GhWebhookClient {
         serde_json::from_str(&output).map_err(|e| format!("decode created hook: {e}"))
     }
 
-    pub fn update_hook(&self, repo: &str, id: i64, hook_url: &str, secret: &str, events: &[&str], active: bool) -> Result<GitHubHook, String> {
+    pub fn update_hook(
+        &self,
+        repo: &str,
+        id: i64,
+        hook_url: &str,
+        secret: &str,
+        events: &[&str],
+        active: bool,
+    ) -> Result<GitHubHook, String> {
         let body = build_hook_body(hook_url, secret, events, active);
         let tmp = write_tmp_json(&body)?;
         let rp = Self::repo_path(repo);
-        let output = run_gh(&self.gh_path, &["api", "-X", "PATCH", &format!("repos/{rp}/hooks/{id}"), "--input", &tmp])?;
+        let output =
+            run_gh(&self.gh_path, &["api", "-X", "PATCH", &format!("repos/{rp}/hooks/{id}"), "--input", &tmp])?;
         let _ = std::fs::remove_file(&tmp);
         serde_json::from_str(&output).map_err(|e| format!("decode updated hook: {e}"))
     }
@@ -125,10 +136,14 @@ pub fn derive_tunnel_secret(daemon_token: &str, repo: &str) -> String {
 
 /// Check if tunnel should be auto-disabled after N failures.
 pub fn should_disable_tunnel(tunnel_id: &str, repos: &Repositories) -> Result<bool, String> {
-    let events = repos.events.list(100)
-        .map_err(|e| format!("list tunnel events: {e}"))?;
-    let failures = events.iter()
-        .filter(|e| e.entity_type.as_deref() == Some("tunnel") && e.entity_id.as_deref() == Some(tunnel_id) && e.event_type == "webhook_delivery_failed")
+    let events = repos.events.list(100).map_err(|e| format!("list tunnel events: {e}"))?;
+    let failures = events
+        .iter()
+        .filter(|e| {
+            e.entity_type.as_deref() == Some("tunnel")
+                && e.entity_id.as_deref() == Some(tunnel_id)
+                && e.event_type == "webhook_delivery_failed"
+        })
         .count();
     Ok(failures >= DISABLE_LATCH_THRESHOLD)
 }
@@ -139,14 +154,26 @@ pub fn should_disable_tunnel(tunnel_id: &str, repos: &Repositories) -> Result<bo
 
 /// Exit class for webhook forwarder subprocess.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExitClass { Terminal, Transient }
+pub enum ExitClass {
+    Terminal,
+    Transient,
+}
 
 /// Classify a forwarder exit from stderr content.
 pub fn classify_forwarder_exit(stderr: &str) -> ExitClass {
     let text = stderr.to_lowercase();
-    for p in &["http 401", "authentication required", "gh auth login", "http 403",
-               "resource not accessible", "http 404", "hook already exists"] {
-        if text.contains(p) { return ExitClass::Terminal; }
+    for p in &[
+        "http 401",
+        "authentication required",
+        "gh auth login",
+        "http 403",
+        "resource not accessible",
+        "http 404",
+        "hook already exists",
+    ] {
+        if text.contains(p) {
+            return ExitClass::Terminal;
+        }
     }
     if text.contains("validation failed") && text.contains("hook") {
         return ExitClass::Terminal;
@@ -159,10 +186,7 @@ pub fn classify_forwarder_exit(stderr: &str) -> ExitClass {
 // ---------------------------------------------------------------------------
 
 fn run_gh(gh_path: &str, args: &[&str]) -> Result<String, String> {
-    let out = std::process::Command::new(gh_path)
-        .args(args)
-        .output()
-        .map_err(|e| format!("gh: {e}"))?;
+    let out = std::process::Command::new(gh_path).args(args).output().map_err(|e| format!("gh: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         if stderr.contains("HTTP 404") || stderr.contains("Not Found") {

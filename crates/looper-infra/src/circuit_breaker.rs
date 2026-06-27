@@ -75,13 +75,7 @@ impl CircuitBreaker {
     /// * `failure_threshold` — Number of consecutive failures before tripping.
     /// * `cooldown` — How long to stay open before allowing a half-open probe.
     pub const fn new(failure_threshold: u32, cooldown: Duration) -> Self {
-        Self {
-            failure_threshold,
-            cooldown,
-            state: State::Closed,
-            failure_count: 0,
-            last_failure_time: None,
-        }
+        Self { failure_threshold, cooldown, state: State::Closed, failure_count: 0, last_failure_time: None }
     }
 
     /// Returns `true` if the circuit is available for requests.

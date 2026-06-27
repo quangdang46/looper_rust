@@ -64,10 +64,8 @@ pub struct PlanResult {
 /// Plan which worktrees to clean.
 pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanResult, CleanupError> {
     // Scan active worktrees (status='active')
-    let active_worktrees = repos
-        .worktrees
-        .list_active()
-        .map_err(|e| CleanupError::Plan(format!("list active worktrees: {e}")))?;
+    let active_worktrees =
+        repos.worktrees.list_active().map_err(|e| CleanupError::Plan(format!("list active worktrees: {e}")))?;
 
     // Also scan non-active, non-cleaned worktrees (e.g. "created" status from dead runners)
     let stale_candidates = repos
@@ -77,27 +75,16 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
 
     // Merge, deduplicate by id
     let mut seen = std::collections::HashSet::new();
-    let worktrees: Vec<WorktreeRecord> = active_worktrees
-        .into_iter()
-        .chain(stale_candidates)
-        .filter(|wt| seen.insert(wt.id.clone()))
-        .collect();
+    let worktrees: Vec<WorktreeRecord> =
+        active_worktrees.into_iter().chain(stale_candidates).filter(|wt| seen.insert(wt.id.clone())).collect();
 
-    let loops = repos
-        .loops
-        .list()
-        .map_err(|e| CleanupError::Plan(format!("list loops: {e}")))?;
+    let loops = repos.loops.list().map_err(|e| CleanupError::Plan(format!("list loops: {e}")))?;
 
     let loop_ids: Vec<String> = loops.iter().map(|l| l.id.clone()).collect();
-    let runs = repos
-        .runs
-        .list_latest_by_loop_ids(&loop_ids)
-        .map_err(|e| CleanupError::Plan(format!("list runs: {e}")))?;
+    let runs =
+        repos.runs.list_latest_by_loop_ids(&loop_ids).map_err(|e| CleanupError::Plan(format!("list runs: {e}")))?;
 
-    let queue_items = repos
-        .queue
-        .list()
-        .map_err(|e| CleanupError::Plan(format!("list queue items: {e}")))?;
+    let queue_items = repos.queue.list().map_err(|e| CleanupError::Plan(format!("list queue items: {e}")))?;
 
     let retention_cutoff = options.retention_cutoff();
     let mut summary = Summary::default();
@@ -122,11 +109,7 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
                 continue;
             }
             orphan = false;
-            references.push(Ref {
-                kind: "loop",
-                id: l.id.clone(),
-                status: l.status.clone(),
-            });
+            references.push(Ref { kind: "loop", id: l.id.clone(), status: l.status.clone() });
             update_last_used(&mut last_used_at, &l.updated_at);
             if let Some(ref ts) = l.last_run_at {
                 update_last_used(&mut last_used_at, ts);
@@ -145,11 +128,7 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
                 continue;
             }
             orphan = false;
-            references.push(Ref {
-                kind: "run",
-                id: r.id.clone(),
-                status: r.status.clone(),
-            });
+            references.push(Ref { kind: "run", id: r.id.clone(), status: r.status.clone() });
             update_last_used(&mut last_used_at, &r.updated_at);
             update_last_used(&mut last_used_at, &r.started_at);
             if let Some(ref ts) = r.ended_at {
@@ -171,11 +150,7 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
                 continue;
             }
             orphan = false;
-            references.push(Ref {
-                kind: "queue",
-                id: qi.id.clone(),
-                status: qi.status.clone(),
-            });
+            references.push(Ref { kind: "queue", id: qi.id.clone(), status: qi.status.clone() });
             update_last_used(&mut last_used_at, &qi.updated_at);
             update_last_used(&mut last_used_at, &qi.created_at);
 
@@ -249,8 +224,7 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
         decisions.push(Decision {
             worktree: wt.clone(),
             action: DecisionAction::WouldClean,
-            reason: if orphan { "orphan worktree" } else { "stale worktree" }
-                .into(),
+            reason: if orphan { "orphan worktree" } else { "stale worktree" }.into(),
             last_used_at: last_used_at.map(|d| d.to_rfc3339()),
             orphan,
             references,
@@ -264,9 +238,7 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
 // Helpers
 // --------------------------------------------------------------------------
 
-const PROTECTED_LOOP_STATUSES: &[&str] = &[
-    "idle", "queued", "running", "waiting", "paused", "failed", "interrupted",
-];
+const PROTECTED_LOOP_STATUSES: &[&str] = &["idle", "queued", "running", "waiting", "paused", "failed", "interrupted"];
 
 fn is_protected_loop_status(status: &str) -> bool {
     PROTECTED_LOOP_STATUSES.contains(&status)
@@ -390,10 +362,7 @@ mod tests {
     #[test]
     fn test_plan_skips_cleaned_worktrees() {
         // Use the function to test summary structure
-        let wt = WorktreeRecord {
-            status: "cleaned".into(),
-            ..sample_worktree()
-        };
+        let wt = WorktreeRecord { status: "cleaned".into(), ..sample_worktree() };
         assert_eq!(wt.status, "cleaned");
     }
 }

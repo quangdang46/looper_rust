@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::record::WorktreeRecord;
+use rusqlite::Connection;
 
 fn scan_worktree(row: &rusqlite::Row) -> rusqlite::Result<WorktreeRecord> {
     Ok(WorktreeRecord {
@@ -63,10 +63,7 @@ impl WorktreesRepository {
     }
 
     pub fn get_by_branch(&self, project_id: &str, branch: &str) -> Result<Option<WorktreeRecord>> {
-        let sql = format!(
-            "SELECT {} FROM worktrees WHERE project_id = ?1 AND branch = ?2",
-            WT_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM worktrees WHERE project_id = ?1 AND branch = ?2", WT_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(rusqlite::params![project_id, branch], scan_worktree)?;
         match rows.next() {
@@ -77,10 +74,7 @@ impl WorktreesRepository {
     }
 
     pub fn list_by_project(&self, project_id: &str) -> Result<Vec<WorktreeRecord>> {
-        let sql = format!(
-            "SELECT {} FROM worktrees WHERE project_id = ?1 ORDER BY created_at DESC",
-            WT_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM worktrees WHERE project_id = ?1 ORDER BY created_at DESC", WT_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![project_id], scan_worktree)?;
         let mut records = Vec::new();
@@ -105,10 +99,7 @@ impl WorktreesRepository {
     }
 
     pub fn list_active(&self) -> Result<Vec<WorktreeRecord>> {
-        let sql = format!(
-            "SELECT {} FROM worktrees WHERE status = 'active' ORDER BY updated_at DESC",
-            WT_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM worktrees WHERE status = 'active' ORDER BY updated_at DESC", WT_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([], scan_worktree)?;
         let mut records = Vec::new();
@@ -119,10 +110,7 @@ impl WorktreesRepository {
     }
 
     pub fn touch_cleanup_attempt(&self, id: &str, updated_at: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE worktrees SET updated_at = ?2 WHERE id = ?1",
-            rusqlite::params![id, updated_at],
-        )?;
+        self.conn.execute("UPDATE worktrees SET updated_at = ?2 WHERE id = ?1", rusqlite::params![id, updated_at])?;
         Ok(())
     }
 }

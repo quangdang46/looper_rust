@@ -24,11 +24,7 @@ impl<T: Serialize> Envelope<T> {
     /// Build a success envelope.
     #[must_use]
     pub fn success(data: T) -> Self {
-        Self {
-            ok: true,
-            data: Some(data),
-            error: None,
-        }
+        Self { ok: true, data: Some(data), error: None }
     }
 
     /// Build a success envelope whose data is an empty JSON object `{}`.
@@ -38,11 +34,7 @@ impl<T: Serialize> Envelope<T> {
     where
         T: Default,
     {
-        Self {
-            ok: true,
-            data: Some(T::default()),
-            error: None,
-        }
+        Self { ok: true, data: Some(T::default()), error: None }
     }
 }
 

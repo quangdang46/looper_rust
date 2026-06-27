@@ -39,9 +39,7 @@ pub fn default_log_dir() -> Option<PathBuf> {
 
 /// Default home directory (~).
 pub fn default_home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
+    std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
 /// Platform-aware default config search paths.
@@ -65,12 +63,26 @@ pub fn default_config_search_paths() -> Vec<PathBuf> {
         paths.push(p);
     }
 
-    // 3. Project dirs
-    if let Some(dirs) = project_dirs() {
-        paths.push(dirs.config_dir().to_path_buf());
+    // 3. ~/.config/looper (XDG-style fallback for macOS where ProjectDirs
+    //    returns ~/Library/Application Support/com.looper.looper/)
+    if let Some(home) = default_home_dir() {
+        let mut p = home;
+        p.push(".config");
+        p.push(CONFIG_DIR_NAME);
+        if !paths.contains(&p) {
+            paths.push(p);
+        }
     }
 
-    // 4. Legacy ~/.looper
+    // 4. Project dirs (platform-specific: macOS -> ~/Library/Application Support/com.looper.looper/)
+    if let Some(dirs) = project_dirs() {
+        let d = dirs.config_dir().to_path_buf();
+        if !paths.contains(&d) {
+            paths.push(d);
+        }
+    }
+
+    // 5. Legacy ~/.looper
     if let Some(home) = default_home_dir() {
         let mut p = home;
         p.push(format!(".{}", CONFIG_DIR_NAME));

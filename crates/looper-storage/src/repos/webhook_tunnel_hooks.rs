@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::helpers::bool_to_int;
 use crate::record::WebhookTunnelHookRecord;
+use rusqlite::Connection;
 
 fn scan_webhook_tunnel_hook(row: &rusqlite::Row) -> rusqlite::Result<WebhookTunnelHookRecord> {
     Ok(WebhookTunnelHookRecord {
@@ -81,18 +81,13 @@ impl WebhookTunnelHooksRepository {
     }
 
     pub fn delete(&self, repo: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM webhook_tunnel_hooks WHERE repo = ?1",
-            rusqlite::params![repo],
-        )?;
+        self.conn.execute("DELETE FROM webhook_tunnel_hooks WHERE repo = ?1", rusqlite::params![repo])?;
         Ok(())
     }
 
     pub fn update_ping(&self, repo: &str, at: i64) -> Result<()> {
-        self.conn.execute(
-            "UPDATE webhook_tunnel_hooks SET last_ping_at=?2 WHERE repo=?1",
-            rusqlite::params![repo, at],
-        )?;
+        self.conn
+            .execute("UPDATE webhook_tunnel_hooks SET last_ping_at=?2 WHERE repo=?1", rusqlite::params![repo, at])?;
         Ok(())
     }
 }

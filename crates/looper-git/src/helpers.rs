@@ -9,10 +9,7 @@ pub const DEFAULT_REMOTE: &str = "origin";
 
 /// Resolve the best start-point ref for a detached worktree.
 /// Tries remote branch first, then local branch.
-pub async fn resolve_detached_start_point_ref(
-    repo_path: &str,
-    branch: &str,
-) -> Result<Option<String>> {
+pub async fn resolve_detached_start_point_ref(repo_path: &str, branch: &str) -> Result<Option<String>> {
     has_remote(repo_path, DEFAULT_REMOTE).await?;
 
     // Try to fetch the remote branch first (best effort)
@@ -33,11 +30,7 @@ pub async fn resolve_detached_start_point_ref(
 
 /// Resolve the best start-point ref for an attached worktree.
 /// Tries remote branch first, then falls back to base branch.
-pub async fn resolve_attached_start_point(
-    repo_path: &str,
-    branch: &str,
-    base_branch: Option<&str>,
-) -> Result<String> {
+pub async fn resolve_attached_start_point(repo_path: &str, branch: &str, base_branch: Option<&str>) -> Result<String> {
     // Try remote branch first
     if remote_branch_exists(repo_path, DEFAULT_REMOTE, branch).await? {
         return Ok(format!("{}/{}", DEFAULT_REMOTE, branch));
@@ -50,9 +43,7 @@ pub async fn resolve_attached_start_point(
         }
     }
 
-    Err(GitError::BranchNotFound {
-        branch: branch.to_string(),
-    })
+    Err(GitError::BranchNotFound { branch: branch.to_string() })
 }
 
 // ---------------------------------------------------------------------------
@@ -62,12 +53,7 @@ pub async fn resolve_attached_start_point(
 /// Check if a local branch exists.
 pub async fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool> {
     let output = tokio::process::Command::new("git")
-        .args([
-            "show-ref",
-            "--quiet",
-            "--verify",
-            &format!("refs/heads/{}", branch),
-        ])
+        .args(["show-ref", "--quiet", "--verify", &format!("refs/heads/{}", branch)])
         .current_dir(repo_path)
         .output()
         .await?;
@@ -78,12 +64,7 @@ pub async fn local_branch_exists(repo_path: &str, branch: &str) -> Result<bool> 
 /// Check if a remote branch exists.
 pub async fn remote_branch_exists(repo_path: &str, remote: &str, branch: &str) -> Result<bool> {
     let output = tokio::process::Command::new("git")
-        .args([
-            "show-ref",
-            "--quiet",
-            "--verify",
-            &format!("refs/remotes/{}/{}", remote, branch),
-        ])
+        .args(["show-ref", "--quiet", "--verify", &format!("refs/remotes/{}/{}", remote, branch)])
         .current_dir(repo_path)
         .output()
         .await?;
@@ -131,11 +112,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let output = tokio::process::Command::new("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await?;
+    let output = tokio::process::Command::new("git").args(args).current_dir(cwd).output().await?;
 
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -160,20 +137,13 @@ where
     let delays = [50u64, 100u64];
 
     for attempt in 0..max_attempts {
-        let output = tokio::process::Command::new("git")
-            .args(args.clone())
-            .current_dir(cwd)
-            .output()
-            .await?;
+        let output = tokio::process::Command::new("git").args(args.clone()).current_dir(cwd).output().await?;
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
         // Check if this is a retryable fetch lock race
-        if !output.status.success()
-            && attempt < max_attempts - 1
-            && crate::error::is_fetch_lock_race(&stderr)
-        {
+        if !output.status.success() && attempt < max_attempts - 1 && crate::error::is_fetch_lock_race(&stderr) {
             let delay_ms = delays.get(attempt).copied().unwrap_or(100);
             tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             continue;
@@ -189,9 +159,7 @@ where
         return Ok(stdout);
     }
 
-    Err(GitError::Other(
-        "max retry attempts exceeded for fetch command".to_string(),
-    ))
+    Err(GitError::Other("max retry attempts exceeded for fetch command".to_string()))
 }
 
 // ---------------------------------------------------------------------------
@@ -201,12 +169,8 @@ where
 /// Parse `git worktree list --porcelain` output into entries.
 pub fn parse_worktree_list(output: &str) -> Vec<crate::types::WorktreeListEntry> {
     let mut entries = Vec::new();
-    let mut current = crate::types::WorktreeListEntry {
-        path: String::new(),
-        branch: None,
-        head_sha: None,
-        bare: false,
-    };
+    let mut current =
+        crate::types::WorktreeListEntry { path: String::new(), branch: None, head_sha: None, bare: false };
     let mut in_entry = false;
 
     for line in output.lines() {
@@ -214,12 +178,8 @@ pub fn parse_worktree_list(output: &str) -> Vec<crate::types::WorktreeListEntry>
         if line.is_empty() {
             if in_entry {
                 entries.push(std::mem::take(&mut current));
-                current = crate::types::WorktreeListEntry {
-                    path: String::new(),
-                    branch: None,
-                    head_sha: None,
-                    bare: false,
-                };
+                current =
+                    crate::types::WorktreeListEntry { path: String::new(), branch: None, head_sha: None, bare: false };
                 in_entry = false;
             }
             continue;

@@ -204,9 +204,15 @@ mod tests {
     fn test_sink_states_no_transitions_at_all() {
         let sink = [LoopStatus::Completed, LoopStatus::Terminated];
         let all_states = [
-            LoopStatus::Idle, LoopStatus::Queued, LoopStatus::Running,
-            LoopStatus::Paused, LoopStatus::Waiting, LoopStatus::Stopped,
-            LoopStatus::Terminated, LoopStatus::Completed, LoopStatus::Failed,
+            LoopStatus::Idle,
+            LoopStatus::Queued,
+            LoopStatus::Running,
+            LoopStatus::Paused,
+            LoopStatus::Waiting,
+            LoopStatus::Stopped,
+            LoopStatus::Terminated,
+            LoopStatus::Completed,
+            LoopStatus::Failed,
             LoopStatus::Interrupted,
         ];
         for from in sink {

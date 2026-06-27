@@ -7,9 +7,9 @@
 //! JSON response, and produces a Decision (valid/out-of-scope/unclear)
 //! with labels and a comment.
 
-use std::collections::HashSet;
 use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
 // Disposition
@@ -222,9 +222,16 @@ pub fn allowed_kinds() -> Vec<&'static str> {
 /// Allowed area labels.
 pub fn allowed_areas() -> Vec<&'static str> {
     vec![
-        "area/api", "area/config", "area/coordinator", "area/docs",
-        "area/github", "area/runtime", "area/testing", "area/planner",
-        "area/worker", "area/reviewer",
+        "area/api",
+        "area/config",
+        "area/coordinator",
+        "area/docs",
+        "area/github",
+        "area/runtime",
+        "area/testing",
+        "area/planner",
+        "area/worker",
+        "area/reviewer",
     ]
 }
 
@@ -255,12 +262,28 @@ pub fn allowed_label_universe() -> Vec<&'static str> {
 
 /// Create a no-op decision (triage skipped).
 pub fn no_op_decision() -> Decision {
-    Decision { no_op: true, disposition: None, clear_label_patterns: vec![], remove_labels: vec![], apply_labels: vec![], comment_body: String::new(), mark_triaged: false }
+    Decision {
+        no_op: true,
+        disposition: None,
+        clear_label_patterns: vec![],
+        remove_labels: vec![],
+        apply_labels: vec![],
+        comment_body: String::new(),
+        mark_triaged: false,
+    }
 }
 
 /// Create a re-triage decision (remove unclear and triaged labels).
 pub fn re_triage_decision(cfg: &Config) -> Decision {
-    Decision { no_op: false, disposition: Some(Disposition::Unclear), clear_label_patterns: vec![], remove_labels: vec![cfg.unclear_label.clone(), cfg.triaged_label.clone()], apply_labels: vec![], comment_body: String::new(), mark_triaged: false }
+    Decision {
+        no_op: false,
+        disposition: Some(Disposition::Unclear),
+        clear_label_patterns: vec![],
+        remove_labels: vec![cfg.unclear_label.clone(), cfg.triaged_label.clone()],
+        apply_labels: vec![],
+        comment_body: String::new(),
+        mark_triaged: false,
+    }
 }
 
 /// Decide whether an issue should be triaged.
@@ -343,10 +366,7 @@ pub fn decide(llm: Option<&dyn LLM>, input: &Input) -> Decision {
         Some(l) => l,
         None => return no_op_decision(),
     };
-    let req = Request {
-        prompt: build_prompt(input),
-        working_directory: input.repo_context.working_directory.clone(),
-    };
+    let req = Request { prompt: build_prompt(input), working_directory: input.repo_context.working_directory.clone() };
     let raw = match llm.complete(req) {
         Ok(r) => r,
         Err(_) => return no_op_decision(),
@@ -359,8 +379,7 @@ pub fn decide(llm: Option<&dyn LLM>, input: &Input) -> Decision {
 // ---------------------------------------------------------------------------
 
 fn parse_decision(raw: &str, cfg: &Config) -> Result<Decision, String> {
-    let output: LlmOutput =
-        serde_json::from_str(raw.trim()).map_err(|e| format!("JSON parse error: {e}"))?;
+    let output: LlmOutput = serde_json::from_str(raw.trim()).map_err(|e| format!("JSON parse error: {e}"))?;
 
     let comment = output.comment.trim().to_string();
     if comment.is_empty() {
@@ -368,7 +387,10 @@ fn parse_decision(raw: &str, cfg: &Config) -> Result<Decision, String> {
     }
 
     let clear = vec![
-        "kind/*", "area/*", "complexity/*", "dispatch/*",
+        "kind/*",
+        "area/*",
+        "complexity/*",
+        "dispatch/*",
         cfg.out_of_scope_label.as_str(),
         cfg.unclear_label.as_str(),
     ];
@@ -440,10 +462,7 @@ fn require_exactly_one(values: &[String], allowed: &[&str]) -> Result<String, St
 }
 
 fn has_any_labels(labels: &LlmLabels) -> bool {
-    !labels.kind.is_empty()
-        || !labels.area.is_empty()
-        || !labels.complexity.is_empty()
-        || !labels.dispatch.is_empty()
+    !labels.kind.is_empty() || !labels.area.is_empty() || !labels.complexity.is_empty() || !labels.dispatch.is_empty()
 }
 
 fn needs_info_applied_at(issue: &Issue, unclear_label: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -525,9 +544,7 @@ mod tests {
 
     #[test]
     fn test_decide_out_of_scope() {
-        let llm = MockLlm(
-            r#"{"disposition":"out-of-scope","comment":"This is outside our scope.","labels":{}}"#,
-        );
+        let llm = MockLlm(r#"{"disposition":"out-of-scope","comment":"This is outside our scope.","labels":{}}"#);
         let input = Input {
             issue: sample_issue(),
             repo_context: RepoContext::default(),
@@ -542,9 +559,7 @@ mod tests {
 
     #[test]
     fn test_decide_unclear() {
-        let llm = MockLlm(
-            r#"{"disposition":"unclear","comment":"This issue needs more detail.","labels":{}}"#,
-        );
+        let llm = MockLlm(r#"{"disposition":"unclear","comment":"This issue needs more detail.","labels":{}}"#);
         let input = Input {
             issue: sample_issue(),
             repo_context: RepoContext::default(),
@@ -599,11 +614,14 @@ mod tests {
         let mut issue = sample_issue();
         issue.labels.push("looper:needs-human".into());
         issue.timeline.push(TimelineEvent {
-            event: "labeled".into(), created_at: "2026-06-20T13:00:00Z".into(),
+            event: "labeled".into(),
+            created_at: "2026-06-20T13:00:00Z".into(),
             label: "looper:needs-human".into(),
         });
         issue.comments.push(Comment {
-            id: 1, author: "user1".into(), author_association: "OWNER".into(),
+            id: 1,
+            author: "user1".into(),
+            author_association: "OWNER".into(),
             body: "I added more details!".into(),
             created_at: "2026-06-20T14:00:00Z".into(),
             updated_at: "2026-06-20T14:00:00Z".into(),
@@ -617,7 +635,11 @@ mod tests {
     fn test_build_prompt_contains_issue() {
         let input = Input {
             issue: sample_issue(),
-            repo_context: RepoContext { paths: vec!["src/auth.rs".into()], symbols: vec!["login".into()], ..Default::default() },
+            repo_context: RepoContext {
+                paths: vec!["src/auth.rs".into()],
+                symbols: vec!["login".into()],
+                ..Default::default()
+            },
             config: Config::default(),
             now: Utc.with_ymd_and_hms(2026, 6, 21, 12, 0, 0).unwrap(),
         };

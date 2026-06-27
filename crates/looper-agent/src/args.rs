@@ -35,12 +35,7 @@ fn build_base_args(_vendor: AgentCliVendor, params: &HashMap<String, serde_json:
 /// For codex/opencode: inserts after the first subcommand (exec/run).
 /// For others: prepends before all args.
 /// No-op if model is None/empty or if a recognized model flag already present.
-pub fn prepend_model_flag(
-    args: &mut Vec<String>,
-    model: &Option<String>,
-    flag: &str,
-    recognized_flags: &[&str],
-) {
+pub fn prepend_model_flag(args: &mut Vec<String>, model: &Option<String>, flag: &str, recognized_flags: &[&str]) {
     let model_val = match model {
         Some(m) if !m.trim().is_empty() => m.trim().to_string(),
         _ => return,
@@ -55,9 +50,7 @@ pub fn prepend_model_flag(
     let model_clone = model_val;
 
     // Check if first arg is a subcommand (exec/run for codex/opencode)
-    if args.first().map(|s| s.as_str()) == Some("exec")
-        || args.first().map(|s| s.as_str()) == Some("run")
-    {
+    if args.first().map(|s| s.as_str()) == Some("exec") || args.first().map(|s| s.as_str()) == Some("run") {
         // Insert after first arg
         args.insert(1, flag_val);
         args.insert(2, model_clone);
@@ -69,11 +62,7 @@ pub fn prepend_model_flag(
 }
 
 /// Resolve a spawn command for a fresh start (no native resume).
-pub fn resolve_spawn(
-    cfg: &ExecutorConfig,
-    working_directory: &str,
-    prompt: &str,
-) -> SpawnCommand {
+pub fn resolve_spawn(cfg: &ExecutorConfig, working_directory: &str, prompt: &str) -> SpawnCommand {
     let binary = resolve_command(cfg);
     let mut args = build_base_args(cfg.vendor, &cfg.params);
     let vendor = cfg.vendor;
@@ -87,11 +76,7 @@ pub fn resolve_spawn(
 
     // Prepend model flag
     let model_flag = vendor.model_flag();
-    let recognized = if vendor == AgentCliVendor::Hermes {
-        vec!["-m"]
-    } else {
-        vec!["--model"]
-    };
+    let recognized = if vendor == AgentCliVendor::Hermes { vec!["-m"] } else { vec!["--model"] };
     prepend_model_flag(&mut args, &cfg.model, model_flag, &recognized);
 
     // Add working directory flag for opencode
@@ -107,9 +92,7 @@ pub fn resolve_spawn(
     let prompt_flag = vendor.prompt_flag();
     if !prompt_flag.is_empty() {
         // Check if prompt already provided via -p/-f/--prompt/--file
-        let has_prompt_flag = args.iter().any(|a| {
-            a == "-p" || a == "--prompt" || a == "-f" || a == "--file"
-        });
+        let has_prompt_flag = args.iter().any(|a| a == "-p" || a == "--prompt" || a == "-f" || a == "--file");
         // For codex, if args end with "-" (stdin mode), don't append prompt
         let stdin_mode = cfg.vendor == AgentCliVendor::Codex && args.last().map(|s| s.as_str()) == Some("-");
 
@@ -123,10 +106,9 @@ pub fn resolve_spawn(
     }
 
     // Add --dangerously-skip-permissions for claude-code
-    if vendor == AgentCliVendor::ClaudeCode
-        && !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-            args.push("--dangerously-skip-permissions".to_string());
-        }
+    if vendor == AgentCliVendor::ClaudeCode && !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+        args.push("--dangerously-skip-permissions".to_string());
+    }
 
     SpawnCommand { binary, args }
 }
@@ -155,11 +137,7 @@ pub fn resolve_spawn_with_native_resume(
 
     // Prepend model flag (before resume flag for codex/opencode, after subcommand)
     let model_flag = vendor.model_flag();
-    let recognized = if vendor == AgentCliVendor::Hermes {
-        vec!["-m"]
-    } else {
-        vec!["--model"]
-    };
+    let recognized = if vendor == AgentCliVendor::Hermes { vec!["-m"] } else { vec!["--model"] };
     prepend_model_flag(&mut args, &cfg.model, model_flag, &recognized);
 
     // Add resume flag
@@ -202,10 +180,9 @@ pub fn resolve_spawn_with_native_resume(
             }
 
             // --dangerously-skip-permissions for claude-code
-            if vendor == AgentCliVendor::ClaudeCode
-                && !args.iter().any(|a| a == "--dangerously-skip-permissions") {
-                    args.push("--dangerously-skip-permissions".to_string());
-                }
+            if vendor == AgentCliVendor::ClaudeCode && !args.iter().any(|a| a == "--dangerously-skip-permissions") {
+                args.push("--dangerously-skip-permissions".to_string());
+            }
         }
     }
 
@@ -353,10 +330,7 @@ mod tests {
     #[test]
     fn test_custom_args() {
         let mut params = HashMap::new();
-        params.insert(
-            "args".to_string(),
-            serde_json::json!(["--profile", "test", "exec"]),
-        );
+        params.insert("args".to_string(), serde_json::json!(["--profile", "test", "exec"]));
         let cfg = ExecutorConfig {
             vendor: AgentCliVendor::Codex,
             model: Some("gpt-5".to_string()),

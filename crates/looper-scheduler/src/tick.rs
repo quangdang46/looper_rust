@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use crate::claim::claim_and_run;
 use crate::types::{
-    ClaimPhase, Context, CoordinatorDiscoveryInput, FixerDiscoveryInput, PlannerDiscoveryInput,
-    ReviewerDiscoveryInput, TickSummary, WorkerDiscoveryInput,
+    ClaimPhase, Context, CoordinatorDiscoveryInput, FixerDiscoveryInput, PlannerDiscoveryInput, ReviewerDiscoveryInput,
+    TickSummary, WorkerDiscoveryInput,
 };
 use crate::Scheduler;
 use looper_storage::record::QueueItemRecord;
@@ -13,8 +13,7 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
     let started_at = Instant::now();
     let mut summary = TickSummary::default();
 
-    let (claimed, available) =
-        execute_claim_phase(scheduler, ctx, ClaimPhase::PreDiscovery, &HashSet::new());
+    let (claimed, available) = execute_claim_phase(scheduler, ctx, ClaimPhase::PreDiscovery, &HashSet::new());
     summary.total_claimed += claimed;
     summary.total_available = summary.total_available.max(available);
 
@@ -23,9 +22,7 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
         Ok(p) => p,
         Err(e) => {
             tracing::error!("failed to list projects during tick: {e}");
-            summary
-                .discovery_errors
-                .push(format!("list_projects: {e}"));
+            summary.discovery_errors.push(format!("list_projects: {e}"));
             return summary;
         }
     };
@@ -68,11 +65,7 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
             // Fall back to repo_path if it looks like a GitHub spec
             // (contains '/' but not a filesystem path).
             let rp = project.repo_path.as_str();
-            if !rp.is_empty()
-                && rp.contains('/')
-                && !rp.starts_with('/')
-                && !rp.starts_with('.')
-            {
+            if !rp.is_empty() && rp.contains('/') && !rp.starts_with('/') && !rp.starts_with('.') {
                 repo = rp.to_string();
             }
         }
@@ -82,105 +75,63 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
 
         if scheduler.planner_discovery_enabled {
             if let Some(ref planner) = scheduler.handlers.planner {
-                let input = PlannerDiscoveryInput {
-                    project_id: project.id.clone(),
-                    repo: repo.clone(),
-                    snapshot: None,
-                };
+                let input =
+                    PlannerDiscoveryInput { project_id: project.id.clone(), repo: repo.clone(), snapshot: None };
                 let result = planner.discover_issues(ctx, input);
                 track_runnable_ids(&result.queue_items, &mut discovered_runnable_ids);
-                let (claimed, _) = execute_claim_phase(
-                    scheduler,
-                    ctx,
-                    ClaimPhase::PostPlannerDiscovery,
-                    &discovered_runnable_ids,
-                );
+                let (claimed, _) =
+                    execute_claim_phase(scheduler, ctx, ClaimPhase::PostPlannerDiscovery, &discovered_runnable_ids);
                 summary.total_claimed += claimed;
             }
         }
 
         if scheduler.coordinator_enabled {
             if let Some(ref coordinator) = scheduler.handlers.coordinator {
-                let input = CoordinatorDiscoveryInput {
-                    project_id: project.id.clone(),
-                    repo: repo.clone(),
-                    snapshot: None,
-                };
+                let input =
+                    CoordinatorDiscoveryInput { project_id: project.id.clone(), repo: repo.clone(), snapshot: None };
                 let _result = coordinator.discover_issues(ctx, input);
-                let (claimed, _) = execute_claim_phase(
-                    scheduler,
-                    ctx,
-                    ClaimPhase::PostCoordinatorDiscovery,
-                    &discovered_runnable_ids,
-                );
+                let (claimed, _) =
+                    execute_claim_phase(scheduler, ctx, ClaimPhase::PostCoordinatorDiscovery, &discovered_runnable_ids);
                 summary.total_claimed += claimed;
             }
         }
 
         if scheduler.reviewer_discovery_enabled {
             if let Some(ref reviewer) = scheduler.handlers.reviewer {
-                let input = ReviewerDiscoveryInput {
-                    project_id: project.id.clone(),
-                    repo: repo.clone(),
-                    snapshot: None,
-                };
+                let input =
+                    ReviewerDiscoveryInput { project_id: project.id.clone(), repo: repo.clone(), snapshot: None };
                 let result = reviewer.discover_pull_requests(ctx, input);
                 track_runnable_ids(&result.queue_items, &mut discovered_runnable_ids);
-                let (claimed, _) = execute_claim_phase(
-                    scheduler,
-                    ctx,
-                    ClaimPhase::PostReviewerDiscovery,
-                    &discovered_runnable_ids,
-                );
+                let (claimed, _) =
+                    execute_claim_phase(scheduler, ctx, ClaimPhase::PostReviewerDiscovery, &discovered_runnable_ids);
                 summary.total_claimed += claimed;
             }
         }
 
         if scheduler.fixer_discovery_enabled {
             if let Some(ref fixer) = scheduler.handlers.fixer {
-                let input = FixerDiscoveryInput {
-                    project_id: project.id.clone(),
-                    repo: repo.clone(),
-                    snapshot: None,
-                };
+                let input = FixerDiscoveryInput { project_id: project.id.clone(), repo: repo.clone(), snapshot: None };
                 let result = fixer.discover_pull_requests(ctx, input);
                 track_runnable_ids(&result.queue_items, &mut discovered_runnable_ids);
-                let (claimed, _) = execute_claim_phase(
-                    scheduler,
-                    ctx,
-                    ClaimPhase::PostFixerDiscovery,
-                    &discovered_runnable_ids,
-                );
+                let (claimed, _) =
+                    execute_claim_phase(scheduler, ctx, ClaimPhase::PostFixerDiscovery, &discovered_runnable_ids);
                 summary.total_claimed += claimed;
             }
         }
 
         if scheduler.worker_discovery_enabled {
             if let Some(ref worker) = scheduler.handlers.worker {
-                let input = WorkerDiscoveryInput {
-                    project_id: project.id.clone(),
-                    repo: repo.clone(),
-                    snapshot: None,
-                };
+                let input = WorkerDiscoveryInput { project_id: project.id.clone(), repo: repo.clone(), snapshot: None };
                 let result = worker.discover_issues(ctx, input);
                 track_runnable_ids(&result.queue_items, &mut discovered_runnable_ids);
-                let (claimed, _) = execute_claim_phase(
-                    scheduler,
-                    ctx,
-                    ClaimPhase::PostWorkerDiscovery,
-                    &discovered_runnable_ids,
-                );
+                let (claimed, _) =
+                    execute_claim_phase(scheduler, ctx, ClaimPhase::PostWorkerDiscovery, &discovered_runnable_ids);
                 summary.total_claimed += claimed;
             }
         }
     }
 
-    let (claimed, _) = execute_claim_phase(
-        scheduler,
-        ctx,
-        ClaimPhase::PostDiscovery,
-        &discovered_runnable_ids,
-    );
+    let (claimed, _) = execute_claim_phase(scheduler, ctx, ClaimPhase::PostDiscovery, &discovered_runnable_ids);
     summary.total_claimed += claimed;
     summary.duration = started_at.elapsed();
 
@@ -226,10 +177,7 @@ pub fn execute_claim_phase(
 
     let claimed_items = if available > 0 {
         let items = claim_and_run(scheduler, ctx, available);
-        if scheduler.handlers.has_claim_handler()
-            && !items.is_empty()
-            && !discovered_runnable_ids.is_empty()
-        {
+        if scheduler.handlers.has_claim_handler() && !items.is_empty() && !discovered_runnable_ids.is_empty() {
             for item in &items {
                 if discovered_runnable_ids.contains(&item.id) {
                     scheduler.trigger_tick();
@@ -246,13 +194,7 @@ pub fn execute_claim_phase(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     if claimed > 0 {
-        tracing::info!(
-            phase = phase.as_str(),
-            available,
-            claimed,
-            duration_ms,
-            "claim phase completed"
-        );
+        tracing::info!(phase = phase.as_str(), available, claimed, duration_ms, "claim phase completed");
     }
 
     (claimed, available)

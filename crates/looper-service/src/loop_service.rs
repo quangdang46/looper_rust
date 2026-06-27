@@ -3,14 +3,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use tracing::info;
 
-use looper_storage::{
-    eventlog::new_event_id,
-    record::LoopRecord,
-    repos::Repositories,
-};
-use looper_types::{
-    loop_target_key, LoopStatus, LoopTarget, LoopType,
-};
+use looper_storage::{eventlog::new_event_id, record::LoopRecord, repos::Repositories};
+use looper_types::{loop_target_key, LoopStatus, LoopTarget, LoopType};
 
 use crate::error::{Result, ServiceError};
 
@@ -25,10 +19,7 @@ impl LoopService {
     where
         F: Fn() -> DateTime<Utc> + 'static,
     {
-        Self {
-            repos,
-            now: Box::new(now),
-        }
+        Self { repos, now: Box::new(now) }
     }
 
     // ── Create ──────────────────────────────────────────────────────────
@@ -76,11 +67,7 @@ impl LoopService {
         let seq = self.repos.loops.allocate_seq()?;
 
         // 5. Build LoopRecord
-        let next_run_at = if input.status == LoopStatus::Running {
-            Some(now_iso.clone())
-        } else {
-            None
-        };
+        let next_run_at = if input.status == LoopStatus::Running { Some(now_iso.clone()) } else { None };
 
         let record = LoopRecord {
             id: new_event_id("loop"),
@@ -123,20 +110,12 @@ impl LoopService {
 
     // ── TransitionStatus ────────────────────────────────────────────────
 
-    pub fn transition_status(
-        &self,
-        id: &str,
-        input: TransitionInput,
-    ) -> Result<LoopRecord> {
+    pub fn transition_status(&self, id: &str, input: TransitionInput) -> Result<LoopRecord> {
         let now = (self.now)();
         let now_iso = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
         // 1. Fetch loop
-        let mut record = self
-            .repos
-            .loops
-            .get_by_id(id)?
-            .ok_or_else(|| ServiceError::LoopNotFound(id.to_string()))?;
+        let mut record = self.repos.loops.get_by_id(id)?.ok_or_else(|| ServiceError::LoopNotFound(id.to_string()))?;
 
         // 2. Validate transition via domain state machine
         let from_status: LoopStatus = record.status.parse()?;
@@ -190,13 +169,9 @@ impl LoopService {
         let from_status: LoopStatus = record.status.parse()?;
 
         // If not already paused, validate transition
-        if from_status != LoopStatus::Paused
-            && !from_status.can_transition_to(LoopStatus::Paused) {
-                return Err(ServiceError::Other(format!(
-                    "cannot pause loop in status {}",
-                    from_status.as_str(),
-                )));
-            }
+        if from_status != LoopStatus::Paused && !from_status.can_transition_to(LoopStatus::Paused) {
+            return Err(ServiceError::Other(format!("cannot pause loop in status {}", from_status.as_str(),)));
+        }
 
         record.status = LoopStatus::Paused.as_str().to_string();
         record.next_run_at = None;
@@ -205,10 +180,11 @@ impl LoopService {
         self.repos.loops.upsert(&record)?;
 
         // Cancel active queue items for this loop
-        let cancelled_queue_items = self
-            .repos
-            .queue
-            .cancel_by_loop(&input.loop_id, &now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(), input.reason.as_deref())?;
+        let cancelled_queue_items = self.repos.queue.cancel_by_loop(
+            &input.loop_id,
+            &now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            input.reason.as_deref(),
+        )?;
 
         info!(
             loop_id = %input.loop_id,
@@ -216,10 +192,7 @@ impl LoopService {
             "loop paused"
         );
 
-        Ok(PauseResult {
-            r#loop: record,
-            cancelled_queue_items,
-        })
+        Ok(PauseResult { r#loop: record, cancelled_queue_items })
     }
 
     // ── Terminate ───────────────────────────────────────────────────────
@@ -237,10 +210,7 @@ impl LoopService {
         let from_status: LoopStatus = record.status.parse()?;
 
         if !from_status.can_transition_to(LoopStatus::Terminated) {
-            return Err(ServiceError::Other(format!(
-                "cannot terminate loop in status {}",
-                from_status.as_str(),
-            )));
+            return Err(ServiceError::Other(format!("cannot terminate loop in status {}", from_status.as_str(),)));
         }
 
         record.status = LoopStatus::Terminated.as_str().to_string();
@@ -249,10 +219,11 @@ impl LoopService {
 
         self.repos.loops.upsert(&record)?;
 
-        let cancelled_queue_items = self
-            .repos
-            .queue
-            .cancel_by_loop(&input.loop_id, &now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(), input.reason.as_deref())?;
+        let cancelled_queue_items = self.repos.queue.cancel_by_loop(
+            &input.loop_id,
+            &now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+            input.reason.as_deref(),
+        )?;
 
         info!(
             loop_id = %input.loop_id,
@@ -260,10 +231,7 @@ impl LoopService {
             "loop terminated"
         );
 
-        Ok(TerminateResult {
-            r#loop: record,
-            cancelled_queue_items,
-        })
+        Ok(TerminateResult { r#loop: record, cancelled_queue_items })
     }
 
     // ── Resume ──────────────────────────────────────────────────────────
@@ -271,20 +239,13 @@ impl LoopService {
     pub fn resume(&self, loop_id: &str) -> Result<LoopRecord> {
         self.transition_status(
             loop_id,
-            TransitionInput {
-                status: LoopStatus::Queued,
-                next_run_at: Some((self.now)()),
-                last_run_at: None,
-            },
+            TransitionInput { status: LoopStatus::Queued, next_run_at: Some((self.now)()), last_run_at: None },
         )
     }
 
     // ── Policy helpers ──────────────────────────────────────────────────
 
-    pub fn normalize_resume_policy(
-        failure_kind: &str,
-        resume_policy: Option<&str>,
-    ) -> &'static str {
+    pub fn normalize_resume_policy(failure_kind: &str, resume_policy: Option<&str>) -> &'static str {
         match (failure_kind, resume_policy) {
             (_, Some(policy)) if !policy.trim().is_empty() => {
                 // Return the policy string — it will leak in static context.
@@ -306,12 +267,8 @@ impl LoopService {
         }
     }
 
-    pub fn suppresses_autonomous_recovery(
-        failure_kind: &str,
-        resume_policy: &str,
-    ) -> bool {
-        resume_policy.trim() == "manual_intervention"
-            || failure_kind.trim() == "manual_intervention"
+    pub fn suppresses_autonomous_recovery(failure_kind: &str, resume_policy: &str) -> bool {
+        resume_policy.trim() == "manual_intervention" || failure_kind.trim() == "manual_intervention"
     }
 
     pub fn should_restart_from_discover(status: &str, resume_policy: &str) -> bool {
@@ -388,8 +345,7 @@ mod tests {
     /// Create in-memory SQLite repos with WAL + FK + migrations.
     fn setup() -> Arc<Repositories> {
         let mut conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&mut conn).unwrap();
         Arc::new(Repositories::new(conn))
     }
@@ -524,11 +480,7 @@ mod tests {
         let updated = s
             .transition_status(
                 &loop_.id,
-                TransitionInput {
-                    status: LoopStatus::Queued,
-                    next_run_at: None,
-                    last_run_at: None,
-                },
+                TransitionInput { status: LoopStatus::Queued, next_run_at: None, last_run_at: None },
             )
             .unwrap();
         assert_eq!(updated.status, "queued");
@@ -543,11 +495,7 @@ mod tests {
         let err = s
             .transition_status(
                 &loop_.id,
-                TransitionInput {
-                    status: LoopStatus::Running,
-                    next_run_at: None,
-                    last_run_at: None,
-                },
+                TransitionInput { status: LoopStatus::Running, next_run_at: None, last_run_at: None },
             )
             .unwrap_err();
         // idle → running is not valid
@@ -561,18 +509,19 @@ mod tests {
         let s = svc(repos.clone());
         let mut loop_ = s.create(base_create("proj-1")).unwrap();
         // idle → queued → running before pause
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Queued, next_run_at: None, last_run_at: None,
-        }).unwrap();
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Running, next_run_at: None, last_run_at: None,
-        }).unwrap();
-        let result = s
-            .pause(PauseInput {
-                loop_id: loop_.id.clone(),
-                reason: Some("testing".into()),
-            })
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput { status: LoopStatus::Queued, next_run_at: None, last_run_at: None },
+            )
             .unwrap();
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput { status: LoopStatus::Running, next_run_at: None, last_run_at: None },
+            )
+            .unwrap();
+        let result = s.pause(PauseInput { loop_id: loop_.id.clone(), reason: Some("testing".into()) }).unwrap();
         assert_eq!(result.r#loop.status, "paused");
     }
 
@@ -580,12 +529,7 @@ mod tests {
     fn test_pause_nonexistent_loop() {
         let repos = setup();
         let s = svc(repos);
-        let err = s
-            .pause(PauseInput {
-                loop_id: "nope".into(),
-                reason: None,
-            })
-            .unwrap_err();
+        let err = s.pause(PauseInput { loop_id: "nope".into(), reason: None }).unwrap_err();
         assert!(matches!(err, ServiceError::LoopNotFound(_)));
     }
 
@@ -597,21 +541,25 @@ mod tests {
         // Must go idle → queued → running before terminated is reachable
         let mut loop_ = s.create(base_create("proj-1")).unwrap();
         // transition to queued
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Queued, next_run_at: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
-            last_run_at: None,
-        }).unwrap();
-        // transition to running
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Running, next_run_at: None, last_run_at: None,
-        }).unwrap();
-        // now terminate from running
-        let result = s
-            .terminate(TerminateInput {
-                loop_id: loop_.id.clone(),
-                reason: Some("done".into()),
-            })
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput {
+                    status: LoopStatus::Queued,
+                    next_run_at: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
+                    last_run_at: None,
+                },
+            )
             .unwrap();
+        // transition to running
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput { status: LoopStatus::Running, next_run_at: None, last_run_at: None },
+            )
+            .unwrap();
+        // now terminate from running
+        let result = s.terminate(TerminateInput { loop_id: loop_.id.clone(), reason: Some("done".into()) }).unwrap();
         assert_eq!(result.r#loop.status, "terminated");
     }
 
@@ -622,19 +570,23 @@ mod tests {
         let s = svc(repos.clone());
         let mut loop_ = s.create(base_create("proj-1")).unwrap();
         // idle → queued → running → paused
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Queued, next_run_at: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
-            last_run_at: None,
-        }).unwrap();
-        loop_ = s.transition_status(&loop_.id, TransitionInput {
-            status: LoopStatus::Running, next_run_at: None, last_run_at: None,
-        }).unwrap();
-        let paused = s
-            .pause(PauseInput {
-                loop_id: loop_.id.clone(),
-                reason: None,
-            })
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput {
+                    status: LoopStatus::Queued,
+                    next_run_at: Some(Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap()),
+                    last_run_at: None,
+                },
+            )
             .unwrap();
+        loop_ = s
+            .transition_status(
+                &loop_.id,
+                TransitionInput { status: LoopStatus::Running, next_run_at: None, last_run_at: None },
+            )
+            .unwrap();
+        let paused = s.pause(PauseInput { loop_id: loop_.id.clone(), reason: None }).unwrap();
         assert_eq!(paused.r#loop.status, "paused");
         // resume → queued
         let resumed = s.resume(&loop_.id).unwrap();
@@ -676,18 +628,9 @@ mod tests {
 
     #[test]
     fn test_normalize_resume_policy_defaults() {
-        assert_eq!(
-            LoopService::normalize_resume_policy("retryable_after_resume", None),
-            "advance_from_checkpoint"
-        );
-        assert_eq!(
-            LoopService::normalize_resume_policy("unknown", None),
-            "replay_step"
-        );
-        assert_eq!(
-            LoopService::normalize_resume_policy("x", Some("manual_intervention")),
-            "manual_intervention"
-        );
+        assert_eq!(LoopService::normalize_resume_policy("retryable_after_resume", None), "advance_from_checkpoint");
+        assert_eq!(LoopService::normalize_resume_policy("unknown", None), "replay_step");
+        assert_eq!(LoopService::normalize_resume_policy("x", Some("manual_intervention")), "manual_intervention");
     }
 
     #[test]

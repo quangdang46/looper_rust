@@ -22,11 +22,7 @@ pub struct Gateway {
 impl Gateway {
     /// Create a new Gateway with the given options.
     pub fn new(options: GatewayOptions) -> Self {
-        Self {
-            git_path: options.git_path,
-            repos: options.repos,
-            now: options.now,
-        }
+        Self { git_path: options.git_path, repos: options.repos, now: options.now }
     }
 
     // -----------------------------------------------------------------------
@@ -57,37 +53,36 @@ impl Gateway {
         // 5. Attempt restore from DB first
         if let Some(ref repos) = self.repos {
             if let Ok(Some(record)) = repos.worktrees.get_by_branch(&input.project_id, &input.branch) {
-                if record.status != "cleaned" && record.repo_path == input.repo_path
-                    && self.is_healthy_worktree(&record.worktree_path).await? {
-                        let mut updated = record.clone();
-                        updated.head_sha = helpers::get_head_sha(&record.worktree_path).await.ok();
-                        updated.updated_at = (self.now)().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                        repos.worktrees.upsert(&updated)?;
-                        return Ok(CreateWorktreeResult {
-                            record: updated,
-                            recovered: true,
-                        });
-                    }
+                if record.status != "cleaned"
+                    && record.repo_path == input.repo_path
+                    && self.is_healthy_worktree(&record.worktree_path).await?
+                {
+                    let mut updated = record.clone();
+                    updated.head_sha = helpers::get_head_sha(&record.worktree_path).await.ok();
+                    updated.updated_at = (self.now)().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                    repos.worktrees.upsert(&updated)?;
+                    return Ok(CreateWorktreeResult { record: updated, recovered: true });
+                }
             }
         }
 
         // 6. Create the git worktree
         let start_point = input.start_point.as_deref().unwrap_or(&input.branch);
         if input.checkout_mode == CheckoutMode::Detached {
-            helpers::run_git_cmd(&input.repo_path, [
-                "worktree", "add", "--force", "--detach",
-                &worktree_path_str, start_point,
-            ]).await?;
+            helpers::run_git_cmd(
+                &input.repo_path,
+                ["worktree", "add", "--force", "--detach", &worktree_path_str, start_point],
+            )
+            .await?;
         } else if local_branch_exists_in_path(&input.repo_path, &input.branch).await? {
-            helpers::run_git_cmd(&input.repo_path, [
-                "worktree", "add", "--force",
-                &worktree_path_str, &input.branch,
-            ]).await?;
+            helpers::run_git_cmd(&input.repo_path, ["worktree", "add", "--force", &worktree_path_str, &input.branch])
+                .await?;
         } else {
-            helpers::run_git_cmd(&input.repo_path, [
-                "worktree", "add", "--force", "-b", &input.branch,
-                &worktree_path_str, start_point,
-            ]).await?;
+            helpers::run_git_cmd(
+                &input.repo_path,
+                ["worktree", "add", "--force", "-b", &input.branch, &worktree_path_str, start_point],
+            )
+            .await?;
         }
 
         // 7. Get HEAD SHA
@@ -114,10 +109,7 @@ impl Gateway {
             repos.worktrees.upsert(&record)?;
         }
 
-        Ok(CreateWorktreeResult {
-            record,
-            recovered: false,
-        })
+        Ok(CreateWorktreeResult { record, recovered: false })
     }
 
     // -----------------------------------------------------------------------
@@ -139,26 +131,27 @@ impl Gateway {
                 let entries = self.list_worktrees_internal(&input.repo_path).await?;
                 for entry in &entries {
                     if self.matches_checkout_mode(entry, &input.checkout_mode, &input.branch)
-                        && self.is_healthy_worktree(&entry.path).await? {
-                            let now_str = (self.now)().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                            let head_sha = helpers::get_head_sha(&entry.path).await.ok();
-                            let new_record = WorktreeRecord {
-                                id: uuid::Uuid::new_v4().to_string(),
-                                project_id: input.project_id.clone(),
-                                repo_path: input.repo_path.clone(),
-                                worktree_path: entry.path.clone(),
-                                branch: input.branch.clone(),
-                                base_branch: input.base_branch.clone(),
-                                status: "active".to_string(),
-                                head_sha,
-                                metadata_json: Some("{\"recovered\":true}".to_string()),
-                                created_at: now_str.clone(),
-                                updated_at: now_str,
-                                cleaned_at: None,
-                            };
-                            repos.worktrees.upsert(&new_record)?;
-                            return Ok(Some(new_record));
-                        }
+                        && self.is_healthy_worktree(&entry.path).await?
+                    {
+                        let now_str = (self.now)().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                        let head_sha = helpers::get_head_sha(&entry.path).await.ok();
+                        let new_record = WorktreeRecord {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            project_id: input.project_id.clone(),
+                            repo_path: input.repo_path.clone(),
+                            worktree_path: entry.path.clone(),
+                            branch: input.branch.clone(),
+                            base_branch: input.base_branch.clone(),
+                            status: "active".to_string(),
+                            head_sha,
+                            metadata_json: Some("{\"recovered\":true}".to_string()),
+                            created_at: now_str.clone(),
+                            updated_at: now_str,
+                            cleaned_at: None,
+                        };
+                        repos.worktrees.upsert(&new_record)?;
+                        return Ok(Some(new_record));
+                    }
                 }
                 return Ok(None);
             }
@@ -211,9 +204,8 @@ impl Gateway {
         safety::validate_worktree_path(&safety_input)?;
 
         // 3. Run git worktree remove
-        let result = helpers::run_git_cmd(&input.repo_path, [
-            "worktree", "remove", "--force", &input.worktree_path,
-        ]).await;
+        let result =
+            helpers::run_git_cmd(&input.repo_path, ["worktree", "remove", "--force", &input.worktree_path]).await;
 
         // 4. If error matches missing worktree pattern, ignore
         if let Err(ref e) = result {
@@ -269,9 +261,7 @@ impl Gateway {
 
     /// Check if a worktree has uncommitted changes.
     pub async fn worktree_clean(&self, worktree_path: &str) -> Result<bool> {
-        let output = helpers::run_git_cmd(worktree_path, [
-            "status", "--porcelain", "--untracked-files=all",
-        ]).await?;
+        let output = helpers::run_git_cmd(worktree_path, ["status", "--porcelain", "--untracked-files=all"]).await?;
         Ok(output.trim().is_empty())
     }
 
@@ -287,11 +277,7 @@ impl Gateway {
     /// Fetch + reset worktree to match remote.
     pub async fn prepare_worktree(&self, input: PrepareWorktreeInput) -> Result<PrepareWorktreeResult> {
         // Validate path safety
-        let safety_input = SafetyCheckInput {
-            path: input.worktree_path.clone(),
-            repo_path: None,
-            worktree_root: None,
-        };
+        let safety_input = SafetyCheckInput { path: input.worktree_path.clone(), repo_path: None, worktree_root: None };
         safety::validate_worktree_path(&safety_input)?;
 
         // Check if clean before reset
@@ -299,23 +285,16 @@ impl Gateway {
 
         // Fetch
         let remote = input.remote.as_deref().unwrap_or("origin");
-        helpers::run_git_with_retry(&input.worktree_path, [
-            "fetch", remote, &input.target_spec,
-        ]).await?;
+        helpers::run_git_with_retry(&input.worktree_path, ["fetch", remote, &input.target_spec]).await?;
 
         // Reset if clean and local != remote
         if is_clean {
-            let _ = helpers::run_git_cmd(&input.worktree_path, [
-                "reset", "--hard", &input.reset_ref,
-            ]).await;
+            let _ = helpers::run_git_cmd(&input.worktree_path, ["reset", "--hard", &input.reset_ref]).await;
         }
 
         let head_sha = helpers::get_head_sha(&input.worktree_path).await?;
 
-        Ok(PrepareWorktreeResult {
-            head_sha,
-            was_dirty: !is_clean,
-        })
+        Ok(PrepareWorktreeResult { head_sha, was_dirty: !is_clean })
     }
 
     // -----------------------------------------------------------------------
@@ -327,18 +306,21 @@ impl Gateway {
         let head_sha = helpers::get_head_sha(&input.worktree_path).await?;
 
         let new_commits = if let Some(ref base) = input.base_ref {
-            let output = helpers::run_git_cmd(&input.worktree_path, [
-                "rev-list", "--reverse", &format!("{}..HEAD", base),
-            ]).await?;
+            let output =
+                helpers::run_git_cmd(&input.worktree_path, ["rev-list", "--reverse", &format!("{}..HEAD", base)])
+                    .await?;
             output.lines().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
         } else {
             Vec::new()
         };
 
-        let output = helpers::run_git_cmd(&input.worktree_path, [
-            "status", "--porcelain", "--untracked-files=all", "--ignored=no",
-        ]).await?;
-        let changed_files: Vec<String> = output.lines()
+        let output = helpers::run_git_cmd(
+            &input.worktree_path,
+            ["status", "--porcelain", "--untracked-files=all", "--ignored=no"],
+        )
+        .await?;
+        let changed_files: Vec<String> = output
+            .lines()
             .map(|s| {
                 // Strip first 3 chars (status markers + space) to get filename
                 let trimmed = s.trim();
@@ -351,11 +333,7 @@ impl Gateway {
             .filter(|s| !s.is_empty())
             .collect();
 
-        Ok(InspectHeadResult {
-            head_sha,
-            new_commits,
-            changed_files,
-        })
+        Ok(InspectHeadResult { head_sha, new_commits, changed_files })
     }
 
     // -----------------------------------------------------------------------
@@ -365,9 +343,7 @@ impl Gateway {
     /// Stage all changes and commit in the worktree.
     pub async fn commit(&self, input: CommitInput) -> Result<CommitResult> {
         helpers::run_git_cmd(&input.worktree_path, ["add", "-A"]).await?;
-        helpers::run_git_cmd(&input.worktree_path, [
-            "commit", "--allow-empty", "-m", &input.message,
-        ]).await?;
+        helpers::run_git_cmd(&input.worktree_path, ["commit", "--allow-empty", "-m", &input.message]).await?;
 
         let head_sha = helpers::get_head_sha(&input.worktree_path).await?;
         Ok(CommitResult { head_sha })
@@ -386,35 +362,30 @@ impl Gateway {
 
         if let Some(ref expected_sha) = input.expected_head_sha {
             // Verify local HEAD descends from expected SHA
-            let is_ancestor = self.is_ancestor_internal(
-                &input.worktree_path, expected_sha, "HEAD",
-            ).await?;
+            let is_ancestor = self.is_ancestor_internal(&input.worktree_path, expected_sha, "HEAD").await?;
 
             if !is_ancestor {
                 // Get actual remote head for error
-                let actual_sha = helpers::run_git_cmd(&input.worktree_path, [
-                    "ls-remote", "--heads", &input.remote, &input.branch,
-                ]).await?;
+                let actual_sha =
+                    helpers::run_git_cmd(&input.worktree_path, ["ls-remote", "--heads", &input.remote, &input.branch])
+                        .await?;
                 let actual = actual_sha.split_whitespace().next().unwrap_or("unknown").to_string();
 
-                return Err(GitError::RemoteHeadChanged(
-                    crate::error::RemoteHeadChangedError {
-                        branch: input.branch.clone(),
-                        expected_head_sha: expected_sha.clone(),
-                        actual_head_sha: actual,
-                    }
-                ));
+                return Err(GitError::RemoteHeadChanged(crate::error::RemoteHeadChangedError {
+                    branch: input.branch.clone(),
+                    expected_head_sha: expected_sha.clone(),
+                    actual_head_sha: actual,
+                }));
             }
 
             let lease = format!("refs/heads/{}:{}", input.branch, expected_sha);
-            helpers::run_git_cmd(&input.worktree_path, [
-                "push", "--porcelain", &format!("--force-with-lease={}", &lease),
-                "-u", &input.remote, &refspec,
-            ]).await?;
+            helpers::run_git_cmd(
+                &input.worktree_path,
+                ["push", "--porcelain", &format!("--force-with-lease={}", &lease), "-u", &input.remote, &refspec],
+            )
+            .await?;
         } else {
-            helpers::run_git_cmd(&input.worktree_path, [
-                "push", "-u", &input.remote, &refspec,
-            ]).await?;
+            helpers::run_git_cmd(&input.worktree_path, ["push", "-u", &input.remote, &refspec]).await?;
         }
 
         Ok(())
@@ -434,9 +405,7 @@ impl Gateway {
     ) -> Result<()> {
         safety::assert_writable_branch(branch, protected_branches)?;
 
-        helpers::run_git_cmd(repo_path, [
-            "branch", "--force", branch, start_point,
-        ]).await?;
+        helpers::run_git_cmd(repo_path, ["branch", "--force", branch, start_point]).await?;
 
         Ok(())
     }
@@ -447,14 +416,11 @@ impl Gateway {
 
     /// Parse the remote origin URL to extract the GitHub owner/repo.
     pub async fn detect_github_repo(&self, repo_path: &str) -> Result<String> {
-        let output = helpers::run_git_cmd(repo_path, [
-            "config", "--get", "remote.origin.url",
-        ]).await?;
+        let output = helpers::run_git_cmd(repo_path, ["config", "--get", "remote.origin.url"]).await?;
 
         let url = output.trim();
-        parse_github_repo(url).ok_or_else(|| GitError::Other(format!(
-            "could not parse GitHub repo from remote URL: {}", url
-        )))
+        parse_github_repo(url)
+            .ok_or_else(|| GitError::Other(format!("could not parse GitHub repo from remote URL: {}", url)))
     }
 
     // -----------------------------------------------------------------------
@@ -463,9 +429,7 @@ impl Gateway {
 
     /// Fetch a specific branch from a remote.
     pub async fn fetch_branch(&self, repo_path: &str, remote: &str, branch: &str) -> Result<()> {
-        helpers::run_git_with_retry(repo_path, [
-            "fetch", remote, branch,
-        ]).await?;
+        helpers::run_git_with_retry(repo_path, ["fetch", remote, branch]).await?;
         Ok(())
     }
 
@@ -525,16 +489,13 @@ impl Gateway {
     /// Check checkout mode by running git commands on the worktree path.
     async fn matches_checkout_mode_for_path(&self, path: &str, mode: &CheckoutMode, branch: &str) -> Result<bool> {
         match mode {
-            CheckoutMode::Detached => {
-                Ok(helpers::is_detached(path).await?)
-            }
+            CheckoutMode::Detached => Ok(helpers::is_detached(path).await?),
             CheckoutMode::Branch => {
                 let output = helpers::run_git_cmd(path, ["rev-parse", "--abbrev-ref", "HEAD"]).await?;
                 Ok(output.trim() == branch)
             }
         }
     }
-
 }
 
 // -----------------------------------------------------------------------
@@ -579,10 +540,7 @@ impl CleanupWorktreeInput {
     /// This is a placeholder — callers should set project_id when constructing the input.
     pub fn project_id(&self) -> String {
         // Derive from repo_path basename as fallback
-        std::path::Path::new(&self.repo_path)
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_default()
+        std::path::Path::new(&self.repo_path).file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default()
     }
 }
 
@@ -592,26 +550,17 @@ mod tests {
 
     #[test]
     fn test_parse_github_repo_ssh() {
-        assert_eq!(
-            parse_github_repo("git@github.com:owner/repo.git"),
-            Some("owner/repo".to_string())
-        );
+        assert_eq!(parse_github_repo("git@github.com:owner/repo.git"), Some("owner/repo".to_string()));
     }
 
     #[test]
     fn test_parse_github_repo_https() {
-        assert_eq!(
-            parse_github_repo("https://github.com/owner/repo.git"),
-            Some("owner/repo".to_string())
-        );
+        assert_eq!(parse_github_repo("https://github.com/owner/repo.git"), Some("owner/repo".to_string()));
     }
 
     #[test]
     fn test_parse_github_repo_no_git_suffix() {
-        assert_eq!(
-            parse_github_repo("git@github.com:owner/repo"),
-            Some("owner/repo".to_string())
-        );
+        assert_eq!(parse_github_repo("git@github.com:owner/repo"), Some("owner/repo".to_string()));
     }
 
     #[test]

@@ -12,9 +12,7 @@ pub struct Throttle {
 
 impl Throttle {
     pub fn new() -> Self {
-        Self {
-            state: Mutex::new(HashMap::new()),
-        }
+        Self { state: Mutex::new(HashMap::new()) }
     }
 
     /// Returns `true` if the notification should be sent (not throttled).

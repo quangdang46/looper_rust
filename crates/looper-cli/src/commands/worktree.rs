@@ -1,5 +1,3 @@
-use std::fmt;
-
 use clap::{Args, Subcommand};
 use serde::{Deserialize, Serialize};
 

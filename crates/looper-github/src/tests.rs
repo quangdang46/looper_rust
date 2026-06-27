@@ -73,12 +73,10 @@ fn test_error_message_review_thread_not_found() {
 
 #[test]
 fn test_is_pull_request_not_found_error() {
-    assert!(is_pull_request_not_found_error(
-        &GitHubError::CommandFailed("GraphQL: could not resolve to a pullrequest".into())
-    ));
-    assert!(is_pull_request_not_found_error(
-        &GitHubError::NotFound("pull request not found".into())
-    ));
+    assert!(is_pull_request_not_found_error(&GitHubError::CommandFailed(
+        "GraphQL: could not resolve to a pullrequest".into()
+    )));
+    assert!(is_pull_request_not_found_error(&GitHubError::NotFound("pull request not found".into())));
     assert!(!is_pull_request_not_found_error(&GitHubError::Auth("bad".into())));
 }
 
@@ -92,11 +90,9 @@ fn test_is_not_found_error() {
 
 #[test]
 fn test_is_inaccessible_review_request_reviewer_error() {
-    assert!(is_inaccessible_review_request_reviewer_error(
-        &GitHubError::CommandFailed(
-            "Resource not accessible by integration: reviewRequests/requestedReviewer".into()
-        )
-    ));
+    assert!(is_inaccessible_review_request_reviewer_error(&GitHubError::CommandFailed(
+        "Resource not accessible by integration: reviewRequests/requestedReviewer".into()
+    )));
     assert!(!is_inaccessible_review_request_reviewer_error(&GitHubError::CommandFailed("other".into())));
 }
 
@@ -113,21 +109,39 @@ fn test_is_diff_too_large_error() {
 fn dummy_pr(number: i64) -> PullRequestSummary {
     PullRequestSummary {
         number,
-        title: "".into(), url: "".into(), state: "OPEN".into(), updated_at: "".into(),
-        is_draft: false, review_decision: "".into(), labels: vec![],
-        head_ref_name: "".into(), base_ref_name: "".into(),
-        head_sha: "".into(), base_sha: "".into(), has_conflicts: false,
-        author: "".into(), author_association: "".into(),
-        review_requests: vec![], review_request_users: vec![], reviews: vec![],
+        title: "".into(),
+        url: "".into(),
+        state: "OPEN".into(),
+        updated_at: "".into(),
+        is_draft: false,
+        review_decision: "".into(),
+        labels: vec![],
+        head_ref_name: "".into(),
+        base_ref_name: "".into(),
+        head_sha: "".into(),
+        base_sha: "".into(),
+        has_conflicts: false,
+        author: "".into(),
+        author_association: "".into(),
+        review_requests: vec![],
+        review_request_users: vec![],
+        reviews: vec![],
     }
 }
 
 fn dummy_issue(number: i64) -> IssueSummary {
     IssueSummary {
         number,
-        title: "".into(), body: "".into(), url: "".into(), state: "OPEN".into(),
-        updated_at: "".into(), author: "".into(), author_association: "".into(),
-        assignees: vec![], assignee_users: vec![], labels: vec![],
+        title: "".into(),
+        body: "".into(),
+        url: "".into(),
+        state: "OPEN".into(),
+        updated_at: "".into(),
+        author: "".into(),
+        author_association: "".into(),
+        assignees: vec![],
+        assignee_users: vec![],
+        labels: vec![],
         is_pull_request: false,
     }
 }
@@ -397,7 +411,8 @@ fn test_pull_request_summary_deserialize() {
         "base_ref_name": "b", "head_sha": "a", "base_sha": "d",
         "has_conflicts": false, "author": "u", "author_association": "M",
         "review_requests": [], "review_request_users": [], "reviews": [],
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(pr.number, 1);
     assert_eq!(pr.title, "t");
 }
@@ -412,7 +427,8 @@ fn test_pull_request_detail_deserialize() {
         "comment_count": 3, "review_requests": [], "review_request_users": [],
         "has_conflicts": false, "comments": [], "issue_comments": [], "reviews": [],
         "checks": [], "mergeable_state": "", "merged_at": "",
-    })).unwrap();
+    }))
+    .unwrap();
     assert_eq!(pr.number, 1);
     assert_eq!(pr.comment_count, 3);
 }
@@ -424,9 +440,7 @@ fn test_pull_request_detail_deserialize() {
 fn mock_gw(stdout: &str) -> Gateway {
     let s = stdout.to_string();
     Gateway::new(GatewayOptions {
-        gh_run: Some(Arc::new(move |_| Ok(ShellResult {
-            stdout: s.clone(), stderr: String::new(), exit_code: 0,
-        }))),
+        gh_run: Some(Arc::new(move |_| Ok(ShellResult { stdout: s.clone(), stderr: String::new(), exit_code: 0 }))),
         ..Default::default()
     })
 }
@@ -469,9 +483,7 @@ fn test_gw_list_open_pull_requests() {
         "reviewRequests": [], "reviews": []
     }]);
     let g = mock_gw(&json.to_string());
-    let r = g.list_open_pull_requests(ListOpenPullRequestsInput {
-        repo: "o/r".into(), ..Default::default()
-    }).unwrap();
+    let r = g.list_open_pull_requests(ListOpenPullRequestsInput { repo: "o/r".into(), ..Default::default() }).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].number, 1);
 }
@@ -483,9 +495,7 @@ fn test_gw_list_open_issues() {
         "updatedAt": "", "author": "u", "authorAssociation": "", "assignees": [], "labels": []
     }]);
     let g = mock_gw(&json.to_string());
-    let r = g.list_open_issues(ListOpenIssuesInput {
-        repo: "o/r".into(), ..Default::default()
-    }).unwrap();
+    let r = g.list_open_issues(ListOpenIssuesInput { repo: "o/r".into(), ..Default::default() }).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].number, 42);
 }
@@ -493,9 +503,7 @@ fn test_gw_list_open_issues() {
 #[test]
 fn test_gw_get_issue_state() {
     let g = mock_gw(r#"{"state":"OPEN","stateReason":"completed"}"#);
-    let s = g.get_issue_state(ViewIssueInput {
-        repo: "o/r".into(), issue_number: 1, ..Default::default()
-    }).unwrap();
+    let s = g.get_issue_state(ViewIssueInput { repo: "o/r".into(), issue_number: 1, ..Default::default() }).unwrap();
     assert_eq!(s.state, "OPEN");
     assert_eq!(s.state_reason, "completed");
 }
@@ -517,18 +525,26 @@ fn test_gw_get_current_user_login() {
 #[test]
 fn test_gw_get_repository_permission() {
     let g = mock_gw(r#"{"permission":"write"}"#);
-    let p = g.get_repository_permission(RepositoryPermissionInput {
-        repo: "o/r".into(), user: "u".into(), ..Default::default()
-    }).unwrap();
+    let p = g
+        .get_repository_permission(RepositoryPermissionInput {
+            repo: "o/r".into(),
+            user: "u".into(),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(p, "write");
 }
 
 #[test]
 fn test_gw_get_repository_permission_read() {
     let g = mock_gw(r#"{"permission":"read"}"#);
-    let p = g.get_repository_permission(RepositoryPermissionInput {
-        repo: "o/r".into(), user: "v".into(), ..Default::default()
-    }).unwrap();
+    let p = g
+        .get_repository_permission(RepositoryPermissionInput {
+            repo: "o/r".into(),
+            user: "v".into(),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(p, "read");
 }
 
@@ -544,9 +560,8 @@ fn test_gw_view_pull_request() {
         "checks": [], "mergeableState": "", "mergedAt": "",
     });
     let g = mock_gw(&json.to_string());
-    let pr = g.view_pull_request(ViewPullRequestInput {
-        repo: "o/r".into(), pr_number: 5, ..Default::default()
-    }).unwrap();
+    let pr =
+        g.view_pull_request(ViewPullRequestInput { repo: "o/r".into(), pr_number: 5, ..Default::default() }).unwrap();
     assert_eq!(pr.number, 5);
     assert_eq!(pr.title, "TPR");
 }
@@ -554,9 +569,7 @@ fn test_gw_view_pull_request() {
 #[test]
 fn test_gw_list_empty_issues() {
     let g = mock_gw("[]");
-    let r = g.list_open_issues(ListOpenIssuesInput {
-        repo: "o/r".into(), ..Default::default()
-    }).unwrap();
+    let r = g.list_open_issues(ListOpenIssuesInput { repo: "o/r".into(), ..Default::default() }).unwrap();
     assert!(r.is_empty());
 }
 
@@ -568,18 +581,22 @@ fn test_gw_list_pull_request_review_state() {
         "reviews": [{"author":{"login":"u1"},"state":"APPROVED","submittedAt":"2024-01-01T00:00:00Z"}]
     });
     let g = mock_gw(&json.to_string());
-    let s = g.list_pull_request_review_state(PullRequestReviewStateInput {
-        repo: "o/r".into(), pr_number: 1, ..Default::default()
-    }).unwrap();
+    let s = g
+        .list_pull_request_review_state(PullRequestReviewStateInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(s.requested_reviewers, vec!["r1"]);
 }
 
 #[test]
 fn test_gw_get_pull_request_diff() {
     let g = mock_gw("diff --git a/f.rs b/f.rs\n-old\n+new\n");
-    let d = g.get_pull_request_diff(GetPullRequestDiffInput {
-        repo: "o/r".into(), pr_number: 1, ..Default::default()
-    }).unwrap();
+    let d = g
+        .get_pull_request_diff(GetPullRequestDiffInput { repo: "o/r".into(), pr_number: 1, ..Default::default() })
+        .unwrap();
     assert!(d.contains("+new"));
 }
 
@@ -599,9 +616,13 @@ fn test_gw_list_linked_pull_requests() {
         }
     });
     let g = mock_gw(&json.to_string());
-    let r = g.list_linked_pull_requests(LinkedPullRequestsInput {
-        repo: "o/r".into(), issue_number: 1, ..Default::default()
-    }).unwrap();
+    let r = g
+        .list_linked_pull_requests(LinkedPullRequestsInput {
+            repo: "o/r".into(),
+            issue_number: 1,
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].number, 2);
 }
@@ -609,9 +630,9 @@ fn test_gw_list_linked_pull_requests() {
 #[test]
 fn test_gw_get_pull_request_head_sha() {
     let g = mock_gw("abc123");
-    let sha = g.get_pull_request_head_sha(ViewPullRequestInput {
-        repo: "o/r".into(), pr_number: 1, ..Default::default()
-    }).unwrap();
+    let sha = g
+        .get_pull_request_head_sha(ViewPullRequestInput { repo: "o/r".into(), pr_number: 1, ..Default::default() })
+        .unwrap();
     assert_eq!(sha, "abc123");
 }
 
@@ -624,9 +645,13 @@ fn test_gw_list_pull_request_check_runs() {
         "statuses": []
     });
     let g = mock_gw(&json.to_string());
-    let r = g.list_pull_request_check_runs(PullRequestCheckRunsInput {
-        repo: "o/r".into(), r#ref: "main".into(), ..Default::default()
-    }).unwrap();
+    let r = g
+        .list_pull_request_check_runs(PullRequestCheckRunsInput {
+            repo: "o/r".into(),
+            r#ref: "main".into(),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(r.total_count, 1);
 }
 
@@ -634,10 +659,16 @@ fn test_gw_list_pull_request_check_runs() {
 fn test_gw_create_pull_request() {
     // gh pr create outputs a URL like https://github.com/owner/repo/pull/42
     let g = mock_gw("https://github.com/o/r/pull/42");
-    let pr = g.create_pull_request(CreatePullRequestInput {
-        repo: "o/r".into(), title: "New".into(), head_branch: "f".into(),
-        base_branch: "main".into(), body: "X".into(), ..Default::default()
-    }).unwrap();
+    let pr = g
+        .create_pull_request(CreatePullRequestInput {
+            repo: "o/r".into(),
+            title: "New".into(),
+            head_branch: "f".into(),
+            base_branch: "main".into(),
+            body: "X".into(),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(pr.number, 42);
 }
 
@@ -645,8 +676,11 @@ fn test_gw_create_pull_request() {
 fn test_gw_enable_auto_merge() {
     let g = mock_gw("");
     let r = g.enable_auto_merge(EnableAutoMergeInput {
-        repo: "o/r".into(), pr_number: 1, head_sha: "abc".into(),
-        strategy: "SQUASH".into(), ..Default::default()
+        repo: "o/r".into(),
+        pr_number: 1,
+        head_sha: "abc".into(),
+        strategy: "SQUASH".into(),
+        ..Default::default()
     });
     assert!(r.is_ok());
 }
@@ -654,69 +688,93 @@ fn test_gw_enable_auto_merge() {
 #[test]
 fn test_gw_update_pull_request_body() {
     let g = mock_gw(r#"{"number":1}"#);
-    assert!(g.update_pull_request_body(UpdatePullRequestBodyInput {
-        repo: "o/r".into(), pr_number: 1, body: "U".into(), ..Default::default()
-    }).is_ok());
+    assert!(g
+        .update_pull_request_body(UpdatePullRequestBodyInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            body: "U".into(),
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_update_pull_request_title() {
     let g = mock_gw(r#"{"number":1}"#);
-    assert!(g.update_pull_request_title(UpdatePullRequestTitleInput {
-        repo: "o/r".into(), pr_number: 1, title: "N".into(), ..Default::default()
-    }).is_ok());
+    assert!(g
+        .update_pull_request_title(UpdatePullRequestTitleInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            title: "N".into(),
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_close_pull_request() {
     let g = mock_gw("");
-    assert!(g.close_pull_request(ClosePullRequestInput {
-        repo: "o/r".into(), pr_number: 1, ..Default::default()
-    }).is_ok());
+    assert!(g
+        .close_pull_request(ClosePullRequestInput { repo: "o/r".into(), pr_number: 1, ..Default::default() })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_close_issue() {
     let g = mock_gw("");
-    assert!(g.close_issue(CloseIssueInput {
-        repo: "o/r".into(), issue_number: 1, ..Default::default()
-    }).is_ok());
+    assert!(g.close_issue(CloseIssueInput { repo: "o/r".into(), issue_number: 1, ..Default::default() }).is_ok());
 }
 
 #[test]
 fn test_gw_add_issue_labels() {
     let g = mock_gw("[]");
-    assert!(g.add_issue_labels(IssueLabelsInput {
-        repo: "o/r".into(), issue_number: 1, labels: vec!["bug".into()],
-        ..Default::default()
-    }).is_ok());
+    assert!(g
+        .add_issue_labels(IssueLabelsInput {
+            repo: "o/r".into(),
+            issue_number: 1,
+            labels: vec!["bug".into()],
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_remove_issue_labels() {
     let g = mock_gw("");
-    assert!(g.remove_issue_labels(IssueLabelsInput {
-        repo: "o/r".into(), issue_number: 1, labels: vec!["wontfix".into()],
-        ..Default::default()
-    }).is_ok());
+    assert!(g
+        .remove_issue_labels(IssueLabelsInput {
+            repo: "o/r".into(),
+            issue_number: 1,
+            labels: vec!["wontfix".into()],
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_add_issue_assignees() {
     let g = mock_gw("");
-    assert!(g.add_issue_assignees(IssueAssigneesInput {
-        repo: "o/r".into(), issue_number: 1, assignees: vec!["u1".into()],
-        ..Default::default()
-    }).is_ok());
+    assert!(g
+        .add_issue_assignees(IssueAssigneesInput {
+            repo: "o/r".into(),
+            issue_number: 1,
+            assignees: vec!["u1".into()],
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_get_pull_request_head_and_author() {
     // gh pr view --json headRefOid,author outputs author as {"login":"dev",...}
     let g = mock_gw(r#"{"headRefOid":"abc123","author":{"login":"dev"}}"#);
-    let ha = g.get_pull_request_head_and_author(ViewPullRequestInput {
-        repo: "o/r".into(), pr_number: 1, ..Default::default()
-    }).unwrap();
+    let ha = g
+        .get_pull_request_head_and_author(ViewPullRequestInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(ha.head_sha, "abc123");
     assert_eq!(ha.author, "dev");
 }
@@ -724,17 +782,23 @@ fn test_gw_get_pull_request_head_and_author() {
 #[test]
 fn test_gw_add_pull_request_reviewers() {
     let g = mock_gw("");
-    assert!(g.add_pull_request_reviewers(PullRequestReviewersInput {
-        repo: "o/r".into(), pr_number: 1, reviewers: vec!["r1".into()],
-        ..Default::default()
-    }).is_ok());
+    assert!(g
+        .add_pull_request_reviewers(PullRequestReviewersInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            reviewers: vec!["r1".into()],
+            ..Default::default()
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_add_pull_request_comment() {
     let g = mock_gw(r#"{"id":200,"url":"u"}"#);
     let c = g.add_pull_request_comment(PullRequestCommentInput {
-        repo: "o/r".into(), pr_number: 1, body: "LGTM".into(),
+        repo: "o/r".into(),
+        pr_number: 1,
+        body: "LGTM".into(),
         ..Default::default()
     });
     assert!(c.is_ok());
@@ -743,20 +807,32 @@ fn test_gw_add_pull_request_comment() {
 #[test]
 fn test_gw_submit_review() {
     let g = mock_gw(r#"{"id":"r1","state":"APPROVED","body":"ok"}"#);
-    assert!(g.submit_review(SubmitReviewInput {
-        repo: "o/r".into(), pr_number: 1, commit_id: "a".into(),
-        event: "APPROVE".into(), body: "LGTM".into(), cwd: ".".into(),
-        comments: vec![], anchors: None, disclosure: Default::default(),
-    }).is_ok());
+    assert!(g
+        .submit_review(SubmitReviewInput {
+            repo: "o/r".into(),
+            pr_number: 1,
+            commit_id: "a".into(),
+            event: "APPROVE".into(),
+            body: "LGTM".into(),
+            cwd: ".".into(),
+            comments: vec![],
+            anchors: None,
+            disclosure: Default::default(),
+        })
+        .is_ok());
 }
 
 #[test]
 fn test_gw_compare_branches() {
     let g = mock_gw(r#"{"status":"diverged","aheadBy":3,"behindBy":1}"#);
-    let c = g.compare_branches(CompareBranchesInput {
-        repo: "o/r".into(), base_branch: "main".into(), head_branch: "f".into(),
-        ..Default::default()
-    }).unwrap();
+    let c = g
+        .compare_branches(CompareBranchesInput {
+            repo: "o/r".into(),
+            base_branch: "main".into(),
+            head_branch: "f".into(),
+            ..Default::default()
+        })
+        .unwrap();
     assert_eq!(c.status, "diverged");
 }
 
@@ -780,9 +856,8 @@ fn test_gw_list_issue_comments() {
         "url": "https://github.com/o/r/issues/1#issuecomment-100"
     }]);
     let g = mock_gw(&json.to_string());
-    let r = g.list_issue_comments(ViewIssueInput {
-        repo: "o/r".into(), issue_number: 1, ..Default::default()
-    }).unwrap();
+    let r =
+        g.list_issue_comments(ViewIssueInput { repo: "o/r".into(), issue_number: 1, ..Default::default() }).unwrap();
     assert_eq!(r.len(), 1);
     assert_eq!(r[0].id, 100);
 }

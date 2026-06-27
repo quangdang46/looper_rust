@@ -6,10 +6,7 @@ pub fn assert_step_belongs_to_loop_type(loop_type: LoopType, step: &str) -> Resu
     if loop_type.steps().contains(&step) {
         Ok(())
     } else {
-        Err(DomainError::StepNotInLoopType {
-            step: step.to_string(),
-            loop_type,
-        })
+        Err(DomainError::StepNotInLoopType { step: step.to_string(), loop_type })
     }
 }
 

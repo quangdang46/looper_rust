@@ -77,21 +77,13 @@ impl ApiError {
     /// Create a new API error.
     #[must_use]
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
-        Self(code.status_code(), ErrorInfo {
-            code,
-            message: message.into(),
-            details: None,
-        })
+        Self(code.status_code(), ErrorInfo { code, message: message.into(), details: None })
     }
 
     /// Create a new API error with additional details.
     #[must_use]
     pub fn with_details(code: ErrorCode, message: impl Into<String>, details: serde_json::Value) -> Self {
-        Self(code.status_code(), ErrorInfo {
-            code,
-            message: message.into(),
-            details: Some(details),
-        })
+        Self(code.status_code(), ErrorInfo { code, message: message.into(), details: Some(details) })
     }
 
     /// Create a 400 Bad Request error.
@@ -128,11 +120,7 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = self.0;
-        let envelope = crate::envelope::Envelope::<()> {
-            ok: false,
-            data: None,
-            error: Some(self.1),
-        };
+        let envelope = crate::envelope::Envelope::<()> { ok: false, data: None, error: Some(self.1) };
         (status, axum::Json(envelope)).into_response()
     }
 }

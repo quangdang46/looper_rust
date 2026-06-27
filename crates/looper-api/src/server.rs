@@ -32,37 +32,20 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         .route("/api/projects", get(routes::list_projects).post(routes::add_project))
         .route(
             "/api/projects/{name}",
-            get(routes::get_project)
-                .put(routes::update_project)
-                .delete(routes::remove_project),
+            get(routes::get_project).put(routes::update_project).delete(routes::remove_project),
         )
         .route("/api/projects/{name}/sync", post(routes::sync_project))
         // Loops
-        .route(
-            "/api/projects/{name}/loops",
-            get(routes::list_loops).post(routes::create_loop),
-        )
+        .route("/api/projects/{name}/loops", get(routes::list_loops).post(routes::create_loop))
         .route("/api/projects/{name}/loops/{seq}", get(routes::get_loop))
         .route("/api/projects/{name}/loops/{seq}/pause", post(routes::pause_loop))
         .route("/api/projects/{name}/loops/{seq}/resume", post(routes::resume_loop))
         .route("/api/projects/{name}/loops/{seq}/terminate", post(routes::terminate_loop))
         // Runs
-        .route(
-            "/api/projects/{name}/loops/{seq}/runs",
-            get(routes::list_runs).post(routes::start_run),
-        )
-        .route(
-            "/api/projects/{name}/loops/{seq}/runs/{run_id}",
-            get(routes::get_run),
-        )
-        .route(
-            "/api/projects/{name}/loops/{seq}/runs/{run_id}/cancel",
-            post(routes::cancel_run),
-        )
-        .route(
-            "/api/projects/{name}/loops/{seq}/runs/cancel",
-            post(routes::cancel_run),
-        )
+        .route("/api/projects/{name}/loops/{seq}/runs", get(routes::list_runs).post(routes::start_run))
+        .route("/api/projects/{name}/loops/{seq}/runs/{run_id}", get(routes::get_run))
+        .route("/api/projects/{name}/loops/{seq}/runs/{run_id}/cancel", post(routes::cancel_run))
+        .route("/api/projects/{name}/loops/{seq}/runs/cancel", post(routes::cancel_run))
         // Queue
         .route("/api/projects/{name}/queue", get(routes::list_queue))
         .route("/api/projects/{name}/queue/enqueue", post(routes::enqueue))

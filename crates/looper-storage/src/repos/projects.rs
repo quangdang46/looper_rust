@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
-use crate::record::ProjectRecord;
 use crate::helpers::bool_to_int;
+use crate::record::ProjectRecord;
+use rusqlite::Connection;
 
 fn scan_project_row(row: &rusqlite::Row) -> rusqlite::Result<ProjectRecord> {
     Ok(ProjectRecord {
@@ -72,12 +72,9 @@ impl ProjectsRepository {
     }
 
     pub fn archive(&self, id: &str, updated_at: &str) -> Result<bool> {
-        let mut stmt = self.conn.prepare(
-            "UPDATE projects SET archived = 1, updated_at = ?2 WHERE id = ?1 RETURNING id",
-        )?;
-        let mut rows = stmt.query_map(rusqlite::params![id, updated_at], |row| {
-            row.get::<_, String>("id")
-        })?;
+        let mut stmt =
+            self.conn.prepare("UPDATE projects SET archived = 1, updated_at = ?2 WHERE id = ?1 RETURNING id")?;
+        let mut rows = stmt.query_map(rusqlite::params![id, updated_at], |row| row.get::<_, String>("id"))?;
         match rows.next() {
             Some(Ok(_)) => Ok(true),
             Some(Err(e)) => Err(e.into()),

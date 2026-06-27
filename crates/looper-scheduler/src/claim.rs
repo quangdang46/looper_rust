@@ -2,17 +2,13 @@ use std::sync::Arc;
 
 use crate::error::{SchedulerError, SchedulerResult};
 use crate::types::{
-    CapturePullRequestSnapshotInput, Context, FixerScheduler, PlannerProcessInput,
-    PlannerScheduler, ReviewerScheduler, SnapshotScheduler, WorkerScheduler,
+    CapturePullRequestSnapshotInput, Context, FixerScheduler, PlannerProcessInput, PlannerScheduler, ReviewerScheduler,
+    SnapshotScheduler, WorkerScheduler,
 };
 use crate::Scheduler;
 use looper_storage::record::QueueItemRecord;
 
-pub fn claim_and_run(
-    scheduler: &Scheduler,
-    _ctx: &Context,
-    available_slots: usize,
-) -> Vec<QueueItemRecord> {
+pub fn claim_and_run(scheduler: &Scheduler, _ctx: &Context, available_slots: usize) -> Vec<QueueItemRecord> {
     let now_iso = format_javascript_iso_string((scheduler.now)().to_utc());
     let mut queue_items = Vec::with_capacity(available_slots);
     let repos = scheduler.repos();
@@ -53,11 +49,7 @@ fn dispatch_queue_items(scheduler: &Scheduler, items: &[QueueItemRecord]) {
         let processor = match resolve_processor(scheduler, item) {
             Ok(p) => p,
             Err(e) => {
-                tracing::error!(
-                    "failed to resolve processor for item {} (type={}): {e}",
-                    item.id,
-                    item.r#type
-                );
+                tracing::error!("failed to resolve processor for item {} (type={}): {e}", item.id, item.r#type);
                 continue;
             }
         };
@@ -67,11 +59,7 @@ fn dispatch_queue_items(scheduler: &Scheduler, items: &[QueueItemRecord]) {
 
         let f: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
             if let Err(e) = processor.process() {
-                tracing::error!(
-                    "queue item processing failed: type={} id={} error={e}",
-                    item_type,
-                    item_id
-                );
+                tracing::error!("queue item processing failed: type={} id={} error={e}", item_type, item_id);
             }
         });
 
@@ -79,28 +67,23 @@ fn dispatch_queue_items(scheduler: &Scheduler, items: &[QueueItemRecord]) {
     }
 }
 
-fn resolve_processor(
-    scheduler: &Scheduler,
-    item: &QueueItemRecord,
-) -> SchedulerResult<Box<dyn QueueItemProcessor>> {
+fn resolve_processor(scheduler: &Scheduler, item: &QueueItemRecord) -> SchedulerResult<Box<dyn QueueItemProcessor>> {
     match item.r#type.as_str() {
         "planner" => {
-            let p = scheduler.handlers.planner.as_ref().ok_or_else(|| {
-                SchedulerError::HandlerNotConfigured("planner".into())
-            })?;
-            Ok(Box::new(PlannerItemProcessor {
-                handler: Arc::clone(p),
-                item: item.clone(),
-            }))
+            let p = scheduler
+                .handlers
+                .planner
+                .as_ref()
+                .ok_or_else(|| SchedulerError::HandlerNotConfigured("planner".into()))?;
+            Ok(Box::new(PlannerItemProcessor { handler: Arc::clone(p), item: item.clone() }))
         }
         "reviewer" => {
-            let r = scheduler.handlers.reviewer.as_ref().ok_or_else(|| {
-                SchedulerError::HandlerNotConfigured("reviewer".into())
-            })?;
-            Ok(Box::new(ReviewerItemProcessor {
-                handler: Arc::clone(r),
-                item: item.clone(),
-            }))
+            let r = scheduler
+                .handlers
+                .reviewer
+                .as_ref()
+                .ok_or_else(|| SchedulerError::HandlerNotConfigured("reviewer".into()))?;
+            Ok(Box::new(ReviewerItemProcessor { handler: Arc::clone(r), item: item.clone() }))
         }
         "fixer" => {
             let f = scheduler
@@ -108,28 +91,23 @@ fn resolve_processor(
                 .fixer
                 .as_ref()
                 .ok_or_else(|| SchedulerError::HandlerNotConfigured("fixer".into()))?;
-            Ok(Box::new(FixerItemProcessor {
-                handler: Arc::clone(f),
-                item: item.clone(),
-            }))
+            Ok(Box::new(FixerItemProcessor { handler: Arc::clone(f), item: item.clone() }))
         }
         "worker" => {
-            let w = scheduler.handlers.worker.as_ref().ok_or_else(|| {
-                SchedulerError::HandlerNotConfigured("worker".into())
-            })?;
-            Ok(Box::new(WorkerItemProcessor {
-                handler: Arc::clone(w),
-                item: item.clone(),
-            }))
+            let w = scheduler
+                .handlers
+                .worker
+                .as_ref()
+                .ok_or_else(|| SchedulerError::HandlerNotConfigured("worker".into()))?;
+            Ok(Box::new(WorkerItemProcessor { handler: Arc::clone(w), item: item.clone() }))
         }
         "snapshot" => {
-            let s = scheduler.handlers.snapshot.as_ref().ok_or_else(|| {
-                SchedulerError::HandlerNotConfigured("snapshot".into())
-            })?;
-            Ok(Box::new(SnapshotItemProcessor {
-                handler: Arc::clone(s),
-                item: item.clone(),
-            }))
+            let s = scheduler
+                .handlers
+                .snapshot
+                .as_ref()
+                .ok_or_else(|| SchedulerError::HandlerNotConfigured("snapshot".into()))?;
+            Ok(Box::new(SnapshotItemProcessor { handler: Arc::clone(s), item: item.clone() }))
         }
         other => Err(SchedulerError::UnresolvableProcessor(other.to_string())),
     }
@@ -147,9 +125,7 @@ struct PlannerItemProcessor {
 impl QueueItemProcessor for PlannerItemProcessor {
     fn process(&self) -> Result<(), String> {
         let ctx = Context::new();
-        let input = PlannerProcessInput {
-            item: self.item.clone(),
-        };
+        let input = PlannerProcessInput { item: self.item.clone() };
         self.handler.process_claimed_queue_item(&ctx, input);
         Ok(())
     }
@@ -219,9 +195,7 @@ mod tests {
     #[test]
     fn test_format_javascript_iso_string() {
         use chrono::TimeZone;
-        let dt = chrono::Utc
-            .with_ymd_and_hms(2026, 6, 22, 10, 0, 0)
-            .unwrap();
+        let dt = chrono::Utc.with_ymd_and_hms(2026, 6, 22, 10, 0, 0).unwrap();
         let formatted = format_javascript_iso_string(dt);
         assert_eq!(formatted, "2026-06-22T10:00:00.000Z");
     }

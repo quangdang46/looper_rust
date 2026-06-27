@@ -23,17 +23,16 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
-use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
+use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 use looper_github::gateway::Gateway;
 use looper_github::types::{
-    IssueAssigneesInput, ListOpenPullRequestsInput, PullRequestCheckRunsInput,
-    ResolveReviewThreadInput, ViewPullRequestInput,
+    IssueAssigneesInput, ListOpenPullRequestsInput, ResolveReviewThreadInput, ViewPullRequestInput,
 };
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
-    Context, FixerBaseBranchDiscoveryInput, FixerDiscoveryInput, FixerDiscoveryResult,
-    FixerScheduler, ReviewerTargetedDiscoveryInput, SchedulerConfig,
+    Context, FixerBaseBranchDiscoveryInput, FixerDiscoveryInput, FixerDiscoveryResult, FixerScheduler,
+    ReviewerTargetedDiscoveryInput, SchedulerConfig,
 };
 use looper_storage::eventlog;
 use looper_storage::record::{AppendInput, QueueItemRecord, RunRecord};
@@ -64,31 +63,19 @@ impl Fixer {
         agent: Option<Arc<ConfiguredExecutor>>,
         git: Option<Arc<GitGateway>>,
     ) -> Self {
-        Self {
-            config: config.clone(),
-            repos,
-            github,
-            tokio_handle,
-            agent,
-            git,
-        }
+        Self { config: config.clone(), repos, github, tokio_handle, agent, git }
     }
 
     fn execute_pipeline(&self, item: &QueueItemRecord) -> Result<(), String> {
         let ctx = Context::new();
         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
-        let loop_id = item
-            .loop_id
-            .as_deref()
-            .ok_or_else(|| "Fixer queue item has no loop_id".to_string())?;
+        let loop_id = item.loop_id.as_deref().ok_or_else(|| "Fixer queue item has no loop_id".to_string())?;
 
         // Create / resume run -------------------------------------------------
         let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
         let run = match guard.runs.get_latest_by_loop_id(loop_id).map_err(|e| e.to_string())? {
-            Some(run) if run.status == RunStatus::Running.as_str()
-                || run.status == RunStatus::Queued.as_str() =>
-            {
+            Some(run) if run.status == RunStatus::Running.as_str() || run.status == RunStatus::Queued.as_str() => {
                 let mut r = run.clone();
                 r.status = RunStatus::Running.as_str().to_string();
                 r.started_at.clone_from(&now_iso);
@@ -341,7 +328,8 @@ impl Fixer {
                                         if failing {
                                             tracing::warn!(
                                                 "Fixer: PR #{} still has failing checks: {:?}",
-                                                pr_num, names
+                                                pr_num,
+                                                names
                                             );
                                         } else {
                                             tracing::info!("Fixer: PR #{} checks passing", pr_num);
@@ -449,22 +437,18 @@ impl Fixer {
                     // Trigger a new CI run by pushing an empty commit
                     if let Some(ref git) = self.git {
                         let branch_name = format!("fix/{}", &run.loop_id);
-                        let _ = self.tokio_handle.block_on(git.commit(
-                            looper_git::types::CommitInput {
-                                worktree_path: ".".to_string(),
-                                message: "recheck: trigger CI".to_string(),
-                            },
-                        ));
-                        let _ = self.tokio_handle.block_on(git.push(
-                            looper_git::types::PushInput {
-                                worktree_path: ".".to_string(),
-                                remote: "origin".to_string(),
-                                branch: branch_name,
-                                expected_head_sha: None,
-                                protected_branches: vec!["main".to_string(), "master".to_string()],
-                                set_upstream: false,
-                            },
-                        ));
+                        let _ = self.tokio_handle.block_on(git.commit(looper_git::types::CommitInput {
+                            worktree_path: ".".to_string(),
+                            message: "recheck: trigger CI".to_string(),
+                        }));
+                        let _ = self.tokio_handle.block_on(git.push(looper_git::types::PushInput {
+                            worktree_path: ".".to_string(),
+                            remote: "origin".to_string(),
+                            branch: branch_name,
+                            expected_head_sha: None,
+                            protected_branches: vec!["main".to_string(), "master".to_string()],
+                            set_upstream: false,
+                        }));
                         tracing::info!("Fixer: pushed empty commit to trigger CI recheck");
                     }
                 }
@@ -473,11 +457,7 @@ impl Fixer {
 
             // Persist step progress
             let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-            let mut r = guard
-                .runs
-                .get_by_id(&run.id)
-                .map_err(|e| e.to_string())?
-                .ok_or("run not found during step")?;
+            let mut r = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found during step")?;
             r.current_step = Some(step.to_string());
             r.last_completed_step = Some(step.to_string());
             r.last_heartbeat_at = Some(now_iso.clone());
@@ -500,24 +480,18 @@ impl Fixer {
                 protected_branches: vec![],
             });
             let worktree_path = format!("./{}", wt_dir);
-            let _ = self.tokio_handle.block_on(git.cleanup_worktree(
-                CleanupWorktreeInput {
-                    repo_path: ".".to_string(),
-                    worktree_path: worktree_path.clone(),
-                    branch: format!("fix/{}", &run.loop_id),
-                    protected_branches: vec!["main".to_string(), "master".to_string()],
-                },
-            ));
+            let _ = self.tokio_handle.block_on(git.cleanup_worktree(CleanupWorktreeInput {
+                repo_path: ".".to_string(),
+                worktree_path: worktree_path.clone(),
+                branch: format!("fix/{}", &run.loop_id),
+                protected_branches: vec!["main".to_string(), "master".to_string()],
+            }));
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
         // Complete run -------------------------------------------------------
         let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-        let mut final_run = guard
-            .runs
-            .get_by_id(&run.id)
-            .map_err(|e| e.to_string())?
-            .ok_or("run not found")?;
+        let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
         final_run.status = RunStatus::Success.as_str().to_string();
         final_run.ended_at = Some(now_iso);
         guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
@@ -528,11 +502,7 @@ impl Fixer {
 }
 
 impl FixerScheduler for Fixer {
-    fn discover_pull_requests(
-        &self,
-        _ctx: &Context,
-        input: FixerDiscoveryInput,
-    ) -> FixerDiscoveryResult {
+    fn discover_pull_requests(&self, _ctx: &Context, input: FixerDiscoveryInput) -> FixerDiscoveryResult {
         tracing::debug!("Fixer discover_pull_requests — scanning for fixable PRs");
         let guard = match self.repos.0.lock() {
             Ok(g) => g,
@@ -574,11 +544,7 @@ impl FixerScheduler for Fixer {
         FixerDiscoveryResult { queue_items: fixer_items }
     }
 
-    fn discover_pull_request(
-        &self,
-        _ctx: &Context,
-        input: ReviewerTargetedDiscoveryInput,
-    ) -> FixerDiscoveryResult {
+    fn discover_pull_request(&self, _ctx: &Context, input: ReviewerTargetedDiscoveryInput) -> FixerDiscoveryResult {
         tracing::debug!("Fixer discover_pull_request — scanning for PR-specific fixer items");
         let guard = match self.repos.0.lock() {
             Ok(g) => g,
@@ -624,7 +590,9 @@ impl FixerScheduler for Fixer {
         _ctx: &Context,
         input: FixerBaseBranchDiscoveryInput,
     ) -> FixerDiscoveryResult {
-        tracing::debug!("Fixer discover_pull_requests_for_base_branch_update — scanning for fixer items on base branch");
+        tracing::debug!(
+            "Fixer discover_pull_requests_for_base_branch_update — scanning for fixer items on base branch"
+        );
         let guard = match self.repos.0.lock() {
             Ok(g) => g,
             Err(e) => {
@@ -664,11 +632,7 @@ impl FixerScheduler for Fixer {
         FixerDiscoveryResult { queue_items: fixer_items }
     }
 
-    fn process_claimed_queue_item(
-        &self,
-        _ctx: &Context,
-        item: &QueueItemRecord,
-    ) -> Result<(), String> {
+    fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
         self.execute_pipeline(item)
     }
 }

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rusqlite::Connection;
 use crate::error::Result;
 use crate::helpers::{chunk_strings, sql_placeholders, SQLITE_MAX_VARIABLES};
 use crate::record::{RunRecord, StatusCountMap};
+use rusqlite::Connection;
 
 fn scan_run_row(row: &rusqlite::Row) -> rusqlite::Result<RunRecord> {
     Ok(RunRecord {
@@ -76,10 +76,7 @@ impl RunsRepository {
     }
 
     pub fn get_latest_by_loop_id(&self, loop_id: &str) -> Result<Option<RunRecord>> {
-        let sql = format!(
-            "SELECT {} FROM runs WHERE loop_id = ?1 ORDER BY created_at DESC LIMIT 1",
-            RUN_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM runs WHERE loop_id = ?1 ORDER BY created_at DESC LIMIT 1", RUN_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let mut rows = stmt.query_map(rusqlite::params![loop_id], scan_run_row)?;
         match rows.next() {
@@ -106,10 +103,7 @@ impl RunsRepository {
                 inside,
             );
             let mut stmt = self.conn.prepare(&sql)?;
-            let rows = stmt.query_map(
-                rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())),
-                scan_run_row,
-            )?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter().map(|s| s.as_str())), scan_run_row)?;
             for row in rows {
                 results.push(row?);
             }
@@ -152,9 +146,8 @@ impl RunsRepository {
     }
 
     pub fn has_running_by_loop_id(&self, loop_id: &str) -> Result<bool> {
-        let mut stmt = self.conn.prepare(
-            "SELECT EXISTS(SELECT 1 FROM runs WHERE loop_id = ?1 AND status = 'running')",
-        )?;
+        let mut stmt =
+            self.conn.prepare("SELECT EXISTS(SELECT 1 FROM runs WHERE loop_id = ?1 AND status = 'running')")?;
         let result: bool = stmt.query_row(rusqlite::params![loop_id], |row| row.get(0))?;
         Ok(result)
     }
@@ -171,9 +164,7 @@ impl RunsRepository {
     }
 
     pub fn count_by_status(&self) -> Result<StatusCountMap> {
-        let mut stmt = self.conn.prepare(
-            "SELECT status, COUNT(*) as cnt FROM runs GROUP BY status",
-        )?;
+        let mut stmt = self.conn.prepare("SELECT status, COUNT(*) as cnt FROM runs GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             let status: String = row.get("status")?;
             let cnt: i64 = row.get("cnt")?;
@@ -188,10 +179,7 @@ impl RunsRepository {
     }
 
     pub fn list_since(&self, since_iso: &str) -> Result<Vec<RunRecord>> {
-        let sql = format!(
-            "SELECT {} FROM runs WHERE created_at >= ?1 ORDER BY created_at DESC",
-            RUN_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM runs WHERE created_at >= ?1 ORDER BY created_at DESC", RUN_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![since_iso], scan_run_row)?;
         let mut records = Vec::new();
@@ -202,10 +190,7 @@ impl RunsRepository {
     }
 
     pub fn list_by_status(&self, status: &str) -> Result<Vec<RunRecord>> {
-        let sql = format!(
-            "SELECT {} FROM runs WHERE status = ?1 ORDER BY created_at DESC",
-            RUN_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM runs WHERE status = ?1 ORDER BY created_at DESC", RUN_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![status], scan_run_row)?;
         let mut records = Vec::new();
@@ -216,10 +201,7 @@ impl RunsRepository {
     }
 
     pub fn list_by_loop(&self, loop_id: &str) -> Result<Vec<RunRecord>> {
-        let sql = format!(
-            "SELECT {} FROM runs WHERE loop_id = ?1 ORDER BY created_at DESC",
-            RUN_COLUMNS
-        );
+        let sql = format!("SELECT {} FROM runs WHERE loop_id = ?1 ORDER BY created_at DESC", RUN_COLUMNS);
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![loop_id], scan_run_row)?;
         let mut records = Vec::new();

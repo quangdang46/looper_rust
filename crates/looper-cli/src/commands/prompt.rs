@@ -1,7 +1,7 @@
-use clap::Subcommand;
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
 use crate::output;
+use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum PromptCommand {

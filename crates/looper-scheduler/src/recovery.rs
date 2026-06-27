@@ -8,16 +8,9 @@ use looper_storage::record::{AgentExecutionRecord, RunRecord};
 use looper_storage::Repositories;
 
 /// Run the full recovery pipeline (5 phases).
-pub fn run_recovery(
-    repos: &Repositories,
-    now: DateTime<Utc>,
-    ctx: &Context,
-) -> RecoverySummary {
+pub fn run_recovery(repos: &Repositories, now: DateTime<Utc>, ctx: &Context) -> RecoverySummary {
     tracing::info!("recovery pipeline started");
-    let mut summary = RecoverySummary {
-        started_at: Some(now),
-        ..Default::default()
-    };
+    let mut summary = RecoverySummary { started_at: Some(now), ..Default::default() };
 
     let (cleaned, uncertain) = phase_orphan_cleanup(repos, ctx);
     summary.orphan_cleaned = cleaned;
@@ -82,10 +75,7 @@ fn phase_orphan_cleanup(repos: &Repositories, ctx: &Context) -> (u64, u64) {
             if pid <= 0 {
                 continue;
             }
-            match verify_process_identity(
-                pid as u32,
-                &exec.command_json.clone().unwrap_or_default(),
-            ) {
+            match verify_process_identity(pid as u32, &exec.command_json.clone().unwrap_or_default()) {
                 Ok((true, true)) => {
                     let _ = kill_process(pid as u32);
                     cleaned += 1;
@@ -132,11 +122,7 @@ pub fn reconcile_stale_runs(
     mode: StaleRunReconcileMode,
     ctx: &Context,
 ) -> SchedulerResult<StaleRunReconcileSummary> {
-    let mut summary = StaleRunReconcileSummary {
-        mode,
-        started_at: Some(now),
-        ..Default::default()
-    };
+    let mut summary = StaleRunReconcileSummary { mode, started_at: Some(now), ..Default::default() };
 
     let running_runs = repos.runs.list_by_status("running")?;
     let active_executions = repos.agent_executions.list_active()?;
@@ -174,9 +160,7 @@ pub fn reconcile_stale_runs(
 }
 
 fn repair_queue_items_for_run(repos: &Repositories, loop_id: &str, now_iso: &str) -> SchedulerResult<()> {
-    repos
-        .queue
-        .cancel_by_loop(loop_id, now_iso, Some("recovery interrupted"))?;
+    repos.queue.cancel_by_loop(loop_id, now_iso, Some("recovery interrupted"))?;
     repos.queue.requeue_latest_failed_by_loop(loop_id, now_iso)?;
     Ok(())
 }
@@ -193,19 +177,12 @@ fn evaluate_stale_run_candidate(
     mode: &StaleRunReconcileMode,
 ) -> SchedulerResult<StaleRunDecision> {
     if *mode == StaleRunReconcileMode::Startup {
-        let has_active_exec = active_executions
-            .iter()
-            .any(|e| e.run_id.as_deref() == Some(&run.id) && e.status == "running");
+        let has_active_exec =
+            active_executions.iter().any(|e| e.run_id.as_deref() == Some(&run.id) && e.status == "running");
         if !has_active_exec {
-            return Ok(StaleRunDecision {
-                candidate: true,
-                uncertain: true,
-            });
+            return Ok(StaleRunDecision { candidate: true, uncertain: true });
         }
-        return Ok(StaleRunDecision {
-            candidate: true,
-            uncertain: false,
-        });
+        return Ok(StaleRunDecision { candidate: true, uncertain: false });
     }
 
     let heartbeat_stale_threshold = chrono::Duration::minutes(30);
@@ -226,10 +203,7 @@ fn evaluate_stale_run_candidate(
         },
     };
 
-    Ok(StaleRunDecision {
-        candidate: heartbeat_age >= heartbeat_stale_threshold,
-        uncertain: false,
-    })
+    Ok(StaleRunDecision { candidate: heartbeat_age >= heartbeat_stale_threshold, uncertain: false })
 }
 
 #[allow(clippy::disallowed_methods)]
@@ -259,10 +233,7 @@ pub fn verify_process_identity(pid: u32, _expected_command: &str) -> Result<(boo
 
 #[allow(clippy::disallowed_methods)]
 fn kill_process(pid: u32) -> Result<(), String> {
-    let status = Command::new("kill")
-        .arg(pid.to_string())
-        .status()
-        .map_err(|e| format!("failed to run kill: {e}"))?;
+    let status = Command::new("kill").arg(pid.to_string()).status().map_err(|e| format!("failed to run kill: {e}"))?;
 
     if status.success() {
         std::thread::sleep(std::time::Duration::from_secs(5));

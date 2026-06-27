@@ -13,26 +13,25 @@
 
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
 use looper_config::types::DisclosureConfig;
-use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
+use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 
+use crate::reviewer_criteria;
+use crate::reviewer_criteria::{DefaultVerifier, DiffFile, PRDiff};
+use crate::types::{reviewer_steps, spec_labels, SpecPhase};
 use looper_github::types::{
-    CapturePullRequestSnapshotInput, EnableAutoMergeInput, GetPullRequestDiffInput,
-    IssueAssigneesInput, IssueLabelsInput, ListOpenPullRequestsInput, PullRequestCommentInput,
+    GetPullRequestDiffInput, IssueAssigneesInput, IssueCommentInput, IssueLabelsInput, ListOpenPullRequestsInput,
     ReviewComment, SubmitReviewInput, ViewPullRequestInput,
 };
-use crate::reviewer_criteria;
-use crate::reviewer_criteria::{AggregateDisposition, DefaultVerifier, DiffFile, PRDiff, VerificationResult};
-use crate::types::{reviewer_steps, spec_labels, SpecPhase};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
-    Context, ReviewerDiscoveryInput, ReviewerDiscoveryResult, ReviewerScheduler,
-    ReviewerTargetedDiscoveryInput, SchedulerConfig,
+    Context, ReviewerDiscoveryInput, ReviewerDiscoveryResult, ReviewerScheduler, ReviewerTargetedDiscoveryInput,
+    SchedulerConfig,
 };
 use looper_storage::eventlog;
 use looper_storage::record::{
@@ -63,14 +62,7 @@ impl Reviewer {
         agent: Option<Arc<ConfiguredExecutor>>,
         git: Option<Arc<GitGateway>>,
     ) -> Self {
-        Self {
-            config: config.clone(),
-            repos,
-            github,
-            tokio_handle,
-            agent,
-            git,
-        }
+        Self { config: config.clone(), repos, github, tokio_handle, agent, git }
     }
 
     /// Shared pipeline logic used by both single-PR and bulk discovery paths.
@@ -78,17 +70,12 @@ impl Reviewer {
         let ctx = Context::new();
         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
-        let loop_id = item
-            .loop_id
-            .as_deref()
-            .ok_or_else(|| "Reviewer queue item has no loop_id".to_string())?;
+        let loop_id = item.loop_id.as_deref().ok_or_else(|| "Reviewer queue item has no loop_id".to_string())?;
 
         // Create / resume run -------------------------------------------------
         let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
         let run = match guard.runs.get_latest_by_loop_id(loop_id).map_err(|e| e.to_string())? {
-            Some(run) if run.status == RunStatus::Running.as_str()
-                || run.status == RunStatus::Queued.as_str() =>
-            {
+            Some(run) if run.status == RunStatus::Running.as_str() || run.status == RunStatus::Queued.as_str() => {
                 let mut r = run.clone();
                 r.status = RunStatus::Running.as_str().to_string();
                 r.started_at.clone_from(&now_iso);
@@ -203,7 +190,10 @@ impl Reviewer {
                                                 tracing::info!("Reviewer: PR #{} is in spec phase, proceeding", pr_num);
                                             }
                                             SpecPhase::SpecReady => {
-                                                tracing::info!("Reviewer: PR #{} spec already approved, skipping", pr_num);
+                                                tracing::info!(
+                                                    "Reviewer: PR #{} spec already approved, skipping",
+                                                    pr_num
+                                                );
                                                 continue;
                                             }
                                             SpecPhase::NeedsHuman => {
@@ -278,11 +268,13 @@ impl Reviewer {
                                     cwd: ".".to_string(),
                                 }) {
                                     Ok(pr) => {
-                                        let diff = gw.get_pull_request_diff(GetPullRequestDiffInput {
-                                            repo: repo_path.clone(),
-                                            pr_number: pr_num,
-                                            cwd: ".".to_string(),
-                                        }).unwrap_or_default();
+                                        let diff = gw
+                                            .get_pull_request_diff(GetPullRequestDiffInput {
+                                                repo: repo_path.clone(),
+                                                pr_number: pr_num,
+                                                cwd: ".".to_string(),
+                                            })
+                                            .unwrap_or_default();
                                         if let Ok(guard) = self.repos.0.lock() {
                                             let snapshot = PullRequestSnapshotRecord {
                                                 id: Uuid::new_v4().to_string(),
@@ -347,7 +339,9 @@ impl Reviewer {
                             protected_branches: vec!["main".to_string(), "master".to_string()],
                         };
                         match self.tokio_handle.block_on(git.create_worktree(input)) {
-                            Ok(_) => tracing::info!("Worktree created for project {}", project_id.as_deref().unwrap_or("?")),
+                            Ok(_) => {
+                                tracing::info!("Worktree created for project {}", project_id.as_deref().unwrap_or("?"))
+                            }
                             Err(e) => tracing::warn!("Worktree creation failed: {}", e),
                         }
                     }
@@ -371,15 +365,19 @@ impl Reviewer {
 
                     // Check if the diff has changed since the last review round.
                     // If it's the same head_sha as the latest snapshot, skip re-review.
-                    let mut diff_changed = true;
+                    let mut _diff_changed = true;
                     if let Some(ref repo_path) = item.repo {
                         if let Some(pr_num) = item.pr_number {
                             if let Ok(guard) = self.repos.0.lock() {
-                                if let Some(latest) = guard.pull_request_snapshots.get_latest_by_project(
-                                    &item.project_id.clone().unwrap_or_default(),
-                                    repo_path,
-                                    pr_num,
-                                ).unwrap_or(None) {
+                                if let Some(latest) = guard
+                                    .pull_request_snapshots
+                                    .get_latest_by_project(
+                                        &item.project_id.clone().unwrap_or_default(),
+                                        repo_path,
+                                        pr_num,
+                                    )
+                                    .unwrap_or(None)
+                                {
                                     // If there are at least 2 snapshots and the newest head_sha matches
                                     // the previous one, the diff hasn't changed.
                                     if let Some(ref gw) = self.github {
@@ -389,7 +387,7 @@ impl Reviewer {
                                             cwd: ".".to_string(),
                                         }) {
                                             if latest.head_sha == pr.head_sha {
-                                                diff_changed = false;
+                                                _diff_changed = false;
                                                 tracing::info!("Reviewer: PR #{} diff unchanged (head_sha={}), re-using previous review", pr_num, pr.head_sha);
                                             }
                                         }
@@ -405,8 +403,8 @@ impl Reviewer {
                         } else {
                             format!("/tmp/e2e-{}", item.project_id.as_deref().unwrap_or("looper"))
                         };
-                        let worktree_dir = looper_git::build_worktree_directory_name(
-                            &looper_git::CreateWorktreeInput {
+                        let worktree_dir =
+                            looper_git::build_worktree_directory_name(&looper_git::CreateWorktreeInput {
                                 project_id: item.project_id.clone().unwrap_or_default(),
                                 repo_path: String::new(),
                                 worktree_root: String::new(),
@@ -416,8 +414,7 @@ impl Reviewer {
                                 pr_number: None,
                                 checkout_mode: CheckoutMode::Branch,
                                 protected_branches: vec![],
-                            },
-                        );
+                            });
                         let worktree_abs_path = format!("{}/.looper/worktrees/{}", effective_path, worktree_dir);
                         let input = looper_agent::executor::StartInput {
                             loop_id: run.loop_id.clone(),
@@ -434,8 +431,34 @@ impl Reviewer {
                         match self.tokio_handle.block_on(agent.start(input)) {
                             Ok(exec) => {
                                 tracing::info!("Agent review started for run {}", run.id);
-                                match self.tokio_handle.block_on(exec.wait()) {
-                                    Ok(result) => tracing::info!("Agent review completed for run {}: status={}", run.id, result.status),
+                                let agent_result = self.tokio_handle.block_on(exec.wait());
+                                match &agent_result {
+                                    Ok(result) => {
+                                        tracing::info!(
+                                            "Agent review completed for run {}: status={}",
+                                            run.id,
+                                            result.status
+                                        );
+                                        // Store agent stdout for inline comment parsing in PUBLISH step
+                                        if let Ok(guard) = self.repos.0.lock() {
+                                            let mut r =
+                                                guard.runs.get_by_id(&run.id).unwrap_or(None).unwrap_or(run.clone());
+                                            if let Some(ref existing) = r.checkpoint_json {
+                                                if let Ok(mut cp) = serde_json::from_str::<serde_json::Value>(existing)
+                                                {
+                                                    cp["agent_stdout"] =
+                                                        serde_json::Value::String(result.stdout.clone());
+                                                    r.checkpoint_json = Some(cp.to_string());
+                                                    let _ = guard.runs.upsert(&r);
+                                                }
+                                            } else {
+                                                let cp = serde_json::json!({"agent_stdout": result.stdout, "agent_summary": result.summary});
+                                                r.checkpoint_json = Some(cp.to_string());
+                                                let _ = guard.runs.upsert(&r);
+                                            }
+                                            drop(guard);
+                                        }
+                                    }
                                     Err(e) => tracing::warn!("Agent review wait failed for run {}: {}", run.id, e),
                                 }
                             }
@@ -455,13 +478,19 @@ impl Reviewer {
                                     // Extract acceptance criteria from PR body
                                     let criteria = reviewer_criteria::extract(&pr.body);
                                     if !criteria.is_empty() {
-                                        tracing::info!("Reviewer: extracted {} acceptance criteria from PR #{}", criteria.len(), pr_num);
+                                        tracing::info!(
+                                            "Reviewer: extracted {} acceptance criteria from PR #{}",
+                                            criteria.len(),
+                                            pr_num
+                                        );
                                         // Get the PR diff and convert to PRDiff
-                                        let diff = gw.get_pull_request_diff(GetPullRequestDiffInput {
-                                            repo: repo_path.clone(),
-                                            pr_number: pr_num,
-                                            cwd: ".".to_string(),
-                                        }).unwrap_or_default();
+                                        let diff = gw
+                                            .get_pull_request_diff(GetPullRequestDiffInput {
+                                                repo: repo_path.clone(),
+                                                pr_number: pr_num,
+                                                cwd: ".".to_string(),
+                                            })
+                                            .unwrap_or_default();
                                         let pr_diff = PRDiff {
                                             files: vec![DiffFile {
                                                 path: "full_diff".to_string(),
@@ -472,23 +501,42 @@ impl Reviewer {
                                         let verifier = DefaultVerifier::new();
                                         match reviewer_criteria::verify(&criteria, &pr_diff, &verifier) {
                                             Ok(result) => {
-                                                let pass_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Pass).count();
-                                                let fail_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Fail).count();
-                                                let unverifiable_count = result.criteria.iter().filter(|c| c.verdict == reviewer_criteria::Verdict::Unverifiable).count();
+                                                let pass_count = result
+                                                    .criteria
+                                                    .iter()
+                                                    .filter(|c| c.verdict == reviewer_criteria::Verdict::Pass)
+                                                    .count();
+                                                let fail_count = result
+                                                    .criteria
+                                                    .iter()
+                                                    .filter(|c| c.verdict == reviewer_criteria::Verdict::Fail)
+                                                    .count();
+                                                let unverifiable_count = result
+                                                    .criteria
+                                                    .iter()
+                                                    .filter(|c| c.verdict == reviewer_criteria::Verdict::Unverifiable)
+                                                    .count();
                                                 tracing::info!(
                                                     "Reviewer: criteria verification — pass={}, fail={}, unverifiable={}",
                                                     pass_count, fail_count, unverifiable_count
                                                 );
                                                 // Store verification result as checkpoint so the PUBLISH step can use it
                                                 if let Ok(guard) = self.repos.0.lock() {
-                                                    let mut r = guard.runs.get_by_id(&run.id).unwrap_or(None).unwrap_or(run.clone());
-                                                    r.checkpoint_json = Some(serde_json::json!({
-                                                        "criteria_disposition": format!("{:?}", result.disposition),
-                                                        "criteria_pass": pass_count,
-                                                        "criteria_fail": fail_count,
-                                                        "criteria_unverifiable": unverifiable_count,
-                                                        "criteria_total": result.criteria.len(),
-                                                    }).to_string());
+                                                    let mut r = guard
+                                                        .runs
+                                                        .get_by_id(&run.id)
+                                                        .unwrap_or(None)
+                                                        .unwrap_or(run.clone());
+                                                    r.checkpoint_json = Some(
+                                                        serde_json::json!({
+                                                            "criteria_disposition": format!("{:?}", result.disposition),
+                                                            "criteria_pass": pass_count,
+                                                            "criteria_fail": fail_count,
+                                                            "criteria_unverifiable": unverifiable_count,
+                                                            "criteria_total": result.criteria.len(),
+                                                        })
+                                                        .to_string(),
+                                                    );
                                                     let _ = guard.runs.upsert(&r);
                                                     drop(guard);
                                                 }
@@ -548,12 +596,11 @@ impl Reviewer {
                                 // Collect criteria verification result from checkpoint
                                 let criteria_info = {
                                     let guard = self.repos.0.lock().ok();
-                                    guard.as_ref().and_then(|g| {
-                                        g.runs.get_by_id(&run.id).ok().flatten()
-                                    }).and_then(|r| r.checkpoint_json)
-                                        .and_then(|json| {
-                                            serde_json::from_str::<serde_json::Value>(&json).ok()
-                                        })
+                                    guard
+                                        .as_ref()
+                                        .and_then(|g| g.runs.get_by_id(&run.id).ok().flatten())
+                                        .and_then(|r| r.checkpoint_json)
+                                        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
                                 };
 
                                 // Build review body including criteria verification results
@@ -564,7 +611,8 @@ impl Reviewer {
                                         if total > 0 {
                                             let pass = info.get("criteria_pass").and_then(|v| v.as_u64()).unwrap_or(0);
                                             let fail = info.get("criteria_fail").and_then(|v| v.as_u64()).unwrap_or(0);
-                                            let unver = info.get("criteria_unverifiable").and_then(|v| v.as_u64()).unwrap_or(0);
+                                            let unver =
+                                                info.get("criteria_unverifiable").and_then(|v| v.as_u64()).unwrap_or(0);
                                             review_body.push_str(&format!(
                                                 "\n### Acceptance Criteria Check\n- Pass: {}\n- Fail: {}\n- Unverifiable: {}\n",
                                                 pass, fail, unver
@@ -578,23 +626,45 @@ impl Reviewer {
 
                                 // Submit a formal PR review (not just labels)
                                 let event = if has_issues { "COMMENT" } else { "APPROVE" };
-                                let pr_head_sha = gw.view_pull_request(ViewPullRequestInput {
-                                    repo: repo_path.clone(),
-                                    pr_number: pr_num,
-                                    cwd: ".".to_string(),
-                                }).ok().map(|pr| pr.head_sha).unwrap_or_default();
+                                let pr_head_sha = gw
+                                    .view_pull_request(ViewPullRequestInput {
+                                        repo: repo_path.clone(),
+                                        pr_number: pr_num,
+                                        cwd: ".".to_string(),
+                                    })
+                                    .ok()
+                                    .map(|pr| pr.head_sha)
+                                    .unwrap_or_default();
+                                // Parse inline review comments from agent stdout
+                                let inline_comments = extract_inline_comments_from_checkpoint(item, &self.repos);
                                 let _ = gw.submit_review(SubmitReviewInput {
                                     repo: repo_path.clone(),
                                     pr_number: pr_num,
                                     event: event.to_string(),
-                                    body: review_body,
+                                    body: review_body.clone(),
                                     commit_id: pr_head_sha,
-                                    comments: vec![],
+                                    comments: inline_comments,
                                     anchors: None,
                                     disclosure: DisclosureConfig::default(),
                                     cwd: ".".to_string(),
                                 });
                                 tracing::info!("Reviewer: submitted PR review ({}) for PR #{}", event, pr_num);
+
+                                // Post review summary as PR comment for easy checking
+                                if !review_body.is_empty() {
+                                    let _ = gw.create_issue_comment(IssueCommentInput {
+                                        repo: repo_path.clone(),
+                                        issue_number: pr_num,
+                                        body: format!(
+                                            "## 🔍 Review Result ({})
+
+{}",
+                                            event, review_body
+                                        ),
+                                        cwd: ".".to_string(),
+                                    });
+                                    tracing::info!("Reviewer: posted review comment to PR #{}", pr_num);
+                                }
 
                                 // Add review label
                                 let _ = gw.add_issue_labels(IssueLabelsInput {
@@ -612,31 +682,32 @@ impl Reviewer {
                                 }) {
                                     let has_spec_reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
                                     if has_spec_reviewing {
-                                        let target = if has_issues {
-                                            spec_labels::NEEDS_HUMAN
-                                        } else {
-                                            spec_labels::SPEC_READY
-                                        };
+                                        let target =
+                                            if has_issues { spec_labels::NEEDS_HUMAN } else { spec_labels::SPEC_READY };
                                         let _ = gw.add_issue_labels(IssueLabelsInput {
                                             repo: repo_path.clone(),
                                             issue_number: pr_num,
                                             labels: vec![target.to_string()],
                                             cwd: ".".to_string(),
                                         });
+                                        // Mark PR ready for review since spec has been reviewed
+                                        if target == spec_labels::SPEC_READY {
+                                            let _ = gw.mark_pr_ready(
+                                                looper_github::types::MarkPullRequestReadyForReviewInput {
+                                                    repo: repo_path.clone(),
+                                                    pr_number: pr_num,
+                                                    cwd: ".".to_string(),
+                                                },
+                                            );
+                                        }
                                         tracing::info!("Reviewer: PR #{} spec transitioned to {}", pr_num, target);
                                     } else {
                                         // Not a spec PR — code implementation PR.
-                                        // Enable auto-merge now that approval is posted.
-                                        if !has_issues {
-                                            let _ = gw.enable_auto_merge(EnableAutoMergeInput {
-                                                repo: repo_path.clone(),
-                                                pr_number: pr_num,
-                                                strategy: "squash".to_string(),
-                                                head_sha: pr.head_sha.clone(),
-                                                cwd: ".".to_string(),
-                                            });
-                                            tracing::info!("Reviewer: enabled auto-merge for PR #{}", pr_num);
-                                        }
+                                        // PR is ready for human review — no auto-merge.
+                                        tracing::info!(
+                                            "Reviewer: PR #{} approved — ready for human review and manual merge",
+                                            pr_num
+                                        );
                                     }
                                 }
                             }
@@ -648,11 +719,7 @@ impl Reviewer {
 
             // Persist step progress
             let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-            let mut r = guard
-                .runs
-                .get_by_id(&run.id)
-                .map_err(|e| e.to_string())?
-                .ok_or("run not found during step")?;
+            let mut r = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found during step")?;
             r.current_step = Some(step.to_string());
             r.last_completed_step = Some(step.to_string());
             r.last_heartbeat_at = Some(now_iso.clone());
@@ -675,24 +742,18 @@ impl Reviewer {
                 protected_branches: vec![],
             });
             let worktree_path = format!("./{}", wt_dir);
-            let _ = self.tokio_handle.block_on(git.cleanup_worktree(
-                CleanupWorktreeInput {
-                    repo_path: ".".to_string(),
-                    worktree_path: worktree_path.clone(),
-                    branch: format!("review/{}", &run.loop_id),
-                    protected_branches: vec!["main".to_string(), "master".to_string()],
-                },
-            ));
+            let _ = self.tokio_handle.block_on(git.cleanup_worktree(CleanupWorktreeInput {
+                repo_path: ".".to_string(),
+                worktree_path: worktree_path.clone(),
+                branch: format!("review/{}", &run.loop_id),
+                protected_branches: vec!["main".to_string(), "master".to_string()],
+            }));
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
         // Complete run -------------------------------------------------------
         let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-        let mut final_run = guard
-            .runs
-            .get_by_id(&run.id)
-            .map_err(|e| e.to_string())?
-            .ok_or("run not found")?;
+        let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
         final_run.status = RunStatus::Success.as_str().to_string();
         final_run.ended_at = Some(now_iso);
         guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
@@ -703,11 +764,7 @@ impl Reviewer {
 }
 
 impl ReviewerScheduler for Reviewer {
-    fn discover_pull_requests(
-        &self,
-        _ctx: &Context,
-        input: ReviewerDiscoveryInput,
-    ) -> ReviewerDiscoveryResult {
+    fn discover_pull_requests(&self, _ctx: &Context, input: ReviewerDiscoveryInput) -> ReviewerDiscoveryResult {
         tracing::debug!("Reviewer discover_pull_requests — scanning for reviewable PRs via GitHub");
 
         if let Some(ref github) = self.github {
@@ -729,7 +786,7 @@ impl ReviewerScheduler for Reviewer {
                         let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
                         if let Ok(guard) = self.repos.0.lock() {
                             for (i, pr) in prs.iter().enumerate() {
-                                tracing::debug!("Reviewer processing PR #{}/50 (number={})", i+1, pr.number);
+                                tracing::debug!("Reviewer processing PR #{}/50 (number={})", i + 1, pr.number);
                                 let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
                                 // Create a loop record first (FK constraint on queue_items.loop_id)
                                 let (loop_id, loop_rec) = {
@@ -784,13 +841,16 @@ impl ReviewerScheduler for Reviewer {
                                     started_at: None,
                                     finished_at: None,
                                     lock_key: None,
-                                    payload_json: Some(serde_json::json!({
-                                        "title": pr.title,
-                                        "url": pr.url,
-                                        "author": pr.author,
-                                        "head_ref": pr.head_ref_name,
-                                        "base_ref": pr.base_ref_name,
-                                    }).to_string()),
+                                    payload_json: Some(
+                                        serde_json::json!({
+                                            "title": pr.title,
+                                            "url": pr.url,
+                                            "author": pr.author,
+                                            "head_ref": pr.head_ref_name,
+                                            "base_ref": pr.base_ref_name,
+                                        })
+                                        .to_string(),
+                                    ),
                                     last_error: None,
                                     last_error_kind: None,
                                     created_at: now_iso.clone(),
@@ -799,15 +859,20 @@ impl ReviewerScheduler for Reviewer {
                                 match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
                                     Ok((item, is_new)) => {
                                         discovered_items.push(item);
-                                        tracing::info!("Reviewer enqueue PR #{}: is_new={} (total now={})", pr.number, is_new, discovered_items.len());
+                                        tracing::info!(
+                                            "Reviewer enqueue PR #{}: is_new={} (total now={})",
+                                            pr.number,
+                                            is_new,
+                                            discovered_items.len()
+                                        );
                                     }
-                                    Err(e) => tracing::warn!("Failed to enqueue reviewer item for PR #{}: {}", pr.number, e),
+                                    Err(e) => {
+                                        tracing::warn!("Failed to enqueue reviewer item for PR #{}: {}", pr.number, e)
+                                    }
                                 }
                             }
                             drop(guard);
-                            return ReviewerDiscoveryResult {
-                                queue_items: discovered_items,
-                            };
+                            return ReviewerDiscoveryResult { queue_items: discovered_items };
                         }
                     }
                     Err(e) => tracing::warn!("GitHub discovery failed for {}: {}", input.repo, e),
@@ -818,11 +883,7 @@ impl ReviewerScheduler for Reviewer {
         ReviewerDiscoveryResult::default()
     }
 
-    fn discover_pull_request(
-        &self,
-        _ctx: &Context,
-        input: ReviewerTargetedDiscoveryInput,
-    ) -> ReviewerDiscoveryResult {
+    fn discover_pull_request(&self, _ctx: &Context, input: ReviewerTargetedDiscoveryInput) -> ReviewerDiscoveryResult {
         tracing::debug!("Reviewer discover_pull_request — scanning for PR-specific reviewer items");
         let guard = match self.repos.0.lock() {
             Ok(g) => g,
@@ -838,10 +899,7 @@ impl ReviewerScheduler for Reviewer {
                 Vec::new()
             }
         };
-        let reviewer_items: Vec<_> = queued
-            .into_iter()
-            .filter(|item| item.r#type == "reviewer")
-            .collect();
+        let reviewer_items: Vec<_> = queued.into_iter().filter(|item| item.r#type == "reviewer").collect();
         drop(guard);
 
         // GitHub-powered PR discovery
@@ -858,16 +916,58 @@ impl ReviewerScheduler for Reviewer {
             }
         }
 
-        ReviewerDiscoveryResult {
-            queue_items: reviewer_items,
-        }
+        ReviewerDiscoveryResult { queue_items: reviewer_items }
     }
 
-    fn process_claimed_queue_item(
-        &self,
-        _ctx: &Context,
-        item: &QueueItemRecord,
-    ) -> Result<(), String> {
+    fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
         self.execute_pipeline(item)
     }
+}
+
+/// Parse inline review comments from the agent's stdout stored in the run checkpoint.
+fn extract_inline_comments_from_checkpoint(item: &QueueItemRecord, repos: &Arc<SendRepos>) -> Vec<ReviewComment> {
+    let agent_stdout = repos
+        .0
+        .lock()
+        .ok()
+        .and_then(|g| {
+            let loop_id = item.loop_id.as_deref()?;
+            g.runs.get_latest_by_loop_id(loop_id).ok().flatten()
+        })
+        .and_then(|r| {
+            let cp: serde_json::Value = serde_json::from_str(&r.checkpoint_json?).ok()?;
+            cp.get("agent_stdout")?.as_str().map(|s| s.to_string())
+        });
+
+    let Some(ref stdout) = agent_stdout else { return vec![] };
+
+    let mut comments = Vec::new();
+    let re = regex::Regex::new(
+        r"(?s)```review-comment\s*
+path:\s*([^
+]+)
+line:\s*(\d+)
+body:\s*(.*?)```",
+    )
+    .unwrap();
+    for cap in re.captures_iter(stdout) {
+        let path = cap.get(1).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let line: i64 = cap.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+        let body = cap.get(3).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        if !path.is_empty() && !body.is_empty() {
+            comments.push(ReviewComment {
+                body,
+                path,
+                line,
+                side: "RIGHT".to_string(),
+                start_line: 0,
+                start_side: String::new(),
+                diagnostic_index: 0,
+            });
+        }
+    }
+    if !comments.is_empty() {
+        tracing::info!("Reviewer: parsed {} inline comment(s) from agent output", comments.len());
+    }
+    comments
 }

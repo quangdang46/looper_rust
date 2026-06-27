@@ -42,15 +42,20 @@ pub struct OrphanAgentCleanup {
 }
 
 impl Default for OrphanAgentCleanup {
-    fn default() -> Self { Self { attempted: false, cleaned_count: 0, warning: String::new() } }
+    fn default() -> Self {
+        Self { attempted: false, cleaned_count: 0, warning: String::new() }
+    }
 }
 
 impl Default for RecoverySummary {
     fn default() -> Self {
         Self {
-            started_at: String::new(), completed_at: String::new(),
+            started_at: String::new(),
+            completed_at: String::new(),
             orphan_agent_cleanup: OrphanAgentCleanup::default(),
-            expired_locks_released: 0, interrupted_runs_marked: 0, events_written: 0,
+            expired_locks_released: 0,
+            interrupted_runs_marked: 0,
+            events_written: 0,
         }
     }
 }
@@ -69,10 +74,7 @@ pub fn cleanup_orphan_agents(repos: &Repositories) -> OrphanAgentCleanup {
                 if let Some(pid) = exec.pid {
                     #[cfg(unix)]
                     {
-                        let result = std::process::Command::new("kill")
-                            .arg("-0")
-                            .arg(pid.to_string())
-                            .output();
+                        let result = std::process::Command::new("kill").arg("-0").arg(pid.to_string()).output();
                         match result {
                             Ok(out) if out.status.success() => continue,
                             _ => {

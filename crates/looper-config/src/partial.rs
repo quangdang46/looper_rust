@@ -1,6 +1,6 @@
 use crate::enums::{
-    DaemonRestartPolicy, DisclosureFormat, LogFormat, LogOutput, LogRotation,
-    NotificationChannel, NotificationPriority, SchedulerPolicy, StorageBackend, ToolRuntime,
+    DaemonRestartPolicy, DisclosureFormat, LogFormat, LogOutput, LogRotation, NotificationChannel,
+    NotificationPriority, SchedulerPolicy, StorageBackend, ToolRuntime,
 };
 use looper_types::{AgentVendor, DaemonMode, LogLevel};
 use serde::{Deserialize, Serialize};
@@ -282,13 +282,7 @@ partial_default_impl!(PartialSchedulerRetryConfig {
     jitter,
 });
 
-partial_merge_impl!(PartialSchedulerRetryConfig {
-    max_attempts,
-    base_delay_secs,
-    max_delay_secs,
-    multiplier,
-    jitter,
-});
+partial_merge_impl!(PartialSchedulerRetryConfig { max_attempts, base_delay_secs, max_delay_secs, multiplier, jitter });
 
 // ---------------------------------------------------------------------------
 // Partial Agent
@@ -350,25 +344,9 @@ pub struct PartialLoggingConfig {
     pub rotation: Option<LogRotation>,
 }
 
-partial_default_impl!(PartialLoggingConfig {
-    level,
-    format,
-    output,
-    file_path,
-    max_files,
-    max_size_mb,
-    rotation,
-});
+partial_default_impl!(PartialLoggingConfig { level, format, output, file_path, max_files, max_size_mb, rotation });
 
-partial_merge_impl!(PartialLoggingConfig {
-    level,
-    format,
-    output,
-    file_path,
-    max_files,
-    max_size_mb,
-    rotation,
-});
+partial_merge_impl!(PartialLoggingConfig { level, format, output, file_path, max_files, max_size_mb, rotation });
 
 // ---------------------------------------------------------------------------
 // Partial Notifications
@@ -456,19 +434,9 @@ pub struct PartialDisclosureStampConfig {
     pub include_config_hash: Option<bool>,
 }
 
-partial_default_impl!(PartialDisclosureStampConfig {
-    enabled,
-    prefix,
-    include_timestamp,
-    include_config_hash,
-});
+partial_default_impl!(PartialDisclosureStampConfig { enabled, prefix, include_timestamp, include_config_hash });
 
-partial_merge_impl!(PartialDisclosureStampConfig {
-    enabled,
-    prefix,
-    include_timestamp,
-    include_config_hash,
-});
+partial_merge_impl!(PartialDisclosureStampConfig { enabled, prefix, include_timestamp, include_config_hash });
 
 // ---------------------------------------------------------------------------
 // Partial Tools
@@ -526,19 +494,9 @@ pub struct PartialDockerConfig {
     pub network: Option<String>,
 }
 
-partial_default_impl!(PartialDockerConfig {
-    image,
-    tag,
-    volumes,
-    network,
-});
+partial_default_impl!(PartialDockerConfig { image, tag, volumes, network });
 
-partial_merge_impl!(PartialDockerConfig {
-    image,
-    tag,
-    volumes,
-    network,
-});
+partial_merge_impl!(PartialDockerConfig { image, tag, volumes, network });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -547,15 +505,9 @@ pub struct PartialNixConfig {
     pub extra_nix_path: Option<String>,
 }
 
-partial_default_impl!(PartialNixConfig {
-    packages,
-    extra_nix_path,
-});
+partial_default_impl!(PartialNixConfig { packages, extra_nix_path });
 
-partial_merge_impl!(PartialNixConfig {
-    packages,
-    extra_nix_path,
-});
+partial_merge_impl!(PartialNixConfig { packages, extra_nix_path });
 
 // ---------------------------------------------------------------------------
 // Partial Package
@@ -570,19 +522,9 @@ pub struct PartialPackageConfig {
     pub install_dir: Option<String>,
 }
 
-partial_default_impl!(PartialPackageConfig {
-    name,
-    version,
-    registry,
-    install_dir,
-});
+partial_default_impl!(PartialPackageConfig { name, version, registry, install_dir });
 
-partial_merge_impl!(PartialPackageConfig {
-    name,
-    version,
-    registry,
-    install_dir,
-});
+partial_merge_impl!(PartialPackageConfig { name, version, registry, install_dir });
 
 // ---------------------------------------------------------------------------
 // Partial Defaults
@@ -600,25 +542,9 @@ pub struct PartialDefaultsConfig {
     pub shell: Option<String>,
 }
 
-partial_default_impl!(PartialDefaultsConfig {
-    home_dir,
-    config_dir,
-    data_dir,
-    cache_dir,
-    log_dir,
-    editor,
-    shell,
-});
+partial_default_impl!(PartialDefaultsConfig { home_dir, config_dir, data_dir, cache_dir, log_dir, editor, shell });
 
-partial_merge_impl!(PartialDefaultsConfig {
-    home_dir,
-    config_dir,
-    data_dir,
-    cache_dir,
-    log_dir,
-    editor,
-    shell,
-});
+partial_merge_impl!(PartialDefaultsConfig { home_dir, config_dir, data_dir, cache_dir, log_dir, editor, shell });
 
 // ---------------------------------------------------------------------------
 // Partial Instructions
@@ -633,19 +559,9 @@ pub struct PartialInstructionsConfig {
     pub allowed_extensions: Option<Vec<String>>,
 }
 
-partial_default_impl!(PartialInstructionsConfig {
-    base_path,
-    encoding,
-    max_size_kb,
-    allowed_extensions,
-});
+partial_default_impl!(PartialInstructionsConfig { base_path, encoding, max_size_kb, allowed_extensions });
 
-partial_merge_impl!(PartialInstructionsConfig {
-    base_path,
-    encoding,
-    max_size_kb,
-    allowed_extensions,
-});
+partial_merge_impl!(PartialInstructionsConfig { base_path, encoding, max_size_kb, allowed_extensions });
 
 // ---------------------------------------------------------------------------
 // Partial Roles
@@ -661,21 +577,9 @@ pub struct PartialRolesConfig {
     pub coordinator: Option<PartialRoleConfig>,
 }
 
-partial_default_impl!(PartialRolesConfig {
-    planner,
-    reviewer,
-    worker,
-    fixer,
-    coordinator,
-});
+partial_default_impl!(PartialRolesConfig { planner, reviewer, worker, fixer, coordinator });
 
-partial_merge_impl!(PartialRolesConfig {
-    planner,
-    reviewer,
-    worker,
-    fixer,
-    coordinator,
-});
+partial_merge_impl!(PartialRolesConfig { planner, reviewer, worker, fixer, coordinator });
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -726,31 +630,18 @@ pub struct PartialProjectConfig {
     pub enabled: Option<bool>,
 }
 
-partial_default_impl!(PartialProjectConfig {
-    name,
-    path,
-    default_loop_type,
-    schedule,
-    enabled,
-});
+partial_default_impl!(PartialProjectConfig { name, path, default_loop_type, schedule, enabled });
 
-partial_merge_impl!(PartialProjectConfig {
-    name,
-    path,
-    default_loop_type,
-    schedule,
-    enabled,
-});
+partial_merge_impl!(PartialProjectConfig { name, path, default_loop_type, schedule, enabled });
 
 // ---------------------------------------------------------------------------
 // Conversion helpers: PartialConfig → Config (resolved with defaults)
 // ---------------------------------------------------------------------------
 
 use crate::types::{
-    AgentConfig, Config, DaemonConfig, DefaultsConfig, DisclosureConfig, DisclosureStampConfig,
-    DockerConfig, InstructionsConfig, LoggingConfig, NixConfig, NotificationsConfig,
-    PackageConfig, ProjectConfig, RoleConfig, RolesConfig, SchedulerConfig, SchedulerRetryConfig,
-    ServerConfig, StorageConfig, ToolsConfig,
+    AgentConfig, Config, DaemonConfig, DefaultsConfig, DisclosureConfig, DisclosureStampConfig, DockerConfig,
+    InstructionsConfig, LoggingConfig, NixConfig, NotificationsConfig, PackageConfig, ProjectConfig, RoleConfig,
+    RolesConfig, SchedulerConfig, SchedulerRetryConfig, ServerConfig, StorageConfig, ToolsConfig,
 };
 
 impl From<PartialConfig> for Config {
@@ -769,9 +660,7 @@ impl From<PartialConfig> for Config {
             defaults: partial.defaults.map(Into::into),
             instructions: partial.instructions.map(Into::into),
             roles: partial.roles.map(Into::into),
-            projects: partial.projects
-                .map(|v| v.into_iter().map(Into::into).collect())
-                .unwrap_or_default(),
+            projects: partial.projects.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default(),
         }
     }
 }
@@ -962,10 +851,7 @@ impl From<PartialDockerConfig> for DockerConfig {
 impl From<PartialNixConfig> for NixConfig {
     fn from(p: PartialNixConfig) -> Self {
         let d = NixConfig::default();
-        Self {
-            packages: p.packages.unwrap_or(d.packages),
-            extra_nix_path: p.extra_nix_path.or(d.extra_nix_path),
-        }
+        Self { packages: p.packages.unwrap_or(d.packages), extra_nix_path: p.extra_nix_path.or(d.extra_nix_path) }
     }
 }
 
@@ -1056,20 +942,14 @@ mod tests {
     #[test]
     fn test_merge_option_overrides() {
         let mut a = PartialDaemonConfig::default();
-        let b = PartialDaemonConfig {
-            max_restarts: Some(10),
-            ..Default::default()
-        };
+        let b = PartialDaemonConfig { max_restarts: Some(10), ..Default::default() };
         a.merge(b);
         assert_eq!(a.max_restarts, Some(10));
     }
 
     #[test]
     fn test_merge_option_keeps_existing() {
-        let mut a = PartialDaemonConfig {
-            max_restarts: Some(5),
-            ..Default::default()
-        };
+        let mut a = PartialDaemonConfig { max_restarts: Some(5), ..Default::default() };
         let b = PartialDaemonConfig::default();
         a.merge(b);
         assert_eq!(a.max_restarts, Some(5));
@@ -1077,10 +957,7 @@ mod tests {
 
     #[test]
     fn test_partial_to_full_server() {
-        let partial = PartialServerConfig {
-            port: Some(8080),
-            ..Default::default()
-        };
+        let partial = PartialServerConfig { port: Some(8080), ..Default::default() };
         let full: ServerConfig = partial.into();
         assert_eq!(full.port, 8080);
         assert_eq!(full.host, "127.0.0.1"); // from Default
@@ -1089,10 +966,7 @@ mod tests {
     #[test]
     fn test_partial_config_to_config() {
         let partial = PartialConfig {
-            server: Some(PartialServerConfig {
-                host: Some("0.0.0.0".into()),
-                ..Default::default()
-            }),
+            server: Some(PartialServerConfig { host: Some("0.0.0.0".into()), ..Default::default() }),
             ..Default::default()
         };
         let config: Config = partial.into();
@@ -1104,20 +978,14 @@ mod tests {
     #[test]
     fn test_merge_vec_extend() {
         let mut a = PartialLoggingConfig::default();
-        let b = PartialLoggingConfig {
-            file_path: Some("/tmp/looper.log".into()),
-            ..Default::default()
-        };
+        let b = PartialLoggingConfig { file_path: Some("/tmp/looper.log".into()), ..Default::default() };
         a.merge(b);
         assert_eq!(a.file_path, Some("/tmp/looper.log".into()));
     }
 
     #[test]
     fn test_empty_partial_merge_is_noop() {
-        let mut a = PartialAgentConfig {
-            timeout_secs: Some(60),
-            ..Default::default()
-        };
+        let mut a = PartialAgentConfig { timeout_secs: Some(60), ..Default::default() };
         let b = PartialAgentConfig::default();
         a.merge(b);
         assert_eq!(a.timeout_secs, Some(60));

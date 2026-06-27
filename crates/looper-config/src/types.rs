@@ -1,6 +1,6 @@
 use crate::enums::{
-    DaemonRestartPolicy, DisclosureFormat, LogFormat, LogOutput, LogRotation,
-    NotificationChannel, NotificationPriority, SchedulerPolicy, StorageBackend, ToolRuntime,
+    DaemonRestartPolicy, DisclosureFormat, LogFormat, LogOutput, LogRotation, NotificationChannel,
+    NotificationPriority, SchedulerPolicy, StorageBackend, ToolRuntime,
 };
 use looper_types::{AgentVendor, DaemonMode, LogLevel};
 use serde::{Deserialize, Serialize};
@@ -170,13 +170,7 @@ pub struct SchedulerRetryConfig {
 
 impl Default for SchedulerRetryConfig {
     fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            base_delay_secs: 5,
-            max_delay_secs: 300,
-            multiplier: 2.0,
-            jitter: true,
-        }
+        Self { max_attempts: 3, base_delay_secs: 5, max_delay_secs: 300, multiplier: 2.0, jitter: true }
     }
 }
 
@@ -313,12 +307,7 @@ pub struct DisclosureStampConfig {
 
 impl Default for DisclosureStampConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            prefix: "ai-generated".into(),
-            include_timestamp: true,
-            include_config_hash: true,
-        }
+        Self { enabled: true, prefix: "ai-generated".into(), include_timestamp: true, include_config_hash: true }
     }
 }
 
@@ -367,12 +356,7 @@ pub struct DockerConfig {
 
 impl Default for DockerConfig {
     fn default() -> Self {
-        Self {
-            image: "looper/tools".into(),
-            tag: "latest".into(),
-            volumes: vec![],
-            network: "host".into(),
-        }
+        Self { image: "looper/tools".into(), tag: "latest".into(), volumes: vec![], network: "host".into() }
     }
 }
 
@@ -383,7 +367,6 @@ pub struct NixConfig {
     pub packages: Vec<String>,
     pub extra_nix_path: Option<String>,
 }
-
 
 // ---------------------------------------------------------------------------
 // Package
@@ -400,12 +383,7 @@ pub struct PackageConfig {
 
 impl Default for PackageConfig {
     fn default() -> Self {
-        Self {
-            name: "looper".into(),
-            version: "0.1.0".into(),
-            registry: None,
-            install_dir: None,
-        }
+        Self { name: "looper".into(), version: "0.1.0".into(), registry: None, install_dir: None }
     }
 }
 
@@ -425,7 +403,6 @@ pub struct DefaultsConfig {
     pub editor: Option<String>,
     pub shell: Option<String>,
 }
-
 
 // ---------------------------------------------------------------------------
 // Instructions
@@ -465,7 +442,6 @@ pub struct RolesConfig {
     pub fixer: RoleConfig,
     pub coordinator: RoleConfig,
 }
-
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, rename_all = "kebab-case")]
@@ -511,13 +487,7 @@ pub struct ProjectConfig {
 
 impl Default for ProjectConfig {
     fn default() -> Self {
-        Self {
-            name: String::new(),
-            path: None,
-            default_loop_type: None,
-            schedule: None,
-            enabled: true,
-        }
+        Self { name: String::new(), path: None, default_loop_type: None, schedule: None, enabled: true }
     }
 }
 

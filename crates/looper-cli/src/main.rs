@@ -129,6 +129,29 @@ pub enum Command {
     // -- Worktree --
     #[command(subcommand)]
     Worktree(commands::worktree::WorktreeCommand),
+
+    // -- PS (list active loops) --
+    #[command(subcommand)]
+    Ps(commands::ps::PsCommand),
+
+    // -- Stop (stop a loop by seq) --
+    #[command(subcommand)]
+    Stop(commands::stop::StopCommand),
+
+    // -- Jump (show worktree path) --
+    #[command(subcommand)]
+    Jump(commands::jump::JumpCommand),
+
+    // -- PR list/show/status --
+    #[command(subcommand)]
+    Pr(commands::pr::PrCommand),
+
+    // -- Bootstrap (first-run setup wizard) --
+    #[command(subcommand)]
+    Bootstrap(BootstrapCommand),
+
+    // -- Reconcile stale runs --
+    ReconcileStale,
 }
 
 #[derive(Debug, Subcommand)]
@@ -148,11 +171,19 @@ pub enum ConfigLocalCommand {
 #[derive(Debug, Subcommand)]
 pub enum DaemonCommand {
     /// Start the daemon
-    Start,
+    Start {
+        /// Path to config file
+        #[arg(short = 'c', long)]
+        config: Option<String>,
+    },
     /// Stop the daemon
     Stop,
     /// Restart the daemon
-    Restart,
+    Restart {
+        /// Path to config file
+        #[arg(short = 'c', long)]
+        config: Option<String>,
+    },
     /// Check if daemon is running
     Status,
     /// Tail daemon logs
@@ -165,6 +196,14 @@ pub enum DaemonCommand {
     },
     /// Uninstall daemon: stop, remove service config, delete binary
     Uninstall,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum BootstrapCommand {
+    /// Run the bootstrap wizard
+    Run,
+    /// Check if already bootstrapped
+    Status,
 }
 
 #[derive(Debug, Subcommand)]
@@ -294,19 +333,46 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
             commands::ensure_daemon(client).await?;
             commands::worktree::handle(client, cmd, json).await
         }
+        Command::Ps(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::ps::handle(client, cmd, json).await
+        }
+        Command::Stop(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::stop::handle(client, cmd, json).await
+        }
+        Command::Jump(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::jump::handle(client, cmd, json).await
+        }
+        Command::Pr(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::pr::handle(client, cmd, json).await
+        }
+        Command::Bootstrap(cmd) => run_bootstrap(cmd, json).await,
+        Command::ReconcileStale => {
+            commands::ensure_daemon(client).await?;
+            commands::reconcile::handle(client, json).await
+        }
     }
 }
 
 async fn run_health(client: &looper_cli::client::DaemonAPIClient, json: bool) -> Result<(), CliError> {
     match client.health().await {
-        Ok(h) => { looper_cli::output::print_output(json, &h); Ok(()) }
+        Ok(h) => {
+            looper_cli::output::print_output(json, &h);
+            Ok(())
+        }
         Err(e) => Err(e),
     }
 }
 
 async fn run_version(client: &looper_cli::client::DaemonAPIClient, json: bool) -> Result<(), CliError> {
     match client.server_version().await {
-        Ok(v) => { looper_cli::output::print_output(json, &v); Ok(()) }
+        Ok(v) => {
+            looper_cli::output::print_output(json, &v);
+            Ok(())
+        }
         Err(e) => Err(e),
     }
 }
@@ -323,13 +389,20 @@ fn run_config_local(cmd: &ConfigLocalCommand, _json: bool) -> Result<(), CliErro
 
 async fn run_daemon(cmd: &DaemonCommand, _json: bool) -> Result<(), CliError> {
     match cmd {
-        DaemonCommand::Start => looper_cli::daemon::start().await,
+        DaemonCommand::Start { config } => looper_cli::daemon::start(config.as_deref()).await,
         DaemonCommand::Stop => looper_cli::daemon::stop().await,
-        DaemonCommand::Restart => looper_cli::daemon::restart().await,
+        DaemonCommand::Restart { config } => looper_cli::daemon::restart_with_config(config.as_deref()).await,
         DaemonCommand::Status => looper_cli::daemon::status().await,
         DaemonCommand::Logs { n } => looper_cli::daemon::logs(*n).await,
         DaemonCommand::Install { version } => looper_cli::daemon::install(version.clone()).await,
         DaemonCommand::Uninstall => looper_cli::daemon::uninstall().await,
+    }
+}
+
+async fn run_bootstrap(cmd: &BootstrapCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        BootstrapCommand::Run => commands::bootstrap::run(json).await,
+        BootstrapCommand::Status => commands::bootstrap::status(json).await,
     }
 }
 

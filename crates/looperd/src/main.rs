@@ -19,28 +19,90 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use clap::Parser;
-use uuid::Uuid;
 use looper_agent::executor::ConfiguredExecutor;
 use looper_agent::types::{AgentCliVendor, ExecutorConfig};
 use looper_api::{
-    AddProjectInput, ApiError, Context, ProjectService as ProjectServiceTrait, ProjectSummary,
-    RuntimeState, ServerConfig,
+    AddProjectInput, ApiError, Context, ProjectService as ProjectServiceTrait, ProjectSummary, RuntimeState,
+    ServerConfig,
 };
 use looper_config::Config;
-use looper_github::gateway::{Gateway, GatewayOptions};
 use looper_git::Gateway as GitGateway;
+use looper_github::gateway::{Gateway, GatewayOptions};
 use looper_infra::{agent_cleanup, bootstrap, Runtime as DaemonRuntime};
 use looper_runner::{Coordinator, Fixer, Planner, Reviewer, Worker};
-use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::active_executions::ActiveExecutionRegistry;
+use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{HandlerMap, SchedulerConfig, ThreadRunner};
 use looper_scheduler::Scheduler;
 use looper_service::ProjectService;
-use looper_storage::{
-    record::ProjectRecord,
-    repos::events::EventsRepository, run_migrations, EventLog, Repositories,
-};
+use looper_storage::{record::ProjectRecord, repos::events::EventsRepository, run_migrations, EventLog, Repositories};
 use rusqlite::Connection;
+use uuid::Uuid;
+
+/// Remove stale worktree directories that weren't cleaned up by their runners.
+fn cleanup_stale_worktrees(
+    max_keep: usize,
+    repos: Option<&std::sync::Arc<std::sync::Mutex<looper_storage::Repositories>>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Collect worktree roots from DB projects
+    let worktree_roots: Vec<String> = if let Some(repos_arc) = repos {
+        if let Ok(guard) = repos_arc.lock() {
+            if let Ok(projects) = guard.projects.list() {
+                projects
+                    .iter()
+                    .filter(|p| !p.repo_path.is_empty())
+                    .map(|p| format!("{}/.looper/worktrees", p.repo_path))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Also scan CWD for backward compatibility
+    let mut dirs_to_scan = worktree_roots.clone();
+    dirs_to_scan.push(".".to_string());
+
+    let patterns = &["review-*", "planner-*", "worker-*"];
+    for scan_dir in &dirs_to_scan {
+        let dir = std::path::Path::new(scan_dir);
+        if !dir.exists() || !dir.is_dir() {
+            continue;
+        }
+        for pattern in patterns {
+            let pat = *pattern;
+            let mut entries: Vec<_> = std::fs::read_dir(dir)?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .filter(|e| e.file_name().to_string_lossy().starts_with(&pat[..pat.len() - 2]))
+                .collect();
+            entries.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()));
+            if entries.len() > max_keep {
+                let to_remove = entries.len() - max_keep;
+                tracing::info!(
+                    "Cleaning up {} stale {} worktrees in {} (keeping {} newest)",
+                    to_remove,
+                    pattern,
+                    scan_dir,
+                    max_keep
+                );
+                for entry in entries.iter().take(to_remove) {
+                    let path = entry.path();
+                    let _ = std::process::Command::new("git")
+                        .args(["worktree", "remove", "--force", &path.to_string_lossy()])
+                        .current_dir(scan_dir)
+                        .output();
+                    let _ = std::fs::remove_dir_all(&path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -102,11 +164,8 @@ impl RuntimeState for DaemonState {
         let finished = now_iso();
         rec.status = "stopped".into();
         rec.updated_at = finished.clone();
-        self.repos
-            .loops
-            .upsert(&rec)
-            .map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
-        
+        self.repos.loops.upsert(&rec).map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
+
         self.repos
             .queue
             .cancel_by_loop(&rec.id, &finished, Some("stopped by user"))
@@ -124,10 +183,7 @@ impl RuntimeState for DaemonState {
         let finished = now_iso();
         rec.status = "closed".into();
         rec.updated_at = finished.clone();
-        self.repos
-            .loops
-            .upsert(&rec)
-            .map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
+        self.repos.loops.upsert(&rec).map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
         self.repos
             .queue
             .cancel_by_loop(&rec.id, &finished, Some("loop closed"))
@@ -146,11 +202,7 @@ impl RuntimeState for DaemonState {
 
     async fn repair_reviewer(&self, project_name: &str) -> Result<(), ApiError> {
         // Find the project by name
-        let projects = self
-            .repos
-            .projects
-            .list()
-            .map_err(|e| ApiError::internal(format!("list projects: {e}")))?;
+        let projects = self.repos.projects.list().map_err(|e| ApiError::internal(format!("list projects: {e}")))?;
         let project = projects
             .iter()
             .find(|p| p.name == project_name)
@@ -231,10 +283,7 @@ impl ProjectServiceTrait for DaemonProjectService {
             repo: input.repo_url,
             snapshot_mode: looper_service::SnapshotMode::Async,
         };
-        let result = self
-            .service
-            .add_project(service_input)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let result = self.service.add_project(service_input).map_err(|e| ApiError::internal(e.to_string()))?;
         Ok(ProjectSummary {
             name: result.project.id,
             path: result.project.repo_path.clone(),
@@ -247,32 +296,18 @@ impl ProjectServiceTrait for DaemonProjectService {
     }
 
     async fn remove(&self, name: &str) -> Result<(), ApiError> {
-        self.service
-            .remove_project(name)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        self.service.remove_project(name).map_err(|e| ApiError::internal(e.to_string()))?;
         Ok(())
     }
 
     async fn list(&self) -> Result<Vec<ProjectSummary>, ApiError> {
-        let records = self
-            .service
-            .list()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok(records
-            .into_iter()
-            .map(|r| project_record_to_summary(r))
-            .collect())
+        let records = self.service.list().map_err(|e| ApiError::internal(e.to_string()))?;
+        Ok(records.into_iter().map(|r| project_record_to_summary(r)).collect())
     }
 
     async fn sync(&self, name: &str) -> Result<ProjectSummary, ApiError> {
-        let records = self
-            .service
-            .list()
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let rec = records
-            .into_iter()
-            .find(|r| r.id == name)
-            .ok_or_else(|| ApiError::not_found(name))?;
+        let records = self.service.list().map_err(|e| ApiError::internal(e.to_string()))?;
+        let rec = records.into_iter().find(|r| r.id == name).ok_or_else(|| ApiError::not_found(name))?;
         Ok(project_record_to_summary(rec))
     }
 }
@@ -302,6 +337,11 @@ fn project_record_to_summary(rec: ProjectRecord) -> ProjectSummary {
 
 #[tokio::main]
 async fn main() {
+    // Detach from controlling terminal to survive shell exit
+    #[cfg(unix)]
+    {
+        let _ = nix::unistd::setsid();
+    }
     if let Err(e) = run().await {
         eprintln!("FATAL: {e}");
         std::process::exit(1);
@@ -326,7 +366,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
             None => loader,
         };
         loader.load()
-    }.map_err(|e| format!("config load: {e}"))?;
+    }
+    .map_err(|e| format!("config load: {e}"))?;
+
+    // Clean up stale worktree directories left by previous runs
+    cleanup_stale_worktrees(5, None).unwrap_or_else(|e| {
+        eprintln!("worktree cleanup warning: {e}");
+    });
 
     // Clean up stale agent processes that may have survived a daemon crash
     agent_cleanup::kill_stale_agent_processes();
@@ -362,9 +408,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let event_log = EventLog::new(EventsRepository::new(Arc::new(event_log_conn)));
 
     // Scheduler repos — also gets per-repo connections
-    let send_repos = Arc::new(SendRepos(std::sync::Mutex::new(
-        Repositories::open(&db_path)?,
-    )));
+    let send_repos = Arc::new(SendRepos(std::sync::Mutex::new(Repositories::open(&db_path)?)));
 
     // 6. Build HandlerMap with all 5 runners + GitHub/git/agent gateways
     let scheduler_cfg = SchedulerConfig::default();
@@ -379,33 +423,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         env: std::collections::HashMap::new(),
         native_resume_enabled: true,
     };
-    let log_dir = config
-        .defaults
-        .as_ref()
-        .and_then(|d| d.log_dir.as_deref())
-        .unwrap_or("/tmp/looper/logs")
-        .to_string();
+    let log_dir = config.defaults.as_ref().and_then(|d| d.log_dir.as_deref()).unwrap_or("/tmp/looper/logs").to_string();
 
     // Agent repos — per-repo connections in a Mutex for pipeline
     // thread safety (write-spec runs on parallel pipeline threads).
-    let agent_repos = Arc::new(std::sync::Mutex::new(
-        Repositories::open(&db_path)?,
-    ));
-    let agent: Option<Arc<ConfiguredExecutor>> = Some(Arc::new(ConfiguredExecutor::new(
-        agent_cfg,
-        agent_repos,
-        log_dir,
-        Utc::now,
-    )));
+    let agent_repos = Arc::new(std::sync::Mutex::new(Repositories::open(&db_path)?));
+    let agent: Option<Arc<ConfiguredExecutor>> =
+        Some(Arc::new(ConfiguredExecutor::new(agent_cfg, agent_repos, log_dir, Utc::now)));
 
     // Git gateway
-    let git: Option<Arc<GitGateway>> = Some(Arc::new(GitGateway::new(
-        looper_git::types::GatewayOptions {
-            git_path: "git".to_string(),
-            repos: None,
-            now: Utc::now,
-        },
-    )));
+    let git: Option<Arc<GitGateway>> = Some(Arc::new(GitGateway::new(looper_git::types::GatewayOptions {
+        git_path: "git".to_string(),
+        repos: None,
+        now: Utc::now,
+    })));
 
     let tokio_handle = tokio::runtime::Handle::current();
     let handlers = HandlerMap {
@@ -463,11 +494,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     // 8. Create Runtime (stores scheduler, starts it in complete_startup)
     let runtime = DaemonRuntime::new(config.clone());
-    runtime.start(
-        Arc::clone(&repos),
-        event_log,
-        Some(Arc::clone(&scheduler)),
-    )?;
+    runtime.start(Arc::clone(&repos), event_log, Some(Arc::clone(&scheduler)))?;
 
     // 9. Build API context
     let state = Arc::new(DaemonState {
@@ -475,40 +502,18 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         event_log: EventLog::new(EventsRepository::new(Arc::new(open_db(&db_path)?))),
         scheduler: Some(Arc::clone(&scheduler)),
     });
-    let project_svc = ProjectService::new(
-        Arc::clone(&repos),
-        looper_service::ProjectServiceCallbacks::new(),
-        Utc::now,
-    );
-    let projects = Arc::new(DaemonProjectService {
-        service: project_svc,
-    });
-    let ctx = Arc::new(Context {
-        config: Arc::new(config.clone()),
-        state,
-        projects,
-    });
+    let project_svc = ProjectService::new(Arc::clone(&repos), looper_service::ProjectServiceCallbacks::new(), Utc::now);
+    let projects = Arc::new(DaemonProjectService { service: project_svc });
+    let ctx = Arc::new(Context { config: Arc::new(config.clone()), state, projects });
 
     // 10. Determine bind address
-    let host = config
-        .server
-        .as_ref()
-        .map(|s| s.host.as_str())
-        .unwrap_or("127.0.0.1");
-    let port = config
-        .server
-        .as_ref()
-        .map(|s| s.port)
-        .unwrap_or(7391);
-    let api_config = ServerConfig {
-        bind_address: format!("{host}:{port}"),
-        auth_token: None,
-    };
+    let host = config.server.as_ref().map(|s| s.host.as_str()).unwrap_or("127.0.0.1");
+    let port = config.server.as_ref().map(|s| s.port).unwrap_or(7391);
+    let api_config = ServerConfig { bind_address: format!("{host}:{port}"), auth_token: None };
 
     // 11. Start API server
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let api_handle =
-        tokio::spawn(async move { looper_api::serve(ctx, api_config, shutdown_rx).await });
+    let api_handle = tokio::spawn(async move { looper_api::serve(ctx, api_config, shutdown_rx).await });
 
     // 12. Complete startup (starts scheduler threads, worktree cleanup)
     runtime.complete_startup().await?;
@@ -529,12 +534,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Resolve the database file path from config.
 fn resolve_db_path(config: &Config) -> String {
-    config
-        .storage
-        .as_ref()
-        .and_then(|s| s.path.as_deref())
-        .unwrap_or("looperd.db")
-        .to_string()
+    config.storage.as_ref().and_then(|s| s.path.as_deref()).unwrap_or("looperd.db").to_string()
 }
 
 /// Open a SQLite connection and run migrations.

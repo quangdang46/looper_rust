@@ -81,10 +81,7 @@ pub struct CompositeGateway {
 
 impl CompositeGateway {
     pub fn new(throttle: Arc<throttle::Throttle>) -> Self {
-        Self {
-            backends: Vec::new(),
-            throttle,
-        }
+        Self { backends: Vec::new(), throttle }
     }
 
     pub fn register(&mut self, name: impl Into<String>, gateway: Arc<dyn Gateway>) {

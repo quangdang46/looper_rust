@@ -1,3 +1,4 @@
+use std::panic;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -10,10 +11,8 @@ use crate::active_executions::ActiveExecutionRegistry;
 use crate::claim::claim_and_run;
 use crate::error::{SchedulerError, SchedulerResult};
 use crate::tick::execute_scheduler_tick;
-use crate::types::{
-    AsyncRunner, ClaimPhase, Context, HandlerMap, SchedulerConfig, TickSummary,
-};
 use crate::types::StaleRunReconcileSummary;
+use crate::types::{AsyncRunner, ClaimPhase, Context, HandlerMap, SchedulerConfig, TickSummary};
 use looper_storage::Repositories;
 
 /// Safety: rusqlite::Connection is !Sync, so Arc<Repositories> is !Send.
@@ -39,8 +38,7 @@ pub struct Scheduler {
     pub worker_discovery_enabled: bool,
     pub handlers: HandlerMap,
     pub async_runner: Box<dyn AsyncRunner>,
-    pub reconcile_stale_runs:
-        Option<Arc<dyn Fn(&Context) -> SchedulerResult<StaleRunReconcileSummary> + Send + Sync>>,
+    pub reconcile_stale_runs: Option<Arc<dyn Fn(&Context) -> SchedulerResult<StaleRunReconcileSummary> + Send + Sync>>,
     pub active_executions: Arc<ActiveExecutionRegistry>,
     /// Wrapped in SendRepos for thread-safety (rusqlite::Connection is !Sync).
     pub repos: Arc<SendRepos>,
@@ -55,9 +53,7 @@ impl Scheduler {
         cfg: SchedulerConfig,
         handlers: HandlerMap,
         async_runner: Box<dyn AsyncRunner>,
-        reconcile_stale_runs: Option<
-            Arc<dyn Fn(&Context) -> SchedulerResult<StaleRunReconcileSummary> + Send + Sync>,
-        >,
+        reconcile_stale_runs: Option<Arc<dyn Fn(&Context) -> SchedulerResult<StaleRunReconcileSummary> + Send + Sync>>,
         active_executions: Arc<ActiveExecutionRegistry>,
         repos: Arc<SendRepos>,
         now: fn() -> DateTime<Utc>,
@@ -99,21 +95,40 @@ impl Scheduler {
         if self.handlers.has_claim_handler() {
             let scheduler = Arc::clone(self);
             let stopped = stopped.clone();
-            let claim_wake_rx = self
-                .claim_wake_rx
-                .lock()
-                .unwrap()
-                .take()
-                .expect("claim_wake_rx already taken");
+            let claim_wake_rx = self.claim_wake_rx.lock().unwrap().take().expect("claim_wake_rx already taken");
             thread::spawn(move || {
-                scheduler.run_claim_loop(stopped, claim_wake_rx);
+                let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                    scheduler.run_claim_loop(stopped, claim_wake_rx);
+                }));
+                if let Err(e) = result {
+                    let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    tracing::error!(panic = %msg, "claim loop thread panicked");
+                }
             });
         }
 
         let scheduler = Arc::clone(self);
         let wake_rx = self.wake_rx.lock().unwrap().take().expect("wake_rx already taken");
         thread::spawn(move || {
-            scheduler.run_main_loop(stopped, wake_rx);
+            let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+                scheduler.run_main_loop(stopped, wake_rx);
+            }));
+            if let Err(e) = result {
+                let msg = if let Some(s) = e.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = e.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!(panic = %msg, "main loop thread panicked");
+            }
         });
 
         Ok(())
@@ -265,14 +280,16 @@ mod tests {
     }
 
     fn make_scheduler(cfg: SchedulerConfig) -> Arc<Scheduler> {
-        let handlers = HandlerMap {
-            planner: None, coordinator: None, reviewer: None,
-            fixer: None, worker: None, snapshot: None,
-        };
+        let handlers =
+            HandlerMap { planner: None, coordinator: None, reviewer: None, fixer: None, worker: None, snapshot: None };
         Arc::new(Scheduler::new(
-            cfg, handlers, Box::new(ThreadRunner), None,
+            cfg,
+            handlers,
+            Box::new(ThreadRunner),
+            None,
             Arc::new(ActiveExecutionRegistry::new()),
-            create_test_repos(), Utc::now,
+            create_test_repos(),
+            Utc::now,
         ))
     }
 

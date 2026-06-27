@@ -18,14 +18,14 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use looper_e2e::*;
 use looper_e2e::binaries::BuiltBinaries;
 use looper_e2e::config::{default_config, write_config, ConfigOptions, TestToolPaths};
 use looper_e2e::daemon::start_looperd;
-use looper_e2e::fake_gh::{FakeGH, GHState, GHPullRequest, GHThread, GHThreadComment};
+use looper_e2e::fake_gh::{FakeGH, GHPullRequest, GHState, GHThread, GHThreadComment};
 use looper_e2e::git::{create_seeded_repo, run_git};
 use looper_e2e::ports::must_free_port;
 use looper_e2e::temp_home::TempHome;
+use looper_e2e::*;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,9 +51,7 @@ fn wait_for_health_ok(base_url: &str, timeout: Duration) -> Result<serde_json::V
         }
         match client.get(&health_url).send() {
             Ok(resp) if resp.status().is_success() => {
-                let body: serde_json::Value = resp
-                    .json()
-                    .map_err(|e| format!("parse /health response: {e}"))?;
+                let body: serde_json::Value = resp.json().map_err(|e| format!("parse /health response: {e}"))?;
                 if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
                     return Ok(body);
                 }
@@ -71,15 +69,12 @@ fn symlink_test_bins(bins: &BuiltBinaries) -> (std::path::PathBuf, String) {
     std::fs::create_dir_all(&dir).expect("create test bin dir");
 
     // Symlink claude -> fake-agent  (the executor defaults to "claude" for ClaudeCode)
-    std::os::unix::fs::symlink(&bins.fake_agent_path, &dir.join("claude"))
-        .expect("symlink claude -> fake-agent");
+    std::os::unix::fs::symlink(&bins.fake_agent_path, &dir.join("claude")).expect("symlink claude -> fake-agent");
 
     // Symlink gh -> fake-gh       (the GitHub gateway runs "gh" via PATH)
-    std::os::unix::fs::symlink(&bins.fake_gh_path, &dir.join("gh"))
-        .expect("symlink gh -> fake-gh");
+    std::os::unix::fs::symlink(&bins.fake_gh_path, &dir.join("gh")).expect("symlink gh -> fake-gh");
 
-    let path_val =
-        format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
+    let path_val = format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default());
     (dir, path_val)
 }
 
@@ -175,20 +170,13 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     let seeded = create_seeded_repo(git_path);
 
     // Create a bare origin
-    let origin_path =
-        std::env::temp_dir().join(format!("origin-{}", uuid::Uuid::new_v4()));
+    let origin_path = std::env::temp_dir().join(format!("origin-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&origin_path).expect("create origin dir");
     run_git(git_path, &origin_path, &["init", "--bare"]);
 
     // Push the initial commit to origin
-    run_git(
-        git_path,
-        std::path::Path::new(&seeded.path),
-        &["remote", "add", "origin", origin_path.to_str().unwrap()],
-    );
-    run_git(git_path, std::path::Path::new(&seeded.path), &[
-        "push", "origin", "main",
-    ]);
+    run_git(git_path, std::path::Path::new(&seeded.path), &["remote", "add", "origin", origin_path.to_str().unwrap()]);
+    run_git(git_path, std::path::Path::new(&seeded.path), &["push", "origin", "main"]);
 
     let origin_url = origin_path.to_string_lossy().to_string();
 
@@ -200,11 +188,26 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
             (
                 "pr view".to_string(),
                 vec![
-                    "number", "title", "body", "url", "state", "createdAt",
-                    "updatedAt", "headRefName", "baseRefName", "headRefOid",
-                    "baseRefOid", "author", "mergeStateStatus", "isDraft",
-                    "reviewDecision", "labels", "reviewRequests", "comments",
-                    "reviews", "statusCheckRollup",
+                    "number",
+                    "title",
+                    "body",
+                    "url",
+                    "state",
+                    "createdAt",
+                    "updatedAt",
+                    "headRefName",
+                    "baseRefName",
+                    "headRefOid",
+                    "baseRefOid",
+                    "author",
+                    "mergeStateStatus",
+                    "isDraft",
+                    "reviewDecision",
+                    "labels",
+                    "reviewRequests",
+                    "comments",
+                    "reviews",
+                    "statusCheckRollup",
                 ]
                 .into_iter()
                 .map(String::from)
@@ -213,10 +216,22 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
             (
                 "pr list".to_string(),
                 vec![
-                    "number", "title", "url", "state", "updatedAt", "isDraft",
-                    "reviewDecision", "labels", "headRefName", "baseRefName",
-                    "headRefOid", "baseRefOid", "author", "reviewRequests",
-                    "reviews", "mergeStateStatus",
+                    "number",
+                    "title",
+                    "url",
+                    "state",
+                    "updatedAt",
+                    "isDraft",
+                    "reviewDecision",
+                    "labels",
+                    "headRefName",
+                    "baseRefName",
+                    "headRefOid",
+                    "baseRefOid",
+                    "author",
+                    "reviewRequests",
+                    "reviews",
+                    "mergeStateStatus",
                 ]
                 .into_iter()
                 .map(String::from)
@@ -224,13 +239,10 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
             ),
             (
                 "issue list".to_string(),
-                vec![
-                    "number", "title", "url", "state", "updatedAt", "labels",
-                    "author", "body",
-                ]
-                .into_iter()
-                .map(String::from)
-                .collect(),
+                vec!["number", "title", "url", "state", "updatedAt", "labels", "author", "body"]
+                    .into_iter()
+                    .map(String::from)
+                    .collect(),
             ),
         ]),
     };
@@ -247,11 +259,8 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     // The file the fake-agent will write when invoked
     let write_file = home.working_dir.join("src").join("generated.rs");
 
-    let (_vendor, _agent_bin, mut agent_env) = fake_agent.agent_config(
-        "success-with-diff",
-        "/usr/bin/git",
-        fgh.path.to_str().unwrap(),
-    );
+    let (_vendor, _agent_bin, mut agent_env) =
+        fake_agent.agent_config("success-with-diff", "/usr/bin/git", fgh.path.to_str().unwrap());
 
     agent_env.insert(
         looper_e2e::fake_agent::ENV_FAKE_AGENT_WRITE_FILE.to_string(),
@@ -271,60 +280,31 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
         // fake-gh env vars (inherited by gh -> fake-gh binary)
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_MODE,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_MODE)
-                .map(|s| s.as_str())
-                .unwrap_or("strict"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_MODE).map(|s| s.as_str()).unwrap_or("strict"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR)
-                .expect("fake-gh artifact dir"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_ARTIFACT_DIR).expect("fake-gh artifact dir"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH)
-                .expect("fake-gh state path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_STATE_PATH).expect("fake-gh state path"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH)
-                .expect("fake-gh schema path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_SCHEMA_PATH).expect("fake-gh schema path"),
         ),
         (
             looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH,
-            fgh_env
-                .get(looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH)
-                .expect("fake-gh record path"),
+            fgh_env.get(looper_e2e::fake_gh::ENV_FAKE_GH_RECORD_PATH).expect("fake-gh record path"),
         ),
         // fake-agent env vars (inherited by claude -> fake-agent binary)
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_MODE,
-            "success-with-diff",
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_ARTIFACT_DIR,
-            fake_agent.artifact_dir.to_str().expect("artifact dir"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_STATE_PATH,
-            fake_agent.state_path.to_str().expect("state path"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_WRITE_FILE,
-            write_file.to_str().expect("write file"),
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_GIT_PATH,
-            "/usr/bin/git",
-        ),
-        (
-            looper_e2e::fake_agent::ENV_FAKE_AGENT_GH_PATH,
-            fgh.path.to_str().expect("fake-gh path"),
-        ),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_MODE, "success-with-diff"),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_ARTIFACT_DIR, fake_agent.artifact_dir.to_str().expect("artifact dir")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_STATE_PATH, fake_agent.state_path.to_str().expect("state path")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_WRITE_FILE, write_file.to_str().expect("write file")),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_GIT_PATH, "/usr/bin/git"),
+        (looper_e2e::fake_agent::ENV_FAKE_AGENT_GH_PATH, fgh.path.to_str().expect("fake-gh path")),
     ];
 
     // Write config
@@ -375,14 +355,7 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     // ---------------------------------------------
     // 5. Start looperd
     // ---------------------------------------------
-    let daemon = start_looperd(
-        &bins,
-        &home,
-        home.config_path.to_str().unwrap(),
-        &extra_env,
-        "127.0.0.1",
-        port,
-    );
+    let daemon = start_looperd(&bins, &home, home.config_path.to_str().unwrap(), &extra_env, "127.0.0.1", port);
 
     let base = daemon.base_url().to_string();
 
@@ -390,11 +363,7 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     // 6. Wait for daemon ready
     // ---------------------------------------------
     let result = wait_for_health_ok(&base, Duration::from_secs(30));
-    assert!(
-        result.is_ok(),
-        "daemon should become ready within 30s: {:?}",
-        result.err()
-    );
+    assert!(result.is_ok(), "daemon should become ready within 30s: {:?}", result.err());
 
     let health = result.unwrap();
     assert!(
@@ -404,20 +373,10 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
 
     // Also verify the data payload
     let data = health.get("data").expect("health data");
-    assert_eq!(
-        data.get("status").and_then(|v| v.as_str()),
-        Some("ok"),
-        "status should be ok"
-    );
+    assert_eq!(data.get("status").and_then(|v| v.as_str()), Some("ok"), "status should be ok");
+    assert!(data.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0) > 0, "uptime should be positive");
     assert!(
-        data.get("uptime_seconds").and_then(|v| v.as_u64()).unwrap_or(0) > 0,
-        "uptime should be positive"
-    );
-    assert!(
-        data.get("version")
-            .and_then(|v| v.as_str())
-            .filter(|v| !v.is_empty())
-            .is_some(),
+        data.get("version").and_then(|v| v.as_str()).filter(|v| !v.is_empty()).is_some(),
         "version should be non-empty"
     );
 
@@ -427,45 +386,21 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     let client = reqwest::blocking::Client::new();
 
     // ---------- Version ----------
-    let version_resp = client
-        .get(format!("{base}/version"))
-        .send()
-        .expect("GET /version");
+    let version_resp = client.get(format!("{base}/version")).send().expect("GET /version");
     assert_eq!(version_resp.status(), 200, "/version should return 200");
-    let version_body: serde_json::Value =
-        version_resp.json().expect("/version should be JSON");
-    assert!(
-        version_body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
-        "/version should have ok=true"
-    );
-    let v = version_body
-        .get("data")
-        .and_then(|d| d.get("version"))
-        .and_then(|v| v.as_str());
+    let version_body: serde_json::Value = version_resp.json().expect("/version should be JSON");
+    assert!(version_body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false), "/version should have ok=true");
+    let v = version_body.get("data").and_then(|d| d.get("version")).and_then(|v| v.as_str());
     assert!(v.is_some() && !v.unwrap().is_empty(), "version string");
 
     // ---------- Config ----------
-    let config_resp = client
-        .get(format!("{base}/api/config"))
-        .send()
-        .expect("GET /api/config");
-    assert_eq!(
-        config_resp.status(),
-        200,
-        "/api/config should return 200"
-    );
-    let config_body: serde_json::Value =
-        config_resp.json().expect("/api/config should be JSON");
-    assert!(
-        config_body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false),
-        "/api/config should have ok=true"
-    );
+    let config_resp = client.get(format!("{base}/api/config")).send().expect("GET /api/config");
+    assert_eq!(config_resp.status(), 200, "/api/config should return 200");
+    let config_body: serde_json::Value = config_resp.json().expect("/api/config should be JSON");
+    assert!(config_body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false), "/api/config should have ok=true");
 
     // ---------- List projects (initially may be empty) ----------
-    let list_resp = client
-        .get(format!("{base}/api/projects"))
-        .send()
-        .expect("GET /api/projects");
+    let list_resp = client.get(format!("{base}/api/projects")).send().expect("GET /api/projects");
     assert_eq!(list_resp.status(), 200, "list projects");
 
     // ---------- Add project via API ----------
@@ -475,19 +410,13 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
         "default_branch": "main",
         "enabled": true,
     });
-    let add_resp = client
-        .post(format!("{base}/api/projects"))
-        .json(&add_body)
-        .send();
+    let add_resp = client.post(format!("{base}/api/projects")).json(&add_body).send();
 
     // Adding a project may succeed (201 Created) or fail (the test project
     // from config may already be registered). Accept both.
     let add_status = add_resp.as_ref().map(|r| r.status()).unwrap_or_default();
     let add_ok = add_status.is_success() || add_status.as_u16() == 409;
-    assert!(
-        add_ok,
-        "add project should succeed or conflict (got {add_status})"
-    );
+    assert!(add_ok, "add project should succeed or conflict (got {add_status})");
 
     // ---------- Create a loop ----------
     let loop_body = serde_json::json!({
@@ -498,57 +427,29 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
             "issue_url": "https://github.com/test-owner/test-repo/issues/1"
         }
     });
-    let create_loop_resp = client
-        .post(format!("{base}/api/projects/e2e-project/loops"))
-        .json(&loop_body)
-        .send();
+    let create_loop_resp = client.post(format!("{base}/api/projects/e2e-project/loops")).json(&loop_body).send();
 
-    let loop_created = create_loop_resp
-        .as_ref()
-        .map(|r| r.status().is_success() || r.status().as_u16() == 201)
-        .unwrap_or(false);
+    let loop_created =
+        create_loop_resp.as_ref().map(|r| r.status().is_success() || r.status().as_u16() == 201).unwrap_or(false);
 
     // If the loop was created, verify its detail
     if loop_created {
-        let create_loop_body: serde_json::Value = create_loop_resp
-            .unwrap()
-            .json()
-            .expect("create loop JSON");
-        let loop_data = create_loop_body
-            .get("data")
-            .expect("create loop data");
-        assert_eq!(
-            loop_data.get("project_name").and_then(|v| v.as_str()),
-            Some("e2e-project")
-        );
-        assert_eq!(
-            loop_data.get("loop_type").and_then(|v| v.as_str()),
-            Some("plan"),
-            "loop type should be 'plan'"
-        );
-        assert_eq!(
-            loop_data.get("status").and_then(|v| v.as_str()),
-            Some("active"),
-            "new loop should be active"
-        );
+        let create_loop_body: serde_json::Value = create_loop_resp.unwrap().json().expect("create loop JSON");
+        let loop_data = create_loop_body.get("data").expect("create loop data");
+        assert_eq!(loop_data.get("project_name").and_then(|v| v.as_str()), Some("e2e-project"));
+        assert_eq!(loop_data.get("loop_type").and_then(|v| v.as_str()), Some("plan"), "loop type should be 'plan'");
+        assert_eq!(loop_data.get("status").and_then(|v| v.as_str()), Some("active"), "new loop should be active");
 
         // Read back the loop
-        let seq: i64 = loop_data
-            .get("seq")
-            .and_then(|v| v.as_i64())
-            .expect("loop seq");
+        let seq: i64 = loop_data.get("seq").and_then(|v| v.as_i64()).expect("loop seq");
 
-        let get_loop_resp = client
-            .get(format!("{base}/api/projects/e2e-project/loops/{seq}"))
-            .send()
-            .expect("GET loop");
+        let get_loop_resp =
+            client.get(format!("{base}/api/projects/e2e-project/loops/{seq}")).send().expect("GET loop");
         assert_eq!(get_loop_resp.status(), 200, "get loop should succeed");
     }
 
     // ---------- List loops (may be empty if project doesn't exist) ----------
-    let list_loops_resp = client
-        .get(format!("{base}/api/projects/e2e-project/loops"))
-        .send();
+    let list_loops_resp = client.get(format!("{base}/api/projects/e2e-project/loops")).send();
     if let Ok(resp) = list_loops_resp {
         if resp.status().is_success() {
             let loops_body: serde_json::Value = resp.json().expect("list loops JSON");
@@ -565,19 +466,13 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
             "target": "feature-x"
         }
     });
-    let enqueue_resp = client
-        .post(format!("{base}/api/projects/e2e-project/queue/enqueue"))
-        .json(&enqueue_body)
-        .send();
+    let enqueue_resp = client.post(format!("{base}/api/projects/e2e-project/queue/enqueue")).json(&enqueue_body).send();
     if let Ok(resp) = enqueue_resp {
         let status = resp.status();
         if status.is_success() || status.as_u16() == 201 {
             let enq_body: serde_json::Value = resp.json().expect("enqueue JSON");
             let item_data = enq_body.get("data").expect("queue item data");
-            assert_eq!(
-                item_data.get("queue_type").and_then(|v| v.as_str()),
-                Some("test-item")
-            );
+            assert_eq!(item_data.get("queue_type").and_then(|v| v.as_str()), Some("test-item"));
             assert_eq!(
                 item_data.get("status").and_then(|v| v.as_str()),
                 Some("queued"),
@@ -587,9 +482,7 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     }
 
     // ---------- List queue ----------
-    let queue_resp = client
-        .get(format!("{base}/api/projects/e2e-project/queue"))
-        .send();
+    let queue_resp = client.get(format!("{base}/api/projects/e2e-project/queue")).send();
     if let Ok(resp) = queue_resp {
         if resp.status().is_success() {
             let queue_body: serde_json::Value = resp.json().expect("queue JSON");
@@ -598,9 +491,7 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
     }
 
     // ---------- List events ----------
-    let events_resp = client
-        .get(format!("{base}/api/projects/e2e-project/events"))
-        .send();
+    let events_resp = client.get(format!("{base}/api/projects/e2e-project/events")).send();
     if let Ok(resp) = events_resp {
         if resp.status().is_success() {
             let events_body: serde_json::Value = resp.json().expect("events JSON");
@@ -613,48 +504,27 @@ fn test_full_cycle_issue_plan_review_fix_merge() {
         "resource": "test-resource",
         "ttl_secs": 30
     });
-    let acquire_resp = client
-        .post(format!("{base}/api/locks"))
-        .json(&lock_body)
-        .send()
-        .expect("POST /api/locks");
-    assert!(
-        acquire_resp.status().is_success() || acquire_resp.status().as_u16() == 201,
-        "acquire lock should succeed"
-    );
+    let acquire_resp = client.post(format!("{base}/api/locks")).json(&lock_body).send().expect("POST /api/locks");
+    assert!(acquire_resp.status().is_success() || acquire_resp.status().as_u16() == 201, "acquire lock should succeed");
     let lock_body: serde_json::Value = acquire_resp.json().expect("lock JSON");
     let lock_data = lock_body.get("data").expect("lock data");
-    assert_eq!(
-        lock_data.get("resource").and_then(|v| v.as_str()),
-        Some("test-resource"),
-        "lock resource should match"
-    );
+    assert_eq!(lock_data.get("resource").and_then(|v| v.as_str()), Some("test-resource"), "lock resource should match");
 
     // List locks
-    let list_locks_resp = client
-        .get(format!("{base}/api/locks"))
-        .send()
-        .expect("GET /api/locks");
+    let list_locks_resp = client.get(format!("{base}/api/locks")).send().expect("GET /api/locks");
     assert_eq!(list_locks_resp.status(), 200, "list locks should succeed");
     let locks_body: serde_json::Value = list_locks_resp.json().expect("locks JSON");
     assert!(locks_body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false));
 
     // Release lock
-    let release_resp = client
-        .delete(format!("{base}/api/locks/test-resource"))
-        .send()
-        .expect("DELETE /api/locks/test-resource");
+    let release_resp =
+        client.delete(format!("{base}/api/locks/test-resource")).send().expect("DELETE /api/locks/test-resource");
     // Release may return 200 or 404 if already expired
     let release_status = release_resp.status();
-    assert!(
-        release_status.is_success() || release_status.as_u16() == 404,
-        "release lock got {release_status}"
-    );
+    assert!(release_status.is_success() || release_status.as_u16() == 404, "release lock got {release_status}");
 
     // ---------- Project config endpoint ----------
-    let agent_cfg_resp = client
-        .get(format!("{base}/api/projects/e2e-project/agent-config"))
-        .send();
+    let agent_cfg_resp = client.get(format!("{base}/api/projects/e2e-project/agent-config")).send();
     if let Ok(resp) = agent_cfg_resp {
         if resp.status().is_success() {
             let acfg_body: serde_json::Value = resp.json().expect("agent config JSON");

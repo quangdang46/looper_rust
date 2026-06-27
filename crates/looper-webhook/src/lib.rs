@@ -9,17 +9,18 @@
 //! tunnel health checking helpers.
 
 pub mod error;
-pub mod types;
-pub mod routing;
 pub mod forwarder;
+pub mod routing;
 pub mod tunnel;
+pub mod types;
 
-pub use error::{WebhookError, is_transient_error};
-pub use types::{
-    DeliveryRequest, DeliveryRecord, ForwardResult, ForwarderInner, Lane, Outcome, Stats,
-    TargetedFixer, TargetedReviewer, WorkItem, WorkKey, WorkMetadata,
-    DefaultTargetedReviewer, DefaultTargetedFixer,
+pub use error::{is_transient_error, WebhookError};
+pub use forwarder::{Options as ForwarderOptions, WebhookForwarder};
+pub use routing::{is_failing_conclusion, route_event, RoutingDecision};
+pub use tunnel::{
+    classify_forwarder_exit, derive_tunnel_secret, should_disable_tunnel, ExitClass, GhWebhookClient, GitHubHook,
 };
-pub use forwarder::{WebhookForwarder, Options as ForwarderOptions};
-pub use routing::{route_event, RoutingDecision, is_failing_conclusion};
-pub use tunnel::{GhWebhookClient, GitHubHook, derive_tunnel_secret, classify_forwarder_exit, ExitClass, should_disable_tunnel};
+pub use types::{
+    DefaultTargetedFixer, DefaultTargetedReviewer, DeliveryRecord, DeliveryRequest, ForwardResult, ForwarderInner,
+    Lane, Outcome, Stats, TargetedFixer, TargetedReviewer, WorkItem, WorkKey, WorkMetadata,
+};

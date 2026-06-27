@@ -20,7 +20,9 @@ pub mod types;
 pub use active_executions::ActiveExecutionRegistry;
 pub use claim::claim_and_run;
 pub use error::{SchedulerError, SchedulerResult};
-pub use failure::{classify_failure, classify_by_boundary, compute_retry_delay, should_retry_queue_item, step_boundary};
+pub use failure::{
+    classify_by_boundary, classify_failure, compute_retry_delay, should_retry_queue_item, step_boundary,
+};
 pub use recovery::{reconcile_stale_runs, run_recovery, RecoverySummary};
 pub use scheduler::Scheduler;
 pub use tick::{execute_claim_phase, execute_scheduler_tick};

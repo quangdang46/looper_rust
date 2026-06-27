@@ -95,22 +95,10 @@ mod tests {
 
     #[test]
     fn test_failure_kind_to_resume_policy() {
-        assert_eq!(
-            ResumePolicy::from(FailureKind::RetryableTransient),
-            ResumePolicy::RetryFromTimeoutContext
-        );
-        assert_eq!(
-            ResumePolicy::from(FailureKind::ManualIntervention),
-            ResumePolicy::ManualIntervention
-        );
-        assert_eq!(
-            ResumePolicy::from(FailureKind::NonRetryable),
-            ResumePolicy::ManualIntervention
-        );
-        assert_eq!(
-            ResumePolicy::from(FailureKind::RetryableAfterResume),
-            ResumePolicy::AdvanceFromCheckpoint
-        );
+        assert_eq!(ResumePolicy::from(FailureKind::RetryableTransient), ResumePolicy::RetryFromTimeoutContext);
+        assert_eq!(ResumePolicy::from(FailureKind::ManualIntervention), ResumePolicy::ManualIntervention);
+        assert_eq!(ResumePolicy::from(FailureKind::NonRetryable), ResumePolicy::ManualIntervention);
+        assert_eq!(ResumePolicy::from(FailureKind::RetryableAfterResume), ResumePolicy::AdvanceFromCheckpoint);
     }
 
     #[test]
@@ -121,11 +109,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_serde() {
-        for rp in [
-            ResumePolicy::AdvanceFromCheckpoint,
-            ResumePolicy::ManualIntervention,
-            ResumePolicy::ReplayStep,
-        ] {
+        for rp in [ResumePolicy::AdvanceFromCheckpoint, ResumePolicy::ManualIntervention, ResumePolicy::ReplayStep] {
             let json = serde_json::to_string(&rp).unwrap();
             let back: ResumePolicy = serde_json::from_str(&json).unwrap();
             assert_eq!(rp, back);

@@ -53,7 +53,7 @@ impl AgentCliVendor {
     /// Prompt flag for this vendor (e.g. "--print" or "-z").
     pub fn prompt_flag(&self) -> &'static str {
         match self {
-            Self::Codex => "",     // prompt is positional after `exec`
+            Self::Codex => "", // prompt is positional after `exec`
             Self::Hermes => "-z",
             _ => "--print",
         }
@@ -124,7 +124,7 @@ impl Default for RunInput {
             native_resume_prompt: None,
             working_directory: String::new(),
             timeout: Duration::from_secs(1800),
-            heartbeat_timeout: Duration::from_secs(120),
+            heartbeat_timeout: Duration::from_secs(300),
             graceful_shutdown: Duration::from_secs(5),
             max_output_bytes: 256 * 1024,
             metadata: HashMap::new(),

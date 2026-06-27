@@ -1,22 +1,22 @@
 //! Agent executor — process lifecycle, two-tier timeout, signal escalation.
 
-use crate::args::{append_completion_instruction_to, resolve_spawn_with_native_resume};
 use crate::args::resolve_spawn;
+use crate::args::{append_completion_instruction_to, resolve_spawn_with_native_resume};
 use crate::env::build_command_env;
 use crate::error::AgentError;
 use crate::parse::{extract_native_session_id, parse_completion};
 use crate::types::{
-    AgentResult, CompletionParseStatus, ExecutorConfig, ExecutionState,
-    NativeResumeMode, NativeResumeStatus, RunInput, SpawnCommand, TimeoutType, COMPLETION_MARKER,
+    AgentResult, CompletionParseStatus, ExecutionState, ExecutorConfig, NativeResumeMode, NativeResumeStatus, RunInput,
+    SpawnCommand, TimeoutType, COMPLETION_MARKER,
 };
 use looper_storage::record::AgentExecutionRecord;
 use looper_storage::Repositories;
 use nix::sys::signal::{killpg, Signal};
-use nix::unistd::{Pid, setpgid};
+use nix::unistd::{setpgid, Pid};
 use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
@@ -66,12 +66,7 @@ impl ConfiguredExecutor {
         log_dir: String,
         now: fn() -> chrono::DateTime<chrono::Utc>,
     ) -> Self {
-        Self {
-            config,
-            repos,
-            log_dir,
-            now,
-        }
+        Self { config, repos, log_dir, now }
     }
 
     /// Start a new execution and return a handle.
@@ -81,35 +76,51 @@ impl ConfiguredExecutor {
             return Err(AgentError::InvalidInput("prompt is required".into()));
         }
         if input.working_directory.is_empty() {
-            return Err(AgentError::InvalidInput(
-                "working_directory is required".into(),
-            ));
+            return Err(AgentError::InvalidInput("working_directory is required".into()));
         }
 
         let prompt = append_completion_instruction(&input.prompt);
-        let native_resume_prompt = input
-            .native_resume_prompt
-            .as_ref()
-            .map(|p| append_completion_instruction(p));
+        let native_resume_prompt = input.native_resume_prompt.as_ref().map(|p| append_completion_instruction(p));
 
-        let (spawn_cmd, resume_mode, resume_status, native_session_id) = self
-            .resolve_spawn_with_resume(&input, &prompt, native_resume_prompt.as_deref())
-            .await?;
+        let (spawn_cmd, resume_mode, resume_status, native_session_id) =
+            self.resolve_spawn_with_resume(&input, &prompt, native_resume_prompt.as_deref()).await?;
 
         let env = build_command_env(&input.working_directory, &prompt, &[&self.config.env, &input.env]);
 
-        let log_dir_path = std::path::Path::new(&self.log_dir)
-            .join("loops")
-            .join(&input.loop_id)
-            .join(&input.run_id);
+        let log_dir_path = std::path::Path::new(&self.log_dir).join("loops").join(&input.loop_id).join(&input.run_id);
         tokio::fs::create_dir_all(&log_dir_path).await.map_err(AgentError::Io)?;
 
         let stdout_log = log_dir_path.join(format!("{}.stdout.log", input.execution_id));
         let stderr_log = log_dir_path.join(format!("{}.stderr.log", input.execution_id));
 
-        let mut cmd = Command::new(&spawn_cmd.binary);
-        cmd.args(&spawn_cmd.args)
-            .env_clear()
+        // For Claude Code, wrap with script(1) on macOS to provide a PTY.
+        // claude --print uses block buffering when stdout is a pipe (not a TTY),
+        // which causes the __LOOPER_RESULT__ completion marker to be stuck in
+        // the C/Node.js buffer and never flushed. A PTY forces line buffering.
+        let script_wrapper =
+            cfg!(target_os = "macos") && self.config.vendor == crate::types::AgentCliVendor::ClaudeCode;
+        let script_output = if script_wrapper {
+            let dir = std::path::Path::new(&self.log_dir).join("loops").join(&input.loop_id).join(&input.run_id);
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join(format!("{}.script.log", input.execution_id));
+            path
+        } else {
+            std::path::PathBuf::new()
+        };
+
+        let mut cmd = if script_wrapper {
+            let mut c = Command::new("/usr/bin/script");
+            c.arg("-q");
+            c.arg(script_output.to_str().unwrap_or("/dev/null"));
+            c.arg(&spawn_cmd.binary);
+            c.args(&spawn_cmd.args);
+            c
+        } else {
+            let mut c = Command::new(&spawn_cmd.binary);
+            c.args(&spawn_cmd.args);
+            c
+        };
+        cmd.env_clear()
             .envs(env.iter().filter_map(|e| {
                 let mut parts = e.splitn(2, '=');
                 let key = parts.next()?;
@@ -147,12 +158,8 @@ impl ConfiguredExecutor {
 
         let pid = child.id().ok_or_else(|| AgentError::Other("no PID assigned".into()))?;
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            AgentError::Other("failed to capture stdout".to_string())
-        })?;
-        let stderr = child.stderr.take().ok_or_else(|| {
-            AgentError::Other("failed to capture stderr".to_string())
-        })?;
+        let stdout = child.stdout.take().ok_or_else(|| AgentError::Other("failed to capture stdout".to_string()))?;
+        let stderr = child.stderr.take().ok_or_else(|| AgentError::Other("failed to capture stderr".to_string()))?;
 
         let now = (self.now)();
         let state = Arc::new(Mutex::new(ExecutionState {
@@ -184,8 +191,11 @@ impl ConfiguredExecutor {
         })
         .to_string();
 
+        // Get the PGID (process group ID) for later cleanup via killpg
+        let pgid = unsafe { nix::libc::getpgid(0) };
         let metadata = serde_json::json!({
             "idempotencyKey": input.idempotency_key,
+            "process_group": pgid,
             "timeoutPolicy": {
                 "maxRuntime": input.timeout.as_secs(),
                 "idleTimeout": input.heartbeat_timeout.as_secs(),
@@ -206,10 +216,13 @@ impl ConfiguredExecutor {
             summary: None,
             parse_status: None,
             completion_signal: None,
-            output_json: Some(serde_json::json!({
-                "stdoutLogPath": stdout_log.to_string_lossy().to_string(),
-                "stderrLogPath": stderr_log.to_string_lossy().to_string(),
-            }).to_string()),
+            output_json: Some(
+                serde_json::json!({
+                    "stdoutLogPath": stdout_log.to_string_lossy().to_string(),
+                    "stderrLogPath": stderr_log.to_string_lossy().to_string(),
+                })
+                .to_string(),
+            ),
             error_message: None,
             native_session_id: native_session_id.clone(),
             native_resume_mode: resume_mode.map(|m| m.as_str().to_string()),
@@ -224,7 +237,12 @@ impl ConfiguredExecutor {
             updated_at: now.to_rfc3339(),
         };
 
-        self.repos.lock().expect("agent repo lock poisoned").agent_executions.upsert(&record).map_err(AgentError::Storage)?;
+        self.repos
+            .lock()
+            .expect("agent repo lock poisoned")
+            .agent_executions
+            .upsert(&record)
+            .map_err(AgentError::Storage)?;
 
         let execution = Execution {
             child: Arc::new(Mutex::new(Some(child))),
@@ -240,6 +258,8 @@ impl ConfiguredExecutor {
             input: input.clone(),
             execution_id,
             max_output_bytes: input.max_output_bytes,
+            script_wrapper,
+            script_output,
         };
 
         // Spawn the run loop as a background task so it reads stdout/stderr,
@@ -289,11 +309,7 @@ impl ConfiguredExecutor {
             ..default_execution_record()
         };
         let _ = self.repos.lock().map(|g| g.agent_executions.upsert(&record));
-        tracing::info!(
-            "Persisted kill status for execution {} (reason: {})",
-            execution_id,
-            reason
-        );
+        tracing::info!("Persisted kill status for execution {} (reason: {})", execution_id, reason);
     }
 
     /// Resolve spawn command with native resume consideration.
@@ -302,15 +318,7 @@ impl ConfiguredExecutor {
         input: &RunInput,
         prompt: &str,
         native_resume_prompt: Option<&str>,
-    ) -> Result<
-        (
-            SpawnCommand,
-            Option<NativeResumeMode>,
-            Option<NativeResumeStatus>,
-            Option<String>,
-        ),
-        AgentError,
-    > {
+    ) -> Result<(SpawnCommand, Option<NativeResumeMode>, Option<NativeResumeStatus>, Option<String>), AgentError> {
         if !self.config.native_resume_enabled {
             return Ok((
                 resolve_spawn(&self.config, &input.working_directory, prompt),
@@ -337,18 +345,8 @@ impl ConfiguredExecutor {
 
         if let Some(ref sid) = session_id {
             let resume_prompt = native_resume_prompt.unwrap_or(prompt);
-            let cmd = resolve_spawn_with_native_resume(
-                &self.config,
-                &input.working_directory,
-                sid,
-                resume_prompt,
-            );
-            Ok((
-                cmd,
-                Some(NativeResumeMode::NativeResume),
-                Some(NativeResumeStatus::Started),
-                Some(sid.clone()),
-            ))
+            let cmd = resolve_spawn_with_native_resume(&self.config, &input.working_directory, sid, resume_prompt);
+            Ok((cmd, Some(NativeResumeMode::NativeResume), Some(NativeResumeStatus::Started), Some(sid.clone())))
         } else {
             Ok((
                 resolve_spawn(&self.config, &input.working_directory, prompt),
@@ -360,10 +358,7 @@ impl ConfiguredExecutor {
     }
 
     /// Find a resumable session from the latest agent execution for a loop.
-    async fn find_resumable_session(
-        &self,
-        loop_id: &str,
-    ) -> Result<Option<String>, AgentError> {
+    async fn find_resumable_session(&self, loop_id: &str) -> Result<Option<String>, AgentError> {
         let latest = self
             .repos
             .lock()
@@ -377,9 +372,7 @@ impl ConfiguredExecutor {
             None => return Ok(None),
         };
 
-        let valid_statuses = [
-            "running", "cancelling", "killed", "timeout", "failed", "completed",
-        ];
+        let valid_statuses = ["running", "cancelling", "killed", "timeout", "failed", "completed"];
 
         let vendor_matches = latest.vendor == self.config.vendor.as_str();
         let has_session = latest.native_session_id.is_some();
@@ -412,6 +405,10 @@ pub struct Execution {
     input: RunInput,
     execution_id: String,
     max_output_bytes: usize,
+    /// Whether claude is wrapped with script(1) to provide a PTY.
+    script_wrapper: bool,
+    /// Path to script(1) output file for PTY capture.
+    script_output: std::path::PathBuf,
 }
 
 impl Execution {
@@ -559,11 +556,7 @@ impl Execution {
                 s.timed_out = true;
                 s.timeout_type = Some(TimeoutType::MaxRuntime.as_str().to_string());
 
-                tracing::info!(
-                    "Max runtime timeout after {:?} (limit {:?})",
-                    start.elapsed(),
-                    max_runtime
-                );
+                tracing::info!("Max runtime timeout after {:?} (limit {:?})", start.elapsed(), max_runtime);
 
                 if let Some(pid) = s.pid {
                     let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
@@ -609,20 +602,27 @@ impl Execution {
                 let stderr_str = String::from_utf8_lossy(&s.stderr_buffer).to_string();
 
                 let combined = format!("{}\n{}", stdout_str, stderr_str);
-                let (parse_status, completion_payload) = parse_completion(&combined);
+                // If script wrapper was used, also read the script output file
+                let mut from_script_local = String::new();
+                if self.script_wrapper && !self.script_output.as_os_str().is_empty() {
+                    if let Ok(content) = tokio::fs::read_to_string(&self.script_output).await {
+                        from_script_local = content;
+                    }
+                }
+                let combined_with_pty = if !from_script_local.is_empty() {
+                    format!("{}\n{}", combined, from_script_local)
+                } else {
+                    combined.clone()
+                };
+                let (parse_status, completion_payload) = parse_completion(&combined_with_pty);
 
-                let _native_sid = s.native_session_id.clone().or_else(|| {
-                    extract_native_session_id(&combined)
-                });
+                let _native_sid = s.native_session_id.clone().or_else(|| extract_native_session_id(&combined_with_pty));
 
                 let elapsed = start.elapsed().as_secs() as i64;
 
                 let result_val = AgentResult {
                     status: final_status.to_string(),
-                    summary: completion_payload
-                        .as_ref()
-                        .map(|p| p.summary.clone())
-                        .unwrap_or_default(),
+                    summary: completion_payload.as_ref().map(|p| p.summary.clone()).unwrap_or_default(),
                     stdout: stdout_str,
                     stderr: stderr_str,
                     parse_status: parse_status.as_str().to_string(),
@@ -631,18 +631,9 @@ impl Execution {
                     } else {
                         None
                     },
-                    artifacts: completion_payload
-                        .as_ref()
-                        .map(|p| p.artifacts.clone())
-                        .unwrap_or_default(),
-                    changed_files: completion_payload
-                        .as_ref()
-                        .map(|p| p.changed_files.clone())
-                        .unwrap_or_default(),
-                    commits: completion_payload
-                        .as_ref()
-                        .map(|p| p.commits.clone())
-                        .unwrap_or_default(),
+                    artifacts: completion_payload.as_ref().map(|p| p.artifacts.clone()).unwrap_or_default(),
+                    changed_files: completion_payload.as_ref().map(|p| p.changed_files.clone()).unwrap_or_default(),
+                    commits: completion_payload.as_ref().map(|p| p.commits.clone()).unwrap_or_default(),
                     heartbeat_count: s.heartbeat_count,
                     timeout_type: s.timeout_type.clone(),
                     configured_idle_timeout_seconds: heartbeat_timeout.as_secs() as i64,
@@ -675,16 +666,22 @@ impl Execution {
         let stdout_str = String::from_utf8_lossy(&s.stdout_buffer).to_string();
         let stderr_str = String::from_utf8_lossy(&s.stderr_buffer).to_string();
         let combined = format!("{}\n{}", stdout_str, stderr_str);
-        let (parse_status, completion_payload) = parse_completion(&combined);
+        // If script wrapper was used, also read the script output file
+        let mut from_script = String::new();
+        if self.script_wrapper {
+            if let Ok(content) = tokio::fs::read_to_string(&self.script_output).await {
+                from_script = content;
+            }
+        }
+        let combined_with_pty =
+            if !from_script.is_empty() { format!("{}\n{}", combined, from_script) } else { combined.clone() };
+        let (parse_status, completion_payload) = parse_completion(&combined_with_pty);
 
         let elapsed = start.elapsed().as_secs() as i64;
 
         let result_val = AgentResult {
             status: final_status.to_string(),
-            summary: completion_payload
-                .as_ref()
-                .map(|p| p.summary.clone())
-                .unwrap_or_default(),
+            summary: completion_payload.as_ref().map(|p| p.summary.clone()).unwrap_or_default(),
             stdout: stdout_str,
             stderr: stderr_str,
             parse_status: parse_status.as_str().to_string(),
@@ -693,18 +690,9 @@ impl Execution {
             } else {
                 None
             },
-            artifacts: completion_payload
-                .as_ref()
-                .map(|p| p.artifacts.clone())
-                .unwrap_or_default(),
-            changed_files: completion_payload
-                .as_ref()
-                .map(|p| p.changed_files.clone())
-                .unwrap_or_default(),
-            commits: completion_payload
-                .as_ref()
-                .map(|p| p.commits.clone())
-                .unwrap_or_default(),
+            artifacts: completion_payload.as_ref().map(|p| p.artifacts.clone()).unwrap_or_default(),
+            changed_files: completion_payload.as_ref().map(|p| p.changed_files.clone()).unwrap_or_default(),
+            commits: completion_payload.as_ref().map(|p| p.commits.clone()).unwrap_or_default(),
             heartbeat_count: s.heartbeat_count,
             timeout_type: s.timeout_type.clone(),
             configured_idle_timeout_seconds: heartbeat_timeout.as_secs() as i64,

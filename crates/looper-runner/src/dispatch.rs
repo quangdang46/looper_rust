@@ -51,9 +51,7 @@ pub fn parse_slash_command(body: &str, configured: &[String]) -> Option<String> 
 
             if &line_bytes[..cmd_bytes.len()] == cmd_bytes {
                 // Verify boundary: end of line or whitespace after command
-                if line_bytes.len() == cmd_bytes.len()
-                    || line_bytes[cmd_bytes.len()].is_ascii_whitespace()
-                {
+                if line_bytes.len() == cmd_bytes.len() || line_bytes[cmd_bytes.len()].is_ascii_whitespace() {
                     return Some(cmd.clone());
                 }
             }
@@ -66,11 +64,7 @@ pub fn parse_slash_command(body: &str, configured: &[String]) -> Option<String> 
 /// Find exactly one dispatch label from a list of labels.
 /// Returns `None` if zero or more than one dispatch/ label exists.
 pub fn single_dispatch_label(labels: &[String]) -> Option<String> {
-    let dispatch_labels: Vec<&str> = labels
-        .iter()
-        .filter(|l| l.starts_with("dispatch/"))
-        .map(|l| l.as_str())
-        .collect();
+    let dispatch_labels: Vec<&str> = labels.iter().filter(|l| l.starts_with("dispatch/")).map(|l| l.as_str()).collect();
 
     if dispatch_labels.len() == 1 {
         Some(dispatch_labels[0].to_string())
@@ -80,10 +74,7 @@ pub fn single_dispatch_label(labels: &[String]) -> Option<String> {
 }
 
 /// Return the trigger labels for a given dispatch label.
-pub fn trigger_labels_for_dispatch(
-    dispatch_label: &str,
-    cfg: &DispatchConfig,
-) -> Vec<String> {
+pub fn trigger_labels_for_dispatch(dispatch_label: &str, cfg: &DispatchConfig) -> Vec<String> {
     match dispatch_label {
         DISPATCH_PLAN => cfg.planner_trigger_labels.clone(),
         DISPATCH_IMPLEMENT => cfg.worker_trigger_labels.clone(),
@@ -93,10 +84,7 @@ pub fn trigger_labels_for_dispatch(
 
 /// Return labels from `want` that are not in `existing`.
 pub fn missing_labels(existing: &[String], want: &[String]) -> Vec<String> {
-    want.iter()
-        .filter(|w| !existing.contains(w))
-        .cloned()
-        .collect()
+    want.iter().filter(|w| !existing.contains(w)).cloned().collect()
 }
 
 /// Check whether this issue/needs a dependency gate before dispatching.
@@ -124,8 +112,7 @@ pub fn needs_dependency_gate(
             && dispatch_label.is_some()
             && dispatch_label.is_some_and(|d| {
                 let command = slash_command.unwrap_or("");
-                (d == DISPATCH_PLAN && command == "/plan")
-                    || (d == DISPATCH_IMPLEMENT && command == "/implement")
+                (d == DISPATCH_PLAN && command == "/plan") || (d == DISPATCH_IMPLEMENT && command == "/implement")
             })
             && !has_trigger_labels
     }
@@ -151,10 +138,7 @@ pub fn decide(
 ) -> DispatchAction {
     let has_triaged = labels.contains(&cfg.triaged_label);
     let dispatch_label = single_dispatch_label(labels);
-    let has_hold = cfg
-        .hold_label
-        .as_ref()
-        .is_some_and(|h| labels.contains(h));
+    let has_hold = cfg.hold_label.as_ref().is_some_and(|h| labels.contains(h));
 
     match cfg.mode {
         DispatchMode::HumanGated => {
@@ -232,11 +216,7 @@ pub fn decide(
                     failure_comment_body: Some(format!(
                         "Slash command `{cmd}` does not match dispatch label `{d_label}`. \
                          Use `/{expected_cmd}` instead or update the dispatch label.",
-                        expected_cmd = if d_label == DISPATCH_PLAN {
-                            "plan"
-                        } else {
-                            "implement"
-                        }
+                        expected_cmd = if d_label == DISPATCH_PLAN { "plan" } else { "implement" }
                     )),
                 };
             }
@@ -306,9 +286,7 @@ pub fn decide(
             }
 
             // Past autonomous delay?
-            let past_delay = triaged_at.is_some_and(|t| {
-                (now - t).num_seconds() >= cfg.autonomous_delay.num_seconds()
-            });
+            let past_delay = triaged_at.is_some_and(|t| (now - t).num_seconds() >= cfg.autonomous_delay.num_seconds());
 
             if !past_delay {
                 return DispatchAction::no_op();
@@ -349,27 +327,15 @@ mod tests {
     #[test]
     fn test_parse_slash_command_plan() {
         let cfg = vec!["/plan".to_string(), "/implement".to_string()];
-        assert_eq!(
-            parse_slash_command("/plan", &cfg),
-            Some("/plan".to_string())
-        );
-        assert_eq!(
-            parse_slash_command("  /plan  ", &cfg),
-            Some("/plan".to_string())
-        );
-        assert_eq!(
-            parse_slash_command("/plan something", &cfg),
-            Some("/plan".to_string())
-        );
+        assert_eq!(parse_slash_command("/plan", &cfg), Some("/plan".to_string()));
+        assert_eq!(parse_slash_command("  /plan  ", &cfg), Some("/plan".to_string()));
+        assert_eq!(parse_slash_command("/plan something", &cfg), Some("/plan".to_string()));
     }
 
     #[test]
     fn test_parse_slash_command_implement() {
         let cfg = vec!["/plan".to_string(), "/implement".to_string()];
-        assert_eq!(
-            parse_slash_command("/implement", &cfg),
-            Some("/implement".to_string())
-        );
+        assert_eq!(parse_slash_command("/implement", &cfg), Some("/implement".to_string()));
     }
 
     #[test]
@@ -481,10 +447,7 @@ mod tests {
 
     #[test]
     fn test_decide_human_gated_unauthorized() {
-        let cfg = DispatchConfig {
-            allowed_users: vec!["admin".into()],
-            ..Default::default()
-        };
+        let cfg = DispatchConfig { allowed_users: vec!["admin".into()], ..Default::default() };
         let action = decide(
             &["looper:triaged".into(), "dispatch/plan".into()],
             &[("random".into(), "/plan".into(), 42)],
@@ -542,16 +505,9 @@ mod tests {
 
     #[test]
     fn test_decide_autonomous_hold() {
-        let cfg = DispatchConfig {
-            mode: DispatchMode::Autonomous,
-            ..Default::default()
-        };
+        let cfg = DispatchConfig { mode: DispatchMode::Autonomous, ..Default::default() };
         let action = decide(
-            &[
-                "looper:triaged".into(),
-                "dispatch/plan".into(),
-                "looper:hold".into(),
-            ],
+            &["looper:triaged".into(), "dispatch/plan".into(), "looper:hold".into()],
             &[],
             &always_authorized,
             Some(Utc::now()),

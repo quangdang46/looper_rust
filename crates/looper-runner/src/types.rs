@@ -115,31 +115,21 @@ impl SpecPRInfo {
         pr_number: i64,
     ) -> Self {
         // Extract spec path via regex /Spec:\s*(.+)$/im
-        let spec_re = regex::Regex::new(r"(?im)^Spec:\s*(.+)$").unwrap();
+        let spec_re = regex::Regex::new(r"(?im)(?:^Spec:\s*(.+)$|^specPath:\s*(.+)$|^## Spec:\s*(.+)$)").unwrap();
         let spec_path = spec_re
             .captures(body)
-            .and_then(|c| c.get(1))
+            .and_then(|c| c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)))
             .map(|m| m.as_str().trim().to_string())
             .unwrap_or_default();
 
         let phase = SpecPhase::from_labels(labels);
 
-        let has_changes_requested = reviews.iter().any(|r| {
-            r.get("state")
-                .and_then(|v| v.as_str())
-                == Some("CHANGES_REQUESTED")
-        });
+        let has_changes_requested =
+            reviews.iter().any(|r| r.get("state").and_then(|v| v.as_str()) == Some("CHANGES_REQUESTED"));
 
         let review_clean = !has_changes_requested && phase != SpecPhase::NeedsHuman;
 
-        Self {
-            phase,
-            spec_path,
-            has_changes_requested,
-            review_clean,
-            pr_number,
-            body: body.to_string(),
-        }
+        Self { phase, spec_path, has_changes_requested, review_clean, pr_number, body: body.to_string() }
     }
 }
 
@@ -179,8 +169,16 @@ pub mod fixer_steps {
     pub const RESOLVE_COMMENTS: &str = "resolve-comments";
     pub const RECHECK: &str = "recheck";
     pub const ALL: &[&str] = &[
-        DISCOVER_PR, CLAIM_PR, COLLECT_FIXES, PREPARE_WORKTREE, REPAIR, VALIDATE, PUSH,
-        RECONCILE_COMMITS, RESOLVE_COMMENTS, RECHECK,
+        DISCOVER_PR,
+        CLAIM_PR,
+        COLLECT_FIXES,
+        PREPARE_WORKTREE,
+        REPAIR,
+        VALIDATE,
+        PUSH,
+        RECONCILE_COMMITS,
+        RESOLVE_COMMENTS,
+        RECHECK,
     ];
 }
 
@@ -191,9 +189,7 @@ pub mod worker_steps {
     pub const EXECUTE: &str = "execute";
     pub const VALIDATE: &str = "validate";
     pub const OPEN_PR: &str = "open-pr";
-    pub const ALL: &[&str] = &[
-        PREPARE_WORK, PREPARE_WORKTREE, PLAN, EXECUTE, VALIDATE, OPEN_PR,
-    ];
+    pub const ALL: &[&str] = &[PREPARE_WORK, PREPARE_WORKTREE, PLAN, EXECUTE, VALIDATE, OPEN_PR];
 }
 
 // ---------------------------------------------------------------------------
@@ -326,11 +322,7 @@ pub struct RetryBudget {
 
 impl RetryBudget {
     pub fn new(capacity: usize, remaining: std::ops::Range<usize>) -> Self {
-        Self {
-            transient_retries: capacity,
-            max_indeterminate_duration_secs: 300,
-            remaining_range: remaining,
-        }
+        Self { transient_retries: capacity, max_indeterminate_duration_secs: 300, remaining_range: remaining }
     }
 
     pub fn remaining(&self) -> usize {
@@ -340,11 +332,7 @@ impl RetryBudget {
 
 impl Default for RetryBudget {
     fn default() -> Self {
-        Self {
-            transient_retries: 5,
-            max_indeterminate_duration_secs: 300,
-            remaining_range: 0..0,
-        }
+        Self { transient_retries: 5, max_indeterminate_duration_secs: 300, remaining_range: 0..0 }
     }
 }
 

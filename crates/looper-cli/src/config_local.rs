@@ -7,12 +7,10 @@ use crate::error::CliError;
 
 /// Determine the config directory (~/.config/looper or $XDG_CONFIG_HOME/looper).
 pub fn config_dir() -> Result<PathBuf, CliError> {
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".config")
-        });
+    let base = std::env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        PathBuf::from(home).join(".config")
+    });
     Ok(base.join("looper"))
 }
 
@@ -42,16 +40,13 @@ pub fn write_raw(content: &str) -> Result<(), CliError> {
 /// Get a config value by dotted key path (e.g. "server.host").
 pub fn get(key: &str) -> Result<(), CliError> {
     let raw = read_raw()?;
-    let value: Value = toml::from_str(&raw)
-        .map_err(|e| CliError::config(format!("parse error: {e}")))?;
+    let value: Value = toml::from_str(&raw).map_err(|e| CliError::config(format!("parse error: {e}")))?;
     let parts: Vec<&str> = key.split('.').collect();
     let mut current = &value;
     for part in &parts {
         match current {
             Value::Object(map) => {
-                current = map.get(*part).ok_or_else(|| {
-                    CliError::config(format!("key '{key}' not found"))
-                })?;
+                current = map.get(*part).ok_or_else(|| CliError::config(format!("key '{key}' not found")))?;
             }
             _ => return Err(CliError::config(format!("cannot traverse into {current:?}"))),
         }
@@ -62,16 +57,11 @@ pub fn get(key: &str) -> Result<(), CliError> {
 
 /// Set a config value by dotted key path. Creates intermediate maps.
 pub fn set(key: &str, raw_value: &str) -> Result<(), CliError> {
-    let raw = if config_file_path()?.exists() {
-        read_raw()?
-    } else {
-        String::new()
-    };
+    let raw = if config_file_path()?.exists() { read_raw()? } else { String::new() };
     let mut value: Value = if raw.is_empty() {
         Value::Object(serde_json::Map::new())
     } else {
-        toml::from_str(&raw)
-            .map_err(|e| CliError::config(format!("parse error: {e}")))?
+        toml::from_str(&raw).map_err(|e| CliError::config(format!("parse error: {e}")))?
     };
 
     // Parse the raw value as TOML to get typed value
@@ -83,16 +73,14 @@ pub fn set(key: &str, raw_value: &str) -> Result<(), CliError> {
         .unwrap_or_else(|_| toml::Value::String(raw_value.into()));
 
     // Convert TOML value to JSON value via serde_json
-    let parsed_json: Value = serde_json::to_value(&parsed_toml)
-        .map_err(|e| CliError::config(format!("conversion error: {e}")))?;
+    let parsed_json: Value =
+        serde_json::to_value(&parsed_toml).map_err(|e| CliError::config(format!("conversion error: {e}")))?;
 
     set_nested(&mut value, key, parsed_json)?;
 
     // Serialize back to TOML
-    let toml_value = json_to_toml(&value)
-        .map_err(|e| CliError::config(format!("serialization error: {e}")))?;
-    let out = toml::to_string(&toml_value)
-        .map_err(|e| CliError::config(format!("TOML serialization error: {e}")))?;
+    let toml_value = json_to_toml(&value).map_err(|e| CliError::config(format!("serialization error: {e}")))?;
+    let out = toml::to_string(&toml_value).map_err(|e| CliError::config(format!("TOML serialization error: {e}")))?;
     write_raw(&out)?;
     println!("Set {key} = {raw_value}");
     Ok(())
@@ -101,13 +89,10 @@ pub fn set(key: &str, raw_value: &str) -> Result<(), CliError> {
 /// Unset (delete) a config key by dotted path.
 pub fn unset(key: &str) -> Result<(), CliError> {
     let raw = read_raw()?;
-    let mut value: Value = toml::from_str(&raw)
-        .map_err(|e| CliError::config(format!("parse error: {e}")))?;
+    let mut value: Value = toml::from_str(&raw).map_err(|e| CliError::config(format!("parse error: {e}")))?;
     remove_nested(&mut value, key)?;
-    let toml_value = json_to_toml(&value)
-        .map_err(|e| CliError::config(format!("serialization error: {e}")))?;
-    let out = toml::to_string(&toml_value)
-        .map_err(|e| CliError::config(format!("TOML serialization error: {e}")))?;
+    let toml_value = json_to_toml(&value).map_err(|e| CliError::config(format!("serialization error: {e}")))?;
+    let out = toml::to_string(&toml_value).map_err(|e| CliError::config(format!("TOML serialization error: {e}")))?;
     write_raw(&out)?;
     println!("Unset {key}");
     Ok(())
@@ -141,10 +126,8 @@ pub fn migrate() -> Result<(), CliError> {
     }
     let json_raw = fs::read_to_string(&legacy)?;
     let json_value: Value = serde_json::from_str(&json_raw)?;
-    let toml_value = json_to_toml(&json_value)
-        .map_err(|e| CliError::config(format!("conversion error: {e}")))?;
-    let out = toml::to_string_pretty(&toml_value)
-        .map_err(|e| CliError::config(format!("TOML error: {e}")))?;
+    let toml_value = json_to_toml(&json_value).map_err(|e| CliError::config(format!("conversion error: {e}")))?;
+    let out = toml::to_string_pretty(&toml_value).map_err(|e| CliError::config(format!("TOML error: {e}")))?;
     write_raw(&out)?;
 
     // Backup legacy
@@ -201,9 +184,7 @@ fn remove_nested(root: &mut Value, key: &str) -> Result<(), CliError> {
         } else {
             match current {
                 Value::Object(map) => {
-                    current = map.get_mut(*part).ok_or_else(|| {
-                        CliError::config(format!("key '{key}' not found"))
-                    })?;
+                    current = map.get_mut(*part).ok_or_else(|| CliError::config(format!("key '{key}' not found")))?;
                 }
                 _ => return Err(CliError::config(format!("cannot traverse '{key}'"))),
             }

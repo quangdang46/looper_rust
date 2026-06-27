@@ -16,10 +16,9 @@
 // same package (the lib crate, other binary targets).
 #[allow(unused_imports)]
 use {
-    anyhow as _, looper_agent as _, looper_config as _, looper_e2e as _, looper_git as _,
-    looper_github as _, looper_runner as _, looper_scheduler as _, looper_service as _,
-    looper_storage as _, looper_types as _, tempfile as _, thiserror as _, tokio as _,
-    uuid as _,
+    anyhow as _, looper_agent as _, looper_config as _, looper_e2e as _, looper_git as _, looper_github as _,
+    looper_runner as _, looper_scheduler as _, looper_service as _, looper_storage as _, looper_types as _,
+    tempfile as _, thiserror as _, tokio as _, uuid as _,
 };
 
 use regex::Regex;
@@ -209,8 +208,7 @@ struct Invocation {
 
 // Lazy regex for closing issue keywords in PR bodies.
 static CLOSES_ISSUE_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b")
-        .expect("valid closes-issue regex")
+    Regex::new(r"(?i)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b").expect("valid closes-issue regex")
 });
 
 // ---------------------------------------------------------------------------
@@ -278,8 +276,7 @@ fn main() {
         );
     }
 
-    if let Err(e) = dispatch(&mode, &schema_doc, &st, &stdin_str, &args, &state_path, &git_path)
-    {
+    if let Err(e) = dispatch(&mode, &schema_doc, &st, &stdin_str, &args, &state_path, &git_path) {
         fatalf(1, &format!("{e}\n"));
     }
 }
@@ -319,11 +316,7 @@ fn dispatch(
         }
         "pr view" => {
             let fields = requested_json_fields(args);
-            let allowed = schema_doc
-                .json_field_allowlist
-                .get(&key)
-                .cloned()
-                .unwrap_or_default();
+            let allowed = schema_doc.json_field_allowlist.get(&key).cloned().unwrap_or_default();
             if allowed.is_empty() && mode == "strict" {
                 return Err(format!("missing fake-gh allowlist for {key}").into());
             }
@@ -341,11 +334,7 @@ fn dispatch(
         }
         "issue list" | "pr list" => {
             let fields = requested_json_fields(args);
-            let allowed = schema_doc
-                .json_field_allowlist
-                .get(&key)
-                .cloned()
-                .unwrap_or_default();
+            let allowed = schema_doc.json_field_allowlist.get(&key).cloned().unwrap_or_default();
             if allowed.is_empty() && mode == "strict" {
                 return Err(format!("missing fake-gh allowlist for {key}").into());
             }
@@ -409,10 +398,7 @@ fn handle_api(
     }
 
     // Review comments
-    if route.contains("/pulls/")
-        && route.contains("/reviews/")
-        && route.ends_with("/comments")
-    {
+    if route.contains("/pulls/") && route.contains("/reviews/") && route.ends_with("/comments") {
         if let Some(true) = handle_pr_review_comments(st, &route)? {
             return Ok(());
         }
@@ -464,12 +450,7 @@ fn handle_api(
 }
 
 /// Build a `pr view` JSON from the state's PullRequests.
-fn build_pr_view_json(
-    st: &State,
-    args: &[String],
-    fields: &[String],
-    git_path: &str,
-) -> Option<String> {
+fn build_pr_view_json(st: &State, args: &[String], fields: &[String], git_path: &str) -> Option<String> {
     let repo = flag_value(args, "--repo");
     let pr_number = parse_pr_number(args)?;
     let pr = lookup_pull_request(st, &repo, pr_number, git_path)?;
@@ -543,18 +524,11 @@ fn handle_pr_merge(
 }
 
 fn close_linked_issue_route(st: &mut State, repo: &str, issue_number: i64) {
-    let path = format!(
-        "repos/{}/issues/{}",
-        normalize_repo_path(repo),
-        issue_number
-    );
+    let path = format!("repos/{}/issues/{}", normalize_repo_path(repo), issue_number);
     if let Some(route_val) = st.routes.get_mut(&path) {
         if let Some(obj) = route_val.as_object_mut() {
             obj.insert("state".to_string(), serde_json::Value::String("closed".into()));
-            obj.insert(
-                "state_reason".to_string(),
-                serde_json::Value::String("completed".into()),
-            );
+            obj.insert("state_reason".to_string(), serde_json::Value::String("completed".into()));
         }
     }
 }
@@ -580,10 +554,7 @@ fn pr_merge_method(args: &[String]) -> &'static str {
 
 // --- Review comments ---
 
-fn handle_pr_review_comments(
-    st: &State,
-    route: &str,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+fn handle_pr_review_comments(st: &State, route: &str) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     let (repo, pr_number, review_id) = parse_pr_review_comments_route(route);
     if review_id.is_empty() {
         return Ok(None);
@@ -622,25 +593,13 @@ fn handle_pr_reviews(
     }
 
     let raw_method = flag_value(args, "--method");
-    let method = if raw_method.is_empty() {
-        "GET".to_string()
-    } else {
-        raw_method.to_uppercase()
-    };
+    let method = if raw_method.is_empty() { "GET".to_string() } else { raw_method.to_uppercase() };
 
     if method == "POST" {
         // Parse review create payload from stdin
         let payload: serde_json::Value = serde_json::from_str(stdin)?;
-        let body = payload
-            .get("body")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let event = payload
-            .get("event")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+        let body = payload.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let event = payload.get("event").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
         let mut st = st.clone();
         let key = format!("{repo}#{pr_number}");
@@ -678,11 +637,7 @@ fn parse_pr_review_route(route: &str) -> (String, i64) {
     if !route.starts_with(MARKER) || !route.ends_with("/reviews") {
         return (String::new(), 0);
     }
-    let rest = route
-        .strip_prefix(MARKER)
-        .unwrap_or("")
-        .strip_suffix("/reviews")
-        .unwrap_or("");
+    let rest = route.strip_prefix(MARKER).unwrap_or("").strip_suffix("/reviews").unwrap_or("");
     let parts: Vec<&str> = rest.split('/').collect();
     if parts.len() < 4 || parts[2] != "pulls" {
         return (String::new(), 0);
@@ -696,10 +651,7 @@ fn parse_pr_review_route(route: &str) -> (String, i64) {
 
 fn parse_pr_review_comments_route(route: &str) -> (String, i64, String) {
     const MARKER: &str = "repos/";
-    if !route.starts_with(MARKER)
-        || !route.contains("/reviews/")
-        || !route.ends_with("/comments")
-    {
+    if !route.starts_with(MARKER) || !route.contains("/reviews/") || !route.ends_with("/comments") {
         return (String::new(), 0, String::new());
     }
     let rest = route.strip_prefix(MARKER).unwrap_or("");
@@ -711,11 +663,7 @@ fn parse_pr_review_comments_route(route: &str) -> (String, i64, String) {
         Ok(n) => n,
         Err(_) => return (String::new(), 0, String::new()),
     };
-    (
-        format!("{}/{}", parts[0], parts[1]),
-        pr_number,
-        parts[5].to_string(),
-    )
+    (format!("{}/{}", parts[0], parts[1]), pr_number, parts[5].to_string())
 }
 
 fn review_state_for_event(event: &str) -> &'static str {
@@ -741,12 +689,7 @@ struct HydratedPR<'a> {
 }
 
 /// Look up a pull request by repo + number and return a hydrated version.
-fn lookup_pull_request<'a>(
-    st: &'a State,
-    repo: &str,
-    pr_number: i64,
-    git_path: &str,
-) -> Option<HydratedPR<'a>> {
+fn lookup_pull_request<'a>(st: &'a State, repo: &str, pr_number: i64, git_path: &str) -> Option<HydratedPR<'a>> {
     if !repo.is_empty() {
         let key = format!("{repo}#{pr_number}");
         if let Some(pr) = st.pull_requests.get(&key) {
@@ -762,11 +705,7 @@ fn lookup_pull_request<'a>(
 }
 
 fn hydrate_pr<'a>(pr: &'a PullRequestState, git_path: &str) -> HydratedPR<'a> {
-    let git_bin = first_non_empty(&[
-        &env_var(ENV_GIT_PATH).unwrap_or_default(),
-        git_path,
-        "git",
-    ]);
+    let git_bin = first_non_empty(&[&env_var(ENV_GIT_PATH).unwrap_or_default(), git_path, "git"]);
     let head_sha = if !pr.git_dir.is_empty() {
         let ref_str = first_non_empty(&[&pr.head_ref, &pr.head_ref_name]);
         resolve_git_ref(&git_bin, &pr.git_dir, &ref_str).unwrap_or_else(|| pr.head_sha.clone())
@@ -780,41 +719,19 @@ fn hydrate_pr<'a>(pr: &'a PullRequestState, git_path: &str) -> HydratedPR<'a> {
         pr.base_sha.clone()
     };
 
-    let state = if pr.state.is_empty() {
-        "OPEN".to_string()
-    } else {
-        pr.state.clone()
-    };
+    let state = if pr.state.is_empty() { "OPEN".to_string() } else { pr.state.clone() };
     let url = if pr.url.is_empty() && !pr.repo.is_empty() && pr.number > 0 {
         format!("https://github.com/{}/pull/{}", pr.repo, pr.number)
     } else {
         pr.url.clone()
     };
-    let author = if pr.author.is_empty() {
-        "octocat".to_string()
-    } else {
-        pr.author.clone()
-    };
-    let merge_state_status = if pr.merge_state_status.is_empty() {
-        "CLEAN".to_string()
-    } else {
-        pr.merge_state_status.clone()
-    };
-    let mergeable_state = if pr.mergeable_state.is_empty() {
-        merge_state_status.to_lowercase()
-    } else {
-        pr.mergeable_state.clone()
-    };
-    let updated_at = if pr.updated_at.is_empty() {
-        "2026-05-12T00:00:00Z".to_string()
-    } else {
-        pr.updated_at.clone()
-    };
-    let created_at = if pr.created_at.is_empty() {
-        updated_at.clone()
-    } else {
-        pr.created_at.clone()
-    };
+    let author = if pr.author.is_empty() { "octocat".to_string() } else { pr.author.clone() };
+    let merge_state_status =
+        if pr.merge_state_status.is_empty() { "CLEAN".to_string() } else { pr.merge_state_status.clone() };
+    let mergeable_state =
+        if pr.mergeable_state.is_empty() { merge_state_status.to_lowercase() } else { pr.mergeable_state.clone() };
+    let updated_at = if pr.updated_at.is_empty() { "2026-05-12T00:00:00Z".to_string() } else { pr.updated_at.clone() };
+    let created_at = if pr.created_at.is_empty() { updated_at.clone() } else { pr.created_at.clone() };
 
     HydratedPR {
         inner: pr,
@@ -843,12 +760,8 @@ fn pr_field_value(pr: &HydratedPR, field: &str) -> serde_json::Value {
         "isDraft" => serde_json::json!(pr.inner.is_draft),
         "reviewDecision" => serde_json::json!(pr.inner.review_decision),
         "labels" => {
-            let items: Vec<serde_json::Value> = pr
-                .inner
-                .labels
-                .iter()
-                .map(|l| serde_json::json!({"name": l}))
-                .collect();
+            let items: Vec<serde_json::Value> =
+                pr.inner.labels.iter().map(|l| serde_json::json!({"name": l})).collect();
             serde_json::json!(items)
         }
         "headRefName" => serde_json::json!(pr.inner.head_ref_name),
@@ -888,11 +801,7 @@ fn pr_field_value(pr: &HydratedPR, field: &str) -> serde_json::Value {
 
 // --- PR API handler ---
 
-fn handle_pr_api(
-    st: &State,
-    route: &str,
-    git_path: &str,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+fn handle_pr_api(st: &State, route: &str, git_path: &str) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     const MARKER: &str = "repos/";
     if !route.starts_with(MARKER) || !route.contains("/pulls/") || route.contains("/reviews") {
         return Ok(None);
@@ -907,12 +816,7 @@ fn handle_pr_api(
         Err(_) => return Ok(None),
     };
 
-    let Some(pr) = lookup_pull_request(
-        st,
-        &format!("{}/{}", parts[0], parts[1]),
-        pr_number,
-        git_path,
-    ) else {
+    let Some(pr) = lookup_pull_request(st, &format!("{}/{}", parts[0], parts[1]), pr_number, git_path) else {
         return Ok(None);
     };
 
@@ -940,15 +844,9 @@ fn handle_pr_api(
 
 // --- Check runs API handler ---
 
-fn handle_check_runs_api(
-    st: &State,
-    route: &str,
-) -> Result<Option<bool>, Box<dyn std::error::Error>> {
+fn handle_check_runs_api(st: &State, route: &str) -> Result<Option<bool>, Box<dyn std::error::Error>> {
     const MARKER: &str = "repos/";
-    if !route.starts_with(MARKER)
-        || !route.contains("/commits/")
-        || !route.ends_with("/check-runs")
-    {
+    if !route.starts_with(MARKER) || !route.contains("/commits/") || !route.ends_with("/check-runs") {
         return Ok(None);
     }
     let rest = route.strip_prefix(MARKER).unwrap_or("");
@@ -993,9 +891,7 @@ fn handle_graphql_state(
         if comment_id.is_empty() {
             return Ok(None);
         }
-        println!(
-            "{{\"data\":{{\"addPullRequestReviewThreadReply\":{{\"comment\":{{\"id\":\"{comment_id}\"}}}}}}}}"
-        );
+        println!("{{\"data\":{{\"addPullRequestReviewThreadReply\":{{\"comment\":{{\"id\":\"{comment_id}\"}}}}}}}}");
         return Ok(Some(true));
     }
 
@@ -1188,35 +1084,23 @@ fn build_compare_payload(route: &str, git_path: &str) -> Option<String> {
     }
     let base = parts[0];
     let head = parts[1];
-    let git_bin = first_non_empty(&[
-        &env_var(ENV_GIT_PATH).unwrap_or_default(),
-        git_path,
-        "git",
-    ]);
+    let git_bin = first_non_empty(&[&env_var(ENV_GIT_PATH).unwrap_or_default(), git_path, "git"]);
 
-    let output = Command::new(&git_bin)
-        .args(["rev-list", "--left-right", "--count", &format!("{base}...{head}")])
-        .output();
+    let output =
+        Command::new(&git_bin).args(["rev-list", "--left-right", "--count", &format!("{base}...{head}")]).output();
     let output = match output {
         Ok(o) => o,
         Err(_) => {
-            return Some(
-                r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#
-                    .to_string(),
-            );
+            return Some(r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string());
         }
     };
     if !output.status.success() {
-        return Some(
-            r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string(),
-        );
+        return Some(r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let fields: Vec<&str> = stdout.trim().split_whitespace().collect();
     if fields.len() != 2 {
-        return Some(
-            r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string(),
-        );
+        return Some(r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string());
     }
     let behind: i64 = fields[0].parse().unwrap_or(0);
     let ahead: i64 = fields[1].parse().unwrap_or(0);
@@ -1243,10 +1127,7 @@ fn resolve_git_ref(git_path: &str, git_dir: &str, r#ref: &str) -> Option<String>
     if git_dir.is_empty() || r#ref.is_empty() {
         return None;
     }
-    let output = Command::new(git_path)
-        .args(["--git-dir", git_dir, "rev-parse", r#ref])
-        .output()
-        .ok()?;
+    let output = Command::new(git_path).args(["--git-dir", git_dir, "rev-parse", r#ref]).output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -1333,8 +1214,7 @@ fn takes_value(flag: &str) -> bool {
     }
     matches!(
         flag,
-        "-X"
-            | "--method"
+        "-X" | "--method"
             | "-f"
             | "-F"
             | "--field"
@@ -1363,10 +1243,7 @@ fn requested_json_fields(args: &[String]) -> Vec<String> {
 }
 
 fn split_fields(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
+    raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
 }
 
 fn parse_pr_number(args: &[String]) -> Option<i64> {
@@ -1419,8 +1296,9 @@ fn default_value(field: &str) -> serde_json::Value {
         "headRefOid" => serde_json::json!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"),
         "baseRefOid" => serde_json::json!("basebeefdeadbeefdeadbeefdeadbeefdeadbeef"),
         "author" => serde_json::json!({"login": "octocat"}),
-        "reviewRequests" | "reviews" | "comments" | "statusCheckRollup" | "labels"
-        | "assignees" => serde_json::json!([]),
+        "reviewRequests" | "reviews" | "comments" | "statusCheckRollup" | "labels" | "assignees" => {
+            serde_json::json!([])
+        }
         "authorAssociation" => serde_json::json!("NONE"),
         "updatedAt" => serde_json::json!("2026-05-12T00:00:00Z"),
         "createdAt" => serde_json::json!("2026-05-12T00:00:00Z"),
@@ -1432,11 +1310,7 @@ fn default_value(field: &str) -> serde_json::Value {
     }
 }
 
-fn validate_fields(
-    command: &str,
-    fields: &[String],
-    allowed: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
+fn validate_fields(command: &str, fields: &[String], allowed: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let allow: std::collections::HashSet<&str> = allowed.iter().map(|s| s.as_str()).collect();
     for field in fields {
         if allow.contains(field.as_str()) {
@@ -1444,12 +1318,7 @@ fn validate_fields(
         }
         let mut avail: Vec<&str> = allowed.iter().map(|s| s.as_str()).collect();
         avail.sort_unstable();
-        return Err(format!(
-            "unknown JSON field: {:?}\nAvailable fields:\n  {}\n",
-            field,
-            avail.join("\n  ")
-        )
-        .into());
+        return Err(format!("unknown JSON field: {:?}\nAvailable fields:\n  {}\n", field, avail.join("\n  ")).into());
     }
     let _ = command;
     Ok(())
@@ -1489,11 +1358,8 @@ fn emit_default_json(key: &str, fields: &[String]) -> Result<(), Box<dyn std::er
     for field in fields {
         object.insert(field.clone(), default_value(field));
     }
-    let payload: serde_json::Value = if key.ends_with("list") {
-        serde_json::json!([object])
-    } else {
-        serde_json::json!(object)
-    };
+    let payload: serde_json::Value =
+        if key.ends_with("list") { serde_json::json!([object]) } else { serde_json::json!(object) };
     println!("{payload}");
     Ok(())
 }
@@ -1538,17 +1404,11 @@ fn save_state(path: &str, st: &State) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-fn append_jsonl<P: AsRef<Path>>(
-    path: P,
-    value: &impl Serialize,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn append_jsonl<P: AsRef<Path>>(path: P, value: &impl Serialize) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = path.as_ref().parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path.as_ref())?;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(path.as_ref())?;
     let mut writer = BufWriter::new(file);
     let line = serde_json::to_string(value)?;
     writeln!(writer, "{line}")?;
@@ -1570,15 +1430,7 @@ fn env_var(name: &str) -> Option<String> {
 }
 
 fn collect_env() -> HashMap<String, String> {
-    let keys = [
-        ENV_MODE,
-        ENV_ARTIFACT_DIR,
-        ENV_SCHEMA_PATH,
-        ENV_STATE_PATH,
-        ENV_RECORD_PATH,
-        ENV_GIT_PATH,
-        "HOME",
-    ];
+    let keys = [ENV_MODE, ENV_ARTIFACT_DIR, ENV_SCHEMA_PATH, ENV_STATE_PATH, ENV_RECORD_PATH, ENV_GIT_PATH, "HOME"];
     let mut m = HashMap::new();
     for key in &keys {
         if let Some(val) = env_var(key) {
@@ -1601,9 +1453,7 @@ fn iso_timestamp() -> String {
 }
 
 fn must_getwd() -> String {
-    env::current_dir()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default()
+    env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_default()
 }
 
 fn fatalf(code: i32, msg: &str) -> ! {
@@ -1629,18 +1479,12 @@ impl Default for State {
 
 impl Default for Response {
     fn default() -> Self {
-        Self {
-            stdout: None,
-            stderr: String::new(),
-            exit_code: 0,
-        }
+        Self { stdout: None, stderr: String::new(), exit_code: 0 }
     }
 }
 
 impl Default for Schema {
     fn default() -> Self {
-        Self {
-            json_field_allowlist: HashMap::new(),
-        }
+        Self { json_field_allowlist: HashMap::new() }
     }
 }

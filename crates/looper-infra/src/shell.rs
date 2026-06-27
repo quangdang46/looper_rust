@@ -68,12 +68,7 @@ pub fn run_command_with_timeout(
 }
 
 /// Run a shell command with stdin provided.
-pub fn run_command_with_stdin(
-    cmd: &str,
-    args: &[&str],
-    stdin: &str,
-    cwd: &str,
-) -> Result<CommandResult, String> {
+pub fn run_command_with_stdin(cmd: &str, args: &[&str], stdin: &str, cwd: &str) -> Result<CommandResult, String> {
     let mut child = Command::new(cmd)
         .args(args)
         .current_dir(cwd)
@@ -88,9 +83,7 @@ pub fn run_command_with_stdin(
         let _ = stdin_writer.write_all(stdin.as_bytes());
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("wait {cmd}: {e}"))?;
+    let output = child.wait_with_output().map_err(|e| format!("wait {cmd}: {e}"))?;
 
     Ok(CommandResult {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),

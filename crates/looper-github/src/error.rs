@@ -10,9 +10,7 @@ pub struct TransientError {
 
 impl TransientError {
     pub fn new<E: Into<Box<dyn std::error::Error + Send + Sync>>>(inner: E) -> Self {
-        Self {
-            inner: inner.into(),
-        }
+        Self { inner: inner.into() }
     }
 }
 
@@ -113,9 +111,7 @@ pub fn is_transient_error(err: &GitHubError) -> bool {
         GitHubError::Transient(_) => true,
         GitHubError::CommandExecution(msg) | GitHubError::CommandFailed(msg) => {
             let lower = msg.to_lowercase();
-            TRANSIENT_PATTERNS
-                .iter()
-                .any(|p| lower.contains(p))
+            TRANSIENT_PATTERNS.iter().any(|p| lower.contains(p))
         }
         GitHubError::RateLimit(_) => true,
         _ => false,

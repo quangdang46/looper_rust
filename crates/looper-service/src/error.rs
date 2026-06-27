@@ -21,11 +21,7 @@ pub enum ServiceError {
     LoopHasRunningRun { loop_id: String },
 
     #[error("active loop conflict for type {loop_type}/{target_key} in project {project_id}")]
-    ActiveLoopConflict {
-        project_id: String,
-        loop_type: String,
-        target_key: String,
-    },
+    ActiveLoopConflict { project_id: String, loop_type: String, target_key: String },
 
     #[error("invalid project ID: {0}")]
     InvalidProjectID(String),

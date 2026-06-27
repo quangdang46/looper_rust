@@ -29,8 +29,7 @@ pub struct CWDEvidence {
 pub fn load_cwd_evidence(path: impl AsRef<Path>) -> CWDEvidence {
     let payload = std::fs::read_to_string(path.as_ref())
         .unwrap_or_else(|e| panic!("read cwd evidence at {:?}: {}", path.as_ref(), e));
-    serde_json::from_str(&payload)
-        .unwrap_or_else(|e| panic!("decode cwd evidence at {:?}: {}", path.as_ref(), e))
+    serde_json::from_str(&payload).unwrap_or_else(|e| panic!("decode cwd evidence at {:?}: {}", path.as_ref(), e))
 }
 
 /// Assert that two [`RepoSnapshot`] values are identical (head, status, index tree).
@@ -38,11 +37,7 @@ pub fn load_cwd_evidence(path: impl AsRef<Path>) -> CWDEvidence {
 /// # Panics
 /// Panics if any field differs.
 pub fn assert_repo_unchanged(before: &RepoSnapshot, after: &RepoSnapshot) {
-    assert_eq!(
-        before.head, after.head,
-        "repo head changed: before={} after={}",
-        before.head, after.head
-    );
+    assert_eq!(before.head, after.head, "repo head changed: before={} after={}", before.head, after.head);
     assert_eq!(
         before.status_porcelain, after.status_porcelain,
         "repo status changed:\nbefore:\n{}\nafter:\n{}",
@@ -64,9 +59,7 @@ pub fn assert_cwd_inside_worktree(cwd: &str, worktree_root: &str) {
     let resolved_cwd = resolve_path(cwd);
     let resolved_root = resolve_path(worktree_root);
 
-    if resolved_cwd != resolved_root
-        && !resolved_cwd.starts_with(&format!("{}/", resolved_root))
-    {
+    if resolved_cwd != resolved_root && !resolved_cwd.starts_with(&format!("{}/", resolved_root)) {
         panic!(
             "cwd '{}' (resolved: '{}') is not inside worktree root '{}' (resolved: '{}')",
             cwd, resolved_cwd, worktree_root, resolved_root
@@ -135,12 +128,7 @@ fn resolve_from_existing_parent(path: &Path) -> Option<String> {
         if parent == current {
             return None;
         }
-        missing.push(
-            current
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default(),
-        );
+        missing.push(current.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
         current = parent;
     }
 }
@@ -200,10 +188,7 @@ mod tests {
     #[test]
     fn test_assert_cwd_inside_worktree_exact_match() {
         // If both resolve to the same path, it passes.
-        let cwd = std::env::current_dir()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let cwd = std::env::current_dir().unwrap().to_string_lossy().to_string();
         assert_cwd_inside_worktree(&cwd, &cwd);
     }
 }

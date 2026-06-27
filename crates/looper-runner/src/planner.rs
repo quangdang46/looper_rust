@@ -14,21 +14,19 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use looper_github::types::{CreatePullRequestInput, IssueLabelsInput, ListOpenIssuesInput};
+use looper_github::types::{IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput};
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
-use looper_git::{build_worktree_directory_name, CreateWorktreeInput};
 use looper_git::Gateway as GitGateway;
+use looper_git::{build_worktree_directory_name, CreateWorktreeInput};
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
-    Context, PlannerDiscoveryInput, PlannerDiscoveryResult, PlannerProcessInput,
-    PlannerProcessResult, PlannerScheduler, SchedulerConfig,
+    Context, PlannerDiscoveryInput, PlannerDiscoveryResult, PlannerProcessInput, PlannerProcessResult,
+    PlannerScheduler, SchedulerConfig,
 };
 use looper_storage::eventlog;
-use looper_storage::record::{
-    AppendInput, LoopRecord, NotificationRecord, QueueItemRecord, RunRecord, WorktreeRecord,
-};
+use looper_storage::record::{AppendInput, LoopRecord, NotificationRecord, QueueItemRecord, RunRecord, WorktreeRecord};
 use looper_types::RunStatus;
 
 use crate::types::planner_steps;
@@ -61,28 +59,14 @@ impl Planner {
         git: Option<Arc<GitGateway>>,
         tokio_handle: tokio::runtime::Handle,
     ) -> Self {
-        Self {
-            config: config.clone(),
-            repos,
-            github,
-            agent,
-            git,
-            tokio_handle,
-        }
+        Self { config: config.clone(), repos, github, agent, git, tokio_handle }
     }
 }
 
 impl PlannerScheduler for Planner {
-    fn discover_issues(
-        &self,
-        _ctx: &Context,
-        input: PlannerDiscoveryInput,
-    ) -> PlannerDiscoveryResult {
+    fn discover_issues(&self, _ctx: &Context, input: PlannerDiscoveryInput) -> PlannerDiscoveryResult {
         // Planner discovery scans for un-queued issues that need planning.
-        tracing::debug!(
-            "Planner discover_issues — scanning for unplanned work items in {repo}",
-            repo = input.repo
-        );
+        tracing::debug!("Planner discover_issues — scanning for unplanned work items in {repo}", repo = input.repo);
 
         let mut new_queue_items: Vec<QueueItemRecord> = Vec::new();
 
@@ -103,9 +87,7 @@ impl PlannerScheduler for Planner {
                             "Planner GitHub discovery — {} candidate issue(s) with looper:plan",
                             issues.len()
                         );
-                        let now_iso = Utc::now()
-                            .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                            .to_string();
+                        let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
                         for issue in issues {
                             // Skip issues that have already been
@@ -117,36 +99,22 @@ impl PlannerScheduler for Planner {
                                 );
                                 continue;
                             }
-                            let dedupe_key = format!(
-                                "planner-{}-issue-{}",
-                                input.project_id, issue.number
-                            );
+                            let dedupe_key = format!("planner-{}-issue-{}", input.project_id, issue.number);
 
                             // Dedup: if a queue item with this dedupe_key
                             // already exists, skip.
                             let exists = match self.repos.0.lock() {
-                                Ok(g) => g
-                                    .queue
-                                    .find_active_by_dedupe(&dedupe_key)
-                                    .ok()
-                                    .flatten()
-                                    .is_some(),
+                                Ok(g) => g.queue.find_active_by_dedupe(&dedupe_key).ok().flatten().is_some(),
                                 Err(_) => false,
                             };
                             if exists {
-                                tracing::debug!(
-                                    "Planner skipping issue #{} (already queued)",
-                                    issue.number
-                                );
+                                tracing::debug!("Planner skipping issue #{} (already queued)", issue.number);
                                 continue;
                             }
 
                             // Create a loop for this issue.
                             let loop_id = Uuid::new_v4().to_string();
-                            let loop_seq =
-                                self.repos.0.lock().ok().and_then(|g| {
-                                    g.loops.allocate_seq().ok()
-                                });
+                            let loop_seq = self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok());
                             if let Some(seq) = loop_seq {
                                 let new_loop = LoopRecord {
                                     id: loop_id.clone(),
@@ -174,10 +142,7 @@ impl PlannerScheduler for Planner {
                                 };
                                 if let Ok(g) = self.repos.0.lock() {
                                     if let Err(e) = g.loops.upsert(&new_loop) {
-                                        tracing::warn!(
-                                            "Planner loop upsert failed for issue #{}: {e}",
-                                            issue.number
-                                        );
+                                        tracing::warn!("Planner loop upsert failed for issue #{}: {e}", issue.number);
                                         continue;
                                     }
                                 }
@@ -203,10 +168,7 @@ impl PlannerScheduler for Planner {
                                 claimed_at: None,
                                 started_at: None,
                                 finished_at: None,
-                                lock_key: Some(format!(
-                                    "planner-{}-issue-{}",
-                                    input.project_id, issue.number
-                                )),
+                                lock_key: Some(format!("planner-{}-issue-{}", input.project_id, issue.number)),
                                 payload_json: Some(
                                     serde_json::json!({
                                         "issue_number": issue.number,
@@ -221,27 +183,19 @@ impl PlannerScheduler for Planner {
                                 updated_at: now_iso.clone(),
                             };
                             match self.repos.0.lock() {
-                                Ok(g) => {
-                                    match g
-                                        .queue
-                                        .upsert_active_by_dedupe_or_get_existing(
-                                            &queue_item,
-                                        )
-                                    {
-                                        Ok((inserted, _is_new)) => {
-                                            tracing::info!(
-                                                "Planner enqueued issue #{} (item {})",
-                                                issue.number,
-                                                inserted.id
-                                            );
-                                            new_queue_items.push(inserted);
-                                        }
-                                        Err(e) => tracing::warn!(
-                                            "Planner queue upsert failed for issue #{}: {e}",
-                                            issue.number
-                                        ),
+                                Ok(g) => match g.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
+                                    Ok((inserted, _is_new)) => {
+                                        tracing::info!(
+                                            "Planner enqueued issue #{} (item {})",
+                                            issue.number,
+                                            inserted.id
+                                        );
+                                        new_queue_items.push(inserted);
                                     }
-                                }
+                                    Err(e) => {
+                                        tracing::warn!("Planner queue upsert failed for issue #{}: {e}", issue.number)
+                                    }
+                                },
                                 Err(e) => {
                                     tracing::warn!("Planner lock failed: {e}");
                                 }
@@ -274,22 +228,12 @@ impl PlannerScheduler for Planner {
                 merged.push(item);
             }
         }
-        tracing::debug!(
-            "Planner discover_issues done — {} planner item(s) tracked",
-            merged.len()
-        );
+        tracing::debug!("Planner discover_issues done — {} planner item(s) tracked", merged.len());
 
-        PlannerDiscoveryResult {
-            queue_items: merged,
-            created_loops: vec![],
-        }
+        PlannerDiscoveryResult { queue_items: merged, created_loops: vec![] }
     }
 
-    fn process_claimed_queue_item(
-        &self,
-        ctx: &Context,
-        input: PlannerProcessInput,
-    ) -> PlannerProcessResult {
+    fn process_claimed_queue_item(&self, ctx: &Context, input: PlannerProcessInput) -> PlannerProcessResult {
         let item = &input.item;
         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
@@ -307,13 +251,7 @@ impl PlannerScheduler for Planner {
         // project record. item.repo carries the GitHub URL (for `gh`),
         // but git worktree operations need a local clone path.
         let local_path = match self.repos.0.lock() {
-            Ok(g) => g
-                .projects
-                .get_by_id(&project_id)
-                .ok()
-                .flatten()
-                .map(|p| p.repo_path.clone())
-                .unwrap_or_default(),
+            Ok(g) => g.projects.get_by_id(&project_id).ok().flatten().map(|p| p.repo_path.clone()).unwrap_or_default(),
             Err(_) => String::new(),
         };
 
@@ -431,10 +369,13 @@ impl PlannerScheduler for Planner {
                             run_id: Some(run.id.clone()),
                             entity_type: Some("queue_item".into()),
                             entity_id: Some(item.id.clone()),
-                            payload_json: Some(serde_json::json!({
-                                "step": "discover-issues",
-                                "loop_id": loop_id,
-                            }).to_string()),
+                            payload_json: Some(
+                                serde_json::json!({
+                                    "step": "discover-issues",
+                                    "loop_id": loop_id,
+                                })
+                                .to_string(),
+                            ),
                             ..AppendInput::new("")
                         };
                         if let Err(e) = eventlog::append(&g.events, &event) {
@@ -446,19 +387,17 @@ impl PlannerScheduler for Planner {
                 planner_steps::PREPARE_WORKTREE => {
                     // Pre-compute the worktree physical path for both
                     // the DB record and the git gateway.
-                    let wt_dir = looper_git::build_worktree_directory_name(
-                        &looper_git::CreateWorktreeInput {
-                            project_id: project_id.clone(),
-                            repo_path: String::new(),
-                            worktree_root: String::new(),
-                            branch: format!("planner/{loop_id}"),
-                            base_branch: None,
-                            start_point: None,
-                            pr_number: None,
-                            checkout_mode: looper_git::CheckoutMode::Branch,
-                            protected_branches: vec![],
-                        },
-                    );
+                    let wt_dir = looper_git::build_worktree_directory_name(&looper_git::CreateWorktreeInput {
+                        project_id: project_id.clone(),
+                        repo_path: String::new(),
+                        worktree_root: String::new(),
+                        branch: format!("planner/{loop_id}"),
+                        base_branch: None,
+                        start_point: None,
+                        pr_number: None,
+                        checkout_mode: looper_git::CheckoutMode::Branch,
+                        protected_branches: vec![],
+                    });
                     // Use CWD for filesystem operations. item.repo is the GitHub
                     // owner/repo identifier (quangdang46/test-looper) and is NOT a
                     // valid filesystem path. The daemon's CWD is the checkout dir.
@@ -482,10 +421,13 @@ impl PlannerScheduler for Planner {
                             base_branch: None,
                             status: "created".into(),
                             head_sha: None,
-                            metadata_json: Some(serde_json::json!({
-                                "loop_id": loop_id,
-                                "step": "prepare-worktree",
-                            }).to_string()),
+                            metadata_json: Some(
+                                serde_json::json!({
+                                    "loop_id": loop_id,
+                                    "step": "prepare-worktree",
+                                })
+                                .to_string(),
+                            ),
                             created_at: now_iso.clone(),
                             updated_at: now_iso.clone(),
                             cleaned_at: None,
@@ -532,10 +474,13 @@ impl PlannerScheduler for Planner {
                             run_id: Some(run.id.clone()),
                             entity_type: Some("run".into()),
                             entity_id: Some(run.id.clone()),
-                            payload_json: Some(serde_json::json!({
-                                "step": "write-spec",
-                                "status": "spec_written",
-                            }).to_string()),
+                            payload_json: Some(
+                                serde_json::json!({
+                                    "step": "write-spec",
+                                    "status": "spec_written",
+                                })
+                                .to_string(),
+                            ),
                             ..AppendInput::new("")
                         };
                         if let Err(e) = eventlog::append(&g.events, &event) {
@@ -544,19 +489,17 @@ impl PlannerScheduler for Planner {
                     }
                     // When an agent executor is available, start it to write the spec
                     if let Some(ref agent) = self.agent {
-                        let worktree_dir = build_worktree_directory_name(
-                            &CreateWorktreeInput {
-                                project_id: project_id.clone(),
-                                repo_path: String::new(),
-                                worktree_root: String::new(),
-                                branch: format!("planner/{loop_id}"),
-                                base_branch: None,
-                                start_point: None,
-                                pr_number: None,
-                                checkout_mode: looper_git::CheckoutMode::Branch,
-                                protected_branches: vec![],
-                            },
-                        );
+                        let worktree_dir = build_worktree_directory_name(&CreateWorktreeInput {
+                            project_id: project_id.clone(),
+                            repo_path: String::new(),
+                            worktree_root: String::new(),
+                            branch: format!("planner/{loop_id}"),
+                            base_branch: None,
+                            start_point: None,
+                            pr_number: None,
+                            checkout_mode: looper_git::CheckoutMode::Branch,
+                            protected_branches: vec![],
+                        });
                         let effective_path = if !local_path.is_empty() {
                             local_path.clone()
                         } else if let Ok(cwd) = std::env::current_dir() {
@@ -583,23 +526,35 @@ The spec file path MUST be included in the PR body as:
                                 tracing::info!("Planner agent started for loop {loop_id}, waiting for completion...");
                                 match self.tokio_handle.block_on(exec.wait()) {
                                     Ok(result) => {
-                                        tracing::info!("Planner agent wrote spec for loop {loop_id}");
-                                        // The agent outputs spec content via stdout (--print mode),
-                                        // not by writing files. Save it to specs/<issue_number>-spec/spec.md for commit.
-                                        let spec_content = if !result.stdout.trim().is_empty() {
-                                            result.stdout
-                                        } else if !result.summary.trim().is_empty() {
-                                            result.summary
+                                        tracing::info!("Planner agent completed for loop {loop_id}");
+                                        // The agent may have written the spec file directly to disk
+                                        // (when running with --dangerously-skip-permissions + --print).
+                                        // Check the disk first, then fall back to stdout.
+                                        let spec_dir = format!("{worktree_abs_path}/specs/{issue_number}-spec");
+                                        let spec_path = format!("{spec_dir}/spec.md");
+                                        let spec_on_disk =
+                                            std::fs::read_to_string(&spec_path).ok().filter(|s| !s.trim().is_empty());
+                                        if spec_on_disk.is_some() {
+                                            tracing::info!(
+                                                "Planner found spec on disk at {spec_path} for loop {loop_id}"
+                                            );
                                         } else {
-                                            String::new()
-                                        };
-                                        if !spec_content.is_empty() {
-                                            let spec_dir = format!("{worktree_abs_path}/specs/{issue_number}-spec");
-                                            let _ = std::fs::create_dir_all(&spec_dir);
-                                            let spec_path = format!("{spec_dir}/spec.md");
-                                            match std::fs::write(&spec_path, &spec_content) {
-                                                Ok(_) => tracing::info!("Planner saved spec to {spec_path} for loop {loop_id}"),
-                                                Err(e) => tracing::warn!("Planner failed to save spec: {e}"),
+                                            // Agent didn't write file — save stdout/summary as spec
+                                            let spec_content = if !result.stdout.trim().is_empty() {
+                                                result.stdout
+                                            } else if !result.summary.trim().is_empty() {
+                                                result.summary
+                                            } else {
+                                                String::new()
+                                            };
+                                            if !spec_content.is_empty() {
+                                                let _ = std::fs::create_dir_all(&spec_dir);
+                                                match std::fs::write(&spec_path, &spec_content) {
+                                                    Ok(_) => tracing::info!(
+                                                        "Planner saved spec to {spec_path} for loop {loop_id}"
+                                                    ),
+                                                    Err(e) => tracing::warn!("Planner failed to save spec: {e}"),
+                                                }
                                             }
                                         }
                                     }
@@ -621,10 +576,13 @@ The spec file path MUST be included in the PR body as:
                             run_id: Some(run.id.clone()),
                             entity_type: Some("queue_item".into()),
                             entity_id: Some(item.id.clone()),
-                            payload_json: Some(serde_json::json!({
-                                "step": "publish",
-                                "target_id": item.target_id,
-                            }).to_string()),
+                            payload_json: Some(
+                                serde_json::json!({
+                                    "step": "publish",
+                                    "target_id": item.target_id,
+                                })
+                                .to_string(),
+                            ),
                             ..AppendInput::new("")
                         };
                         if let Err(e) = eventlog::append(&g.events, &event) {
@@ -653,56 +611,32 @@ The spec file path MUST be included in the PR body as:
                             checkout_mode: looper_git::CheckoutMode::Branch,
                             protected_branches: vec![],
                         };
-                        let worktree_dir_name =
-                            looper_git::build_worktree_directory_name(&wt_input);
-                        let worktree_path = format!(
-                            "{}/.looper/worktrees/{}",
-                            effective_path, worktree_dir_name
-                        );
-                        // Stub commit — placeholder so the branch has a
-                        // commit on GitHub. A production planner would
-                        // commit the spec document written in write-spec.
-                        // ponytail: update commit message once agent writes spec
-                        // Save spec.md before recreating the worktree
-                        let spec_dir = format!("{worktree_path}/specs/{issue_number}-spec");
-                        let spec_path = format!("{spec_dir}/spec.md");
-                        let spec_content = std::fs::read_to_string(&spec_path).ok();
-                        let _ = std::fs::remove_dir_all(&worktree_path);
+                        let worktree_dir_name = looper_git::build_worktree_directory_name(&wt_input);
+                        let worktree_path = format!("{}/.looper/worktrees/{}", effective_path, worktree_dir_name);
+                        // Commit the spec document that the agent wrote
+                        // directly from the existing worktree (no need to
+                        // remove and recreate).
                         let _ = self.tokio_handle.block_on(async {
-                            // Create worktree at the right path
-                            if let Err(e) = git.create_worktree(looper_git::CreateWorktreeInput {
-                                project_id: project_id.clone(),
-                                repo_path: effective_path.clone(),
-                                worktree_root: format!("{}/.looper/worktrees", effective_path),
-                                branch: branch.clone(),
-                                base_branch: Some("main".to_string()),
-                                start_point: Some("main".to_string()),
-                                pr_number: None,
-                                checkout_mode: looper_git::CheckoutMode::Branch,
-                                protected_branches: vec!["main".into(), "master".into()],
-                            }).await {
-                                tracing::warn!("Planner worktree (non-fatal): {e}");
-                            }
-                            // Restore spec.md that the agent wrote so the
-                            // commit includes it.
-                            if let Some(ref spec) = spec_content {
-                                let _ = std::fs::create_dir_all(&spec_dir);
-                                let _ = std::fs::write(&spec_path, spec);
-                            }
-                            if let Err(e) = git.commit(looper_git::CommitInput {
-                                worktree_path: worktree_path.clone(),
-                                message: format!("[{issue_number}] {issue_title}"),
-                            }).await {
+                            if let Err(e) = git
+                                .commit(looper_git::CommitInput {
+                                    worktree_path: worktree_path.clone(),
+                                    message: format!("[{issue_number}] {issue_title}"),
+                                })
+                                .await
+                            {
                                 tracing::warn!("Planner commit (non-fatal): {e}");
                             }
-                            if let Err(e) = git.push(looper_git::PushInput {
-                                worktree_path: worktree_path.clone(),
-                                remote: "origin".into(),
-                                branch: branch.clone(),
-                                expected_head_sha: None,
-                                protected_branches: vec!["main".into(), "master".into()],
-                                set_upstream: true,
-                            }).await {
+                            if let Err(e) = git
+                                .push(looper_git::PushInput {
+                                    worktree_path: worktree_path.clone(),
+                                    remote: "origin".into(),
+                                    branch: branch.clone(),
+                                    expected_head_sha: None,
+                                    protected_branches: vec!["main".into(), "master".into()],
+                                    set_upstream: true,
+                                })
+                                .await
+                            {
                                 tracing::warn!("Planner push (non-fatal): {e}");
                             }
                         });
@@ -711,22 +645,88 @@ The spec file path MUST be included in the PR body as:
                     if let Some(ref gw) = self.github {
                         if let Some(ref repo_path) = item.repo {
                             if !repo_path.is_empty() {
+                                // Close any existing open spec PRs for this issue to avoid duplicates
+                                if let Ok(open_prs) =
+                                    gw.list_open_pull_requests(looper_github::types::ListOpenPullRequestsInput {
+                                        repo: repo_path.clone(),
+                                        cwd: ".".to_string(),
+                                        limit: 50,
+                                        label: String::new(),
+                                        labels: vec![],
+                                        author: String::new(),
+                                        base_ref_name: String::new(),
+                                        timeout: None,
+                                    })
+                                {
+                                    for pr in &open_prs {
+                                        if pr.title.starts_with(&format!("[{}]", issue_number)) {
+                                            tracing::info!(
+                                                "Planner closing old PR #{} for issue #{}",
+                                                pr.number,
+                                                issue_number
+                                            );
+                                            let _ =
+                                                gw.close_pull_request(looper_github::types::ClosePullRequestInput {
+                                                    repo: repo_path.clone(),
+                                                    pr_number: pr.number,
+                                                    cwd: ".".to_string(),
+                                                });
+                                            // Also cancel any old loops referencing this PR
+                                            if let Ok(guard) = self.repos.0.lock() {
+                                                if let Ok(loops) = guard.loops.list() {
+                                                    for old_loop in &loops {
+                                                        if old_loop.pr_number == Some(pr.number)
+                                                            && !matches!(
+                                                                old_loop.status.as_str(),
+                                                                "completed" | "failed" | "cancelled" | "terminated"
+                                                            )
+                                                        {
+                                                            let mut updated = old_loop.clone();
+                                                            updated.status = "cancelled".to_string();
+                                                            updated.updated_at = chrono::Utc::now()
+                                                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
+                                                                .to_string();
+                                                            let _ = guard.loops.upsert(&updated);
+                                                            tracing::info!(
+                                                                "Cancelled old loop {} for PR #{}",
+                                                                old_loop.id,
+                                                                pr.number
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                drop(guard);
+                                            }
+                                        }
+                                    }
+                                }
                                 let body = format!(
-                                    "## {}\n\nThis PR addresses issue #{} in {}. The automated planning spec has been written and published.\n\n_From Looper pipeline._",
+                                    "## Spec: {}\n\n**Issue**: #{} | **Repository**: {} | **Status**: `planning`\n\n---\n\n## Objective\n\nThe planning spec for issue #{} has been written.\n\n## Spec Location\n\n`specs/{}-spec/spec.md`\n\nSpec: specs/{}-spec/spec.md\n\n## Next Steps\n\n1. Review the spec in the `specs/` directory of this PR\n2. The reviewer will check the spec for completeness\n3. Once approved, implementation will begin automatically\n\n---\n\n*Generated by [Looper](https://github.com/nexu-io/looper)*",
                                     issue_title,
                                     issue_number,
-                                    repo_path
+                                    repo_path,
+                                    issue_number,
+                                    issue_number,
+                                    issue_number
                                 );
-                                match gw.create_pull_request(CreatePullRequestInput {
+                                match gw.create_pull_request(looper_github::types::CreatePullRequestInput {
                                     repo: repo_path.clone(),
                                     head_branch: format!("planner/{loop_id}"),
                                     base_branch: "main".to_string(),
-                                    title: format!("[{}] {}", issue_number, issue_title),
+                                    title: format!(
+                                        "docs: add spec for {} (#{})",
+                                        issue_title.to_lowercase(),
+                                        issue_number
+                                    ),
                                     body,
+                                    draft: true,
                                     cwd: ".".to_string(),
                                 }) {
                                     Ok(result) => {
-                                        tracing::info!("Planner created PR #{} for loop {loop_id}", result.number);
+                                        tracing::info!(
+                                            "Planner created draft PR #{} for loop {loop_id}",
+                                            result.number
+                                        );
                                         // Mark the PR as being in spec-review phase
                                         let _ = gw.add_issue_labels(IssueLabelsInput {
                                             repo: repo_path.clone(),
@@ -734,6 +734,39 @@ The spec file path MUST be included in the PR body as:
                                             labels: vec!["looper:spec-reviewing".into()],
                                             cwd: ".".to_string(),
                                         });
+                                        // Mark PR as ready for review when pipeline completes (done in cleanup)
+                                        // Post spec content as a PR comment for easy review
+                                        // Spec was written to specs/{issue_number}-spec/spec.md in the worktree
+                                        // Try reading from the local clone's worktree directory
+                                        // Resolve worktree path from project record
+                                        let spec_repo_path = if let Ok(guard) = self.repos.0.lock() {
+                                            guard
+                                                .projects
+                                                .get_by_id(&project_id)
+                                                .ok()
+                                                .flatten()
+                                                .map(|p| p.repo_path.clone())
+                                                .filter(|p| !p.is_empty())
+                                                .unwrap_or_else(|| ".".to_string())
+                                        } else {
+                                            ".".to_string()
+                                        };
+                                        let spec_path = format!("{spec_repo_path}/.looper/worktrees/planner-{loop_id}/specs/{issue_number}-spec/spec.md");
+                                        if let Ok(spec_content) = std::fs::read_to_string(&spec_path) {
+                                            let comment = format!(
+                                                "## 📋 Spec: {issue_title}
+
+{}",
+                                                spec_content
+                                            );
+                                            let _ = gw.create_issue_comment(IssueCommentInput {
+                                                repo: repo_path.clone(),
+                                                issue_number: result.number,
+                                                body: comment,
+                                                cwd: ".".to_string(),
+                                            });
+                                            tracing::info!("Planner posted spec comment to PR #{}", result.number);
+                                        }
                                     }
                                     Err(e) => tracing::warn!("Planner create PR failed: {e}"),
                                 }
@@ -756,10 +789,7 @@ The spec file path MUST be included in the PR body as:
                             level: "info".into(),
                             title: format!("Planning complete for loop {loop_id}"),
                             subtitle: None,
-                            body: format!(
-                                "Planner finished pipeline for loop {loop_id} (item={})",
-                                item.id
-                            ),
+                            body: format!("Planner finished pipeline for loop {loop_id} (item={})", item.id),
                             status: "pending".into(),
                             dedupe_key: Some(format!("planner-done-{loop_id}")),
                             error_message: None,
@@ -818,19 +848,17 @@ The spec file path MUST be included in the PR body as:
         // Clean up the worktree after the pipeline completes so
         // worktree directories don't accumulate on disk.
         if let Some(ref git) = self.git {
-            let wt_dir = build_worktree_directory_name(
-                &CreateWorktreeInput {
-                    project_id: project_id.clone(),
-                    repo_path: String::new(),
-                    worktree_root: String::new(),
-                    branch: format!("planner/{loop_id}"),
-                    base_branch: None,
-                    start_point: None,
-                    pr_number: None,
-                    checkout_mode: looper_git::CheckoutMode::Branch,
-                    protected_branches: vec![],
-                },
-            );
+            let wt_dir = build_worktree_directory_name(&CreateWorktreeInput {
+                project_id: project_id.clone(),
+                repo_path: String::new(),
+                worktree_root: String::new(),
+                branch: format!("planner/{loop_id}"),
+                base_branch: None,
+                start_point: None,
+                pr_number: None,
+                checkout_mode: looper_git::CheckoutMode::Branch,
+                protected_branches: vec![],
+            });
             let effective_path = if !local_path.is_empty() {
                 local_path.clone()
             } else if let Ok(cwd) = std::env::current_dir() {
@@ -839,14 +867,12 @@ The spec file path MUST be included in the PR body as:
                 ".".to_string()
             };
             let worktree_path = format!("{}/.looper/worktrees/{}", effective_path, wt_dir);
-            let _ = self.tokio_handle.block_on(git.cleanup_worktree(
-                looper_git::types::CleanupWorktreeInput {
-                    repo_path: effective_path.clone(),
-                    worktree_path: worktree_path.clone(),
-                    branch: format!("planner/{loop_id}"),
-                    protected_branches: vec!["main".to_string(), "master".to_string()],
-                },
-            ));
+            let _ = self.tokio_handle.block_on(git.cleanup_worktree(looper_git::types::CleanupWorktreeInput {
+                repo_path: effective_path.clone(),
+                worktree_path: worktree_path.clone(),
+                branch: format!("planner/{loop_id}"),
+                protected_branches: vec!["main".to_string(), "master".to_string()],
+            }));
             // Belt-and-suspenders: if git worktree remove didn't clean
             // the dir (e.g. it was never registered), rm -rf it directly.
             let _ = std::fs::remove_dir_all(&worktree_path);

@@ -28,10 +28,7 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &LockCommand, json: bool) -> 
             output::print_output_vec(json, &locks);
         }
         LockCommand::Acquire(args) => {
-            let input = AcquireLockInput {
-                resource: args.resource.clone(),
-                ttl_secs: args.ttl,
-            };
+            let input = AcquireLockInput { resource: args.resource.clone(), ttl_secs: args.ttl };
             let lock = client.acquire_lock(&input).await?;
             output::print_output(json, &lock);
         }

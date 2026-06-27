@@ -121,12 +121,7 @@ mod tests {
 
     #[test]
     fn test_target_key_fallback() {
-        let target = LoopTarget {
-            target_type: LoopTargetType::Project,
-            project_id: None,
-            repo: None,
-            number: None,
-        };
+        let target = LoopTarget { target_type: LoopTargetType::Project, project_id: None, repo: None, number: None };
         assert_eq!(loop_target_key(&target), "project:?");
     }
 

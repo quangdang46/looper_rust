@@ -13,14 +13,11 @@ use crate::envelope::Envelope;
 use crate::error::ApiError;
 use crate::sse::{global_event_stream, project_event_stream};
 use crate::types::{
-    internal_error, AcquireLockInput, AddProjectInput, AgentConfigResponse, ConfigResponse,
-    CreateLoopInput, EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail,
-    LoopSummary, PaginationParams, ProjectSummary, QueueItemResponse, RunDetail, RunSummary,
-    StartRunInput, VersionResponse,
+    internal_error, AcquireLockInput, AddProjectInput, AgentConfigResponse, ConfigResponse, CreateLoopInput,
+    EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail, LoopSummary, PaginationParams,
+    ProjectSummary, QueueItemResponse, RunDetail, RunSummary, StartRunInput, VersionResponse,
 };
-use looper_storage::record::{
-    LockRecord, LoopRecord, QueueItemRecord, RunRecord,
-};
+use looper_storage::record::{LockRecord, LoopRecord, QueueItemRecord, RunRecord};
 
 /// Shared application state available to all handlers.
 pub struct AppState {
@@ -42,9 +39,7 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<Envelope<HealthR
 }
 
 pub async fn version() -> Json<Envelope<VersionResponse>> {
-    let resp = VersionResponse {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    };
+    let resp = VersionResponse { version: env!("CARGO_PKG_VERSION").to_string() };
     Json(Envelope::success(resp))
 }
 
@@ -125,12 +120,7 @@ pub async fn update_project(
     if let Some(enabled) = input.enabled {
         updated.enabled = enabled;
         // Archive / un-archive the project so the list filter sees it.
-        state
-            .ctx
-            .projects
-            .remove(&name)
-            .await
-            .ok(); // ignore if removal fails (e.g. archived state)
+        state.ctx.projects.remove(&name).await.ok(); // ignore if removal fails (e.g. archived state)
         if !enabled {
             // Persist archive by re-adding the project as archived.
             // The service layer currently has no "patch" path so we keep
@@ -227,10 +217,7 @@ pub async fn create_loop(
             pr_number: None,
             status: "active".into(),
             config_json: None,
-            metadata_json: input
-                .metadata
-                .as_ref()
-                .map(|v| v.to_string()),
+            metadata_json: input.metadata.as_ref().map(|v| v.to_string()),
             last_run_at: None,
             next_run_at: None,
             created_at: now.clone(),
@@ -267,10 +254,7 @@ pub async fn get_loop(
         .ok_or_else(|| ApiError::not_found(format!("Loop {project_name}/{seq} not found")))?;
 
     // Fetch latest run for this loop
-    let runs = repos
-        .runs
-        .list_by_loop(&record.id)
-        .map_err(internal_error)?;
+    let runs = repos.runs.list_by_loop(&record.id).map_err(internal_error)?;
 
     let run_summaries: Vec<RunSummary> = runs
         .into_iter()
@@ -291,9 +275,7 @@ pub async fn get_loop(
         loop_type: record.r#type,
         status: record.status,
         target: record.target_id,
-        metadata: record
-            .metadata_json
-            .and_then(|m| serde_json::from_str(&m).ok()),
+        metadata: record.metadata_json.and_then(|m| serde_json::from_str(&m).ok()),
         runs: run_summaries,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -306,11 +288,7 @@ pub async fn pause_loop(
     State(state): State<Arc<AppState>>,
     Path((project_name, seq)): Path<(String, i64)>,
 ) -> Result<Json<Envelope<()>>, ApiError> {
-    state
-        .ctx
-        .state
-        .stop_loop(&project_name, seq)
-        .await?;
+    state.ctx.state.stop_loop(&project_name, seq).await?;
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -340,11 +318,7 @@ pub async fn terminate_loop(
     State(state): State<Arc<AppState>>,
     Path((project_name, seq)): Path<(String, i64)>,
 ) -> Result<Json<Envelope<()>>, ApiError> {
-    state
-        .ctx
-        .state
-        .close_loop(&project_name, seq)
-        .await?;
+    state.ctx.state.close_loop(&project_name, seq).await?;
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -366,10 +340,7 @@ pub async fn list_runs(
         .filter(|r| r.project_id == project_name)
         .ok_or_else(|| ApiError::not_found(format!("Loop {project_name}/{seq} not found")))?;
 
-    let records = repos
-        .runs
-        .list_by_loop(&loop_record.id)
-        .map_err(internal_error)?;
+    let records = repos.runs.list_by_loop(&loop_record.id).map_err(internal_error)?;
 
     let runs: Vec<RunSummary> = records
         .into_iter()
@@ -480,11 +451,7 @@ pub async fn cancel_run(
     State(state): State<Arc<AppState>>,
     Path((project_name, seq)): Path<(String, i64)>,
 ) -> Result<Json<Envelope<()>>, ApiError> {
-    state
-        .ctx
-        .state
-        .stop_loop(&project_name, seq)
-        .await?;
+    state.ctx.state.stop_loop(&project_name, seq).await?;
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -579,10 +546,7 @@ pub async fn enqueue(
         updated_at: now.clone(),
     };
 
-    let (item, _created) = repos
-        .queue
-        .create_or_get_active_by_dedupe(&record)
-        .map_err(internal_error)?;
+    let (item, _created) = repos.queue.create_or_get_active_by_dedupe(&record).map_err(internal_error)?;
 
     let resp = QueueItemResponse {
         id: item.id,
@@ -610,10 +574,7 @@ pub async fn dequeue(
     let repos = state.ctx.state.repos();
     let now = crate::helpers::now_iso();
 
-    repos
-        .queue
-        .cancel_by_project(&project_name, &now, Some("cancelled via API"))
-        .map_err(internal_error)?;
+    repos.queue.cancel_by_project(&project_name, &now, Some("cancelled via API")).map_err(internal_error)?;
 
     // Also try to complete the specific item if it exists and is running
     if let Ok(Some(item)) = repos.queue.get_by_id(&item_id) {
@@ -638,10 +599,7 @@ pub async fn list_events(
 
     // Fetch enough events to cover offset + limit after project filter.
     let fetch_limit = params.limit + params.offset + 50;
-    let records = repos
-        .events
-        .list(fetch_limit)
-        .map_err(internal_error)?;
+    let records = repos.events.list(fetch_limit).map_err(internal_error)?;
 
     let events: Vec<EventLogResponse> = records
         .into_iter()
@@ -671,9 +629,7 @@ pub async fn list_events(
 // Locks
 // ---------------------------------------------------------------------------
 
-pub async fn list_locks(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<Envelope<Vec<LockResponse>>>, ApiError> {
+pub async fn list_locks(State(state): State<Arc<AppState>>) -> Result<Json<Envelope<Vec<LockResponse>>>, ApiError> {
     let repos = state.ctx.state.repos();
     let now = crate::helpers::now_iso();
 
@@ -683,10 +639,7 @@ pub async fn list_locks(
     // For simplicity, fetch expired (which returns many) and report those as expired;
     // a proper active-lock list would need a new repo method.
     // Instead, do a raw query for active locks.
-    let active = repos
-        .locks
-        .list_expired(&now)
-        .map_err(internal_error)?;
+    let active = repos.locks.list_expired(&now).map_err(internal_error)?;
 
     // Since list_expired returns *expired* locks, we report them as the set.
     // For active locks we'd need a separate query — skip for now.
@@ -713,10 +666,8 @@ pub async fn acquire_lock(
     let now = crate::helpers::now_iso();
 
     let ttl_secs = input.ttl_secs.unwrap_or(300);
-    let expires_at = (chrono::Utc::now()
-        + chrono::Duration::seconds(ttl_secs))
-        .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-        .to_string();
+    let expires_at =
+        (chrono::Utc::now() + chrono::Duration::seconds(ttl_secs)).format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
     let record = LockRecord {
         key: input.resource.clone(),
@@ -727,10 +678,7 @@ pub async fn acquire_lock(
         updated_at: now.clone(),
     };
 
-    repos
-        .locks
-        .acquire(&record)
-        .map_err(internal_error)?;
+    repos.locks.acquire(&record).map_err(internal_error)?;
 
     let resp = LockResponse {
         id: input.resource.clone(),
@@ -749,10 +697,7 @@ pub async fn release_lock(
     Path(lock_key): Path<String>,
 ) -> Result<Json<Envelope<()>>, ApiError> {
     let repos = state.ctx.state.repos();
-    repos
-        .locks
-        .release(&lock_key)
-        .map_err(internal_error)?;
+    repos.locks.release(&lock_key).map_err(internal_error)?;
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -760,9 +705,7 @@ pub async fn release_lock(
 // Config
 // ---------------------------------------------------------------------------
 
-pub async fn get_config(
-    State(state): State<Arc<AppState>>,
-) -> Json<Envelope<ConfigResponse>> {
+pub async fn get_config(State(state): State<Arc<AppState>>) -> Json<Envelope<ConfigResponse>> {
     let config = (*state.ctx.config).clone();
     Json(Envelope::success(config))
 }
@@ -793,13 +736,17 @@ pub async fn get_agent_config(
 pub async fn project_events_stream(
     State(state): State<Arc<AppState>>,
     Path(project_name): Path<String>,
-) -> axum::response::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> + Send + 'static> {
+) -> axum::response::Sse<
+    impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> + Send + 'static,
+> {
     project_event_stream(state.ctx.clone(), project_name)
 }
 
 pub async fn global_events_stream(
     State(state): State<Arc<AppState>>,
-) -> axum::response::Sse<impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> + Send + 'static> {
+) -> axum::response::Sse<
+    impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>> + Send + 'static,
+> {
     global_event_stream(state.ctx.clone())
 }
 
@@ -855,6 +802,6 @@ pub async fn worktree_cleanup(
             };
             Ok(Json(Envelope::success(result)))
         }
-        Err(e) => Err(ApiError::internal(format!("worktree cleanup failed: {e}")))
+        Err(e) => Err(ApiError::internal(format!("worktree cleanup failed: {e}"))),
     }
 }

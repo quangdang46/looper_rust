@@ -6,10 +6,10 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::error::{is_transient_error, WebhookError};
-use crate::routing::{route_event, is_failing_conclusion, RoutingDecision};
+use crate::routing::{is_failing_conclusion, route_event, RoutingDecision};
 use crate::types::{
-    DeliveryRecord, DeliveryRequest, ForwardResult, ForwarderInner, Lane, Outcome, Stats,
-    TargetedFixer, TargetedReviewer, WorkItem, WorkKey, WorkMetadata,
+    DeliveryRecord, DeliveryRequest, ForwardResult, ForwarderInner, Lane, Outcome, Stats, TargetedFixer,
+    TargetedReviewer, WorkItem, WorkKey, WorkMetadata,
 };
 
 /// The maximum number of recent outcomes retained for stats reporting.
@@ -42,31 +42,21 @@ pub struct WebhookForwarder {
 
 impl WebhookForwarder {
     /// Create a new `WebhookForwarder`.
-    pub fn new(
-        reviewer: Arc<dyn TargetedReviewer>,
-        fixer: Arc<dyn TargetedFixer>,
-    ) -> Self {
+    pub fn new(reviewer: Arc<dyn TargetedReviewer>, fixer: Arc<dyn TargetedFixer>) -> Self {
         Self::with_options(reviewer, fixer, Options::default())
     }
 
     /// Create a new `WebhookForwarder` with custom options.
-    pub fn with_options(
-        reviewer: Arc<dyn TargetedReviewer>,
-        fixer: Arc<dyn TargetedFixer>,
-        opts: Options,
-    ) -> Self {
+    pub fn with_options(reviewer: Arc<dyn TargetedReviewer>, fixer: Arc<dyn TargetedFixer>, opts: Options) -> Self {
         Self {
             reviewer,
             fixer,
             now: opts.now.unwrap_or_else(|| {
-                let f: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync> =
-                    Arc::new(Utc::now);
+                let f: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync> = Arc::new(Utc::now);
                 f
             }),
             max_concurrent: opts.max_concurrent.unwrap_or(DEFAULT_MAX_CONCURRENT),
-            delivery_ttl: opts.delivery_ttl.unwrap_or(Duration::from_secs(
-                DEFAULT_DELIVERY_TTL_SECS as u64,
-            )),
+            delivery_ttl: opts.delivery_ttl.unwrap_or(Duration::from_secs(DEFAULT_DELIVERY_TTL_SECS as u64)),
             retry_delay: opts.retry_delay.unwrap_or(Duration::from_secs(2)),
             inner: Arc::new(Mutex::new(ForwarderInner::default())),
             notify: Arc::new(tokio::sync::Notify::new()),
@@ -99,11 +89,7 @@ impl WebhookForwarder {
         let mut inner = self.inner.lock().await;
 
         if inner.closed {
-            return ForwardResult {
-                status: "ignored".into(),
-                reason: "forwarder is closed".into(),
-                work_items: 0,
-            };
+            return ForwardResult { status: "ignored".into(), reason: "forwarder is closed".into(), work_items: 0 };
         }
 
         inner.stats.deliveries_received += 1;
@@ -192,11 +178,7 @@ impl WebhookForwarder {
         // Notify workers that new work is available.
         self.notify.notify_waiters();
 
-        ForwardResult {
-            status: "accepted".into(),
-            reason: "forwarded to worker pool".into(),
-            work_items: count,
-        }
+        ForwardResult { status: "accepted".into(), reason: "forwarded to worker pool".into(), work_items: count }
     }
 
     /// Get a snapshot of current stats.
@@ -251,9 +233,7 @@ impl WebhookForwarder {
                     RoutingDecision::Ignore
                 }
             }
-            "pull_request_review" | "pull_request_review_comment" => {
-                route_event(event_type, None)
-            }
+            "pull_request_review" | "pull_request_review_comment" => route_event(event_type, None),
             _ => RoutingDecision::Ignore,
         }
     }
@@ -261,8 +241,7 @@ impl WebhookForwarder {
     fn build_work_keys(&self, decision: &RoutingDecision, payload: &str) -> Vec<WorkKey> {
         match decision {
             RoutingDecision::PullRequest(_) => {
-                let repo = extract_json_string(payload, "repository.full_name")
-                    .unwrap_or_default();
+                let repo = extract_json_string(payload, "repository.full_name").unwrap_or_default();
                 let number = extract_json_i64(payload, "pull_request.number").unwrap_or(0);
                 vec![WorkKey {
                     project_id: String::new(), // filled in worker
@@ -273,21 +252,13 @@ impl WebhookForwarder {
                 }]
             }
             RoutingDecision::Push => {
-                let repo = extract_json_string(payload, "repository.full_name")
-                    .unwrap_or_default();
+                let repo = extract_json_string(payload, "repository.full_name").unwrap_or_default();
                 let branch = extract_ref_branch(payload);
-                vec![WorkKey {
-                    project_id: String::new(),
-                    repo,
-                    object_type: "base_branch".into(),
-                    number: 0,
-                    branch,
-                }]
+                vec![WorkKey { project_id: String::new(), repo, object_type: "base_branch".into(), number: 0, branch }]
             }
             RoutingDecision::CheckRun => {
                 // Check runs may reference one or more PRs.
-                let repo = extract_json_string(payload, "repository.full_name")
-                    .unwrap_or_default();
+                let repo = extract_json_string(payload, "repository.full_name").unwrap_or_default();
                 let pr_numbers = extract_pr_numbers_from_check_run(payload);
                 if pr_numbers.is_empty() {
                     // Fallback: no PR association — try check_suite pull_requests.
@@ -346,10 +317,7 @@ impl WebhookForwarder {
                 let dk_reviewer = wk.dedupe_key(Lane::Reviewer);
                 let dk_fixer = wk.dedupe_key(Lane::Fixer);
 
-                let item = inner
-                    .works
-                    .remove(&dk_reviewer)
-                    .or_else(|| inner.works.remove(&dk_fixer));
+                let item = inner.works.remove(&dk_reviewer).or_else(|| inner.works.remove(&dk_fixer));
 
                 match item {
                     Some(item) => {
@@ -430,11 +398,7 @@ impl WebhookForwarder {
     }
 
     /// Execute a single work item by calling the appropriate targeted handler.
-    async fn execute_once(
-        &self,
-        key: &WorkKey,
-        item: &WorkItem,
-    ) -> Result<(), WebhookError> {
+    async fn execute_once(&self, key: &WorkKey, item: &WorkItem) -> Result<(), WebhookError> {
         // Use the project_id from the key (populated upstream by the route handler).
         if key.project_id.is_empty() {
             // Project ID resolution expected before this point;
@@ -448,33 +412,18 @@ impl WebhookForwarder {
             match lane {
                 Lane::Reviewer => {
                     self.reviewer
-                        .enqueue_review(
-                            &key.project_id,
-                            &key.repo,
-                            key.number,
-                            &item.metadata.delivery_id,
-                        )
+                        .enqueue_review(&key.project_id, &key.repo, key.number, &item.metadata.delivery_id)
                         .await?;
                 }
                 Lane::Fixer => {
                     if key.object_type == "pull_request" {
                         self.fixer
-                            .enqueue_fix_pr(
-                                &key.project_id,
-                                &key.repo,
-                                key.number,
-                                &item.metadata.delivery_id,
-                            )
+                            .enqueue_fix_pr(&key.project_id, &key.repo, key.number, &item.metadata.delivery_id)
                             .await?;
                     } else {
                         // base_branch
                         self.fixer
-                            .enqueue_fix_branch(
-                                &key.project_id,
-                                &key.repo,
-                                &key.branch,
-                                &item.metadata.delivery_id,
-                            )
+                            .enqueue_fix_branch(&key.project_id, &key.repo, &key.branch, &item.metadata.delivery_id)
                             .await?;
                     }
                 }
@@ -486,15 +435,13 @@ impl WebhookForwarder {
 }
 
 /// Configuration options for the forwarder.
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Options {
     pub now: Option<Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>>,
     pub max_concurrent: Option<usize>,
     pub delivery_ttl: Option<Duration>,
     pub retry_delay: Option<Duration>,
 }
-
 
 // ── JSON extraction helpers ──────────────────────────────────────────
 
@@ -536,10 +483,7 @@ fn extract_pr_numbers_from_check_run(payload: &str) -> Vec<i64> {
     let mut numbers = Vec::new();
 
     // Try check_run.pull_requests
-    if let Some(prs) = v
-        .pointer("/check_run/pull_requests")
-        .and_then(|v| v.as_array())
-    {
+    if let Some(prs) = v.pointer("/check_run/pull_requests").and_then(|v| v.as_array()) {
         for pr in prs {
             if let Some(n) = pr.get("number").and_then(|n| n.as_i64()) {
                 numbers.push(n);
@@ -549,10 +493,7 @@ fn extract_pr_numbers_from_check_run(payload: &str) -> Vec<i64> {
 
     // Also try check_run.check_suite.pull_requests
     if numbers.is_empty() {
-        if let Some(prs) = v
-            .pointer("/check_run/check_suite/pull_requests")
-            .and_then(|v| v.as_array())
-        {
+        if let Some(prs) = v.pointer("/check_run/check_suite/pull_requests").and_then(|v| v.as_array()) {
             for pr in prs {
                 if let Some(n) = pr.get("number").and_then(|n| n.as_i64()) {
                     numbers.push(n);
@@ -597,9 +538,7 @@ fn extract_action(decision: &RoutingDecision, payload: &str) -> String {
     match decision {
         RoutingDecision::Push => "push".into(),
         RoutingDecision::CheckRun => "check_run".into(),
-        RoutingDecision::PullRequest(_) => {
-            extract_json_string(payload, "action").unwrap_or_default()
-        }
+        RoutingDecision::PullRequest(_) => extract_json_string(payload, "action").unwrap_or_default(),
         RoutingDecision::Ignore => String::new(),
     }
 }
@@ -611,14 +550,8 @@ mod tests {
     #[test]
     fn test_extract_json_string() {
         let payload = r#"{"action": "opened", "repository": {"full_name": "owner/repo"}}"#;
-        assert_eq!(
-            extract_json_string(payload, "action"),
-            Some("opened".into())
-        );
-        assert_eq!(
-            extract_json_string(payload, "repository.full_name"),
-            Some("owner/repo".into())
-        );
+        assert_eq!(extract_json_string(payload, "action"), Some("opened".into()));
+        assert_eq!(extract_json_string(payload, "repository.full_name"), Some("owner/repo".into()));
         assert_eq!(extract_json_string(payload, "nonexistent"), None);
     }
 

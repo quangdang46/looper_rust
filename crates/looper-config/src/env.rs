@@ -1,7 +1,9 @@
 use crate::enums::{LogFormat, StorageBackend};
 use crate::partial::Merge;
-use crate::partial::{PartialConfig, PartialDaemonConfig, PartialLoggingConfig,
-    PartialNotificationsConfig, PartialServerConfig, PartialStorageConfig};
+use crate::partial::{
+    PartialConfig, PartialDaemonConfig, PartialLoggingConfig, PartialNotificationsConfig, PartialServerConfig,
+    PartialStorageConfig,
+};
 use looper_types::{DaemonMode, LogLevel};
 use std::str::FromStr;
 
@@ -97,36 +99,56 @@ trait PartialConfigExt {
 impl PartialConfigExt for PartialConfig {
     fn server(&mut self, cfg: PartialServerConfig) {
         match &mut self.server {
-            Some(existing) => { existing.merge(cfg); }
-            None => { self.server = Some(cfg); }
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.server = Some(cfg);
+            }
         }
     }
 
     fn daemon(&mut self, cfg: PartialDaemonConfig) {
         match &mut self.daemon {
-            Some(existing) => { existing.merge(cfg); }
-            None => { self.daemon = Some(cfg); }
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.daemon = Some(cfg);
+            }
         }
     }
 
     fn storage(&mut self, cfg: PartialStorageConfig) {
         match &mut self.storage {
-            Some(existing) => { existing.merge(cfg); }
-            None => { self.storage = Some(cfg); }
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.storage = Some(cfg);
+            }
         }
     }
 
     fn logging(&mut self, cfg: PartialLoggingConfig) {
         match &mut self.logging {
-            Some(existing) => { existing.merge(cfg); }
-            None => { self.logging = Some(cfg); }
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.logging = Some(cfg);
+            }
         }
     }
 
     fn notifications(&mut self, cfg: PartialNotificationsConfig) {
         match &mut self.notifications {
-            Some(existing) => { existing.merge(cfg); }
-            None => { self.notifications = Some(cfg); }
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.notifications = Some(cfg);
+            }
         }
     }
 }

@@ -51,10 +51,7 @@ pub struct ConfigOptions {
 /// # Panics
 /// Panics if env var modification fails or config defaults fail.
 pub fn default_config(home: &TempHome, options: ConfigOptions) -> Config {
-    let _working_dir = options
-        .working_dir
-        .clone()
-        .unwrap_or_else(|| home.working_dir.to_string_lossy().to_string());
+    let _working_dir = options.working_dir.clone().unwrap_or_else(|| home.working_dir.to_string_lossy().to_string());
 
     std::env::set_var("HOME", home.home_dir.to_string_lossy().as_ref());
 
@@ -107,17 +104,11 @@ pub fn default_config(home: &TempHome, options: ConfigOptions) -> Config {
 ///
 /// # Panics
 /// Panics on serialisation or I/O error.
-pub fn write_config(
-    path: impl AsRef<Path>,
-    cfg: &Config,
-    raw_overrides: HashMap<String, serde_json::Value>,
-) {
+pub fn write_config(path: impl AsRef<Path>, cfg: &Config, raw_overrides: HashMap<String, serde_json::Value>) {
     // Serialise the config to a JSON map.
-    let json_str =
-        serde_json::to_string_pretty(cfg).expect("serialise config for E2E test");
+    let json_str = serde_json::to_string_pretty(cfg).expect("serialise config for E2E test");
 
-    let mut doc: serde_json::Value =
-        serde_json::from_str(&json_str).expect("decode config as JSON value");
+    let mut doc: serde_json::Value = serde_json::from_str(&json_str).expect("decode config as JSON value");
 
     // Apply raw overrides via deep merge.
     deep_merge(&mut doc, &serde_json::Value::Object(raw_overrides.into_iter().collect()));
@@ -183,10 +174,7 @@ mod tests {
     fn test_write_config_overrides() {
         let home = TempHome::new("test");
         let cfg = default_config(&home, ConfigOptions::default());
-        let overrides = HashMap::from([(
-            "server".to_string(),
-            serde_json::json!({"port": 9999}),
-        )]);
+        let overrides = HashMap::from([("server".to_string(), serde_json::json!({"port": 9999}))]);
         write_config(&home.config_path, &cfg, overrides);
 
         let content = std::fs::read_to_string(&home.config_path).unwrap();

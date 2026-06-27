@@ -4,7 +4,7 @@
 //! merged, needs another review round, or is stuck.  The classifier emits
 //! [`WatchAction`] values that the coordinator feeds into the queue system.
 
-use crate::types::{PriorWatchMarker, ReviewDecision, RetryBudget, WatchAction, WatchActionKind};
+use crate::types::{PriorWatchMarker, RetryBudget, ReviewDecision, WatchAction, WatchActionKind};
 use looper_github::types::PullRequestDetail;
 
 // ---------------------------------------------------------------------------
@@ -69,9 +69,7 @@ pub fn classify_pr(
     }
 
     // 5. Mergeable, approved, and no pending checks → merge ready.
-    if pr.mergeable == Some(true)
-        && decision == Some(ReviewDecision::Approved)
-    {
+    if pr.mergeable == Some(true) && decision == Some(ReviewDecision::Approved) {
         // Check CI status before declaring merge-ready
         if pr_has_failing_checks(pr) {
             let failed_checks = pr_failing_check_names(pr);
@@ -177,8 +175,7 @@ pub fn classify_pr(
 
 /// True when the PR snapshot is materially unchanged since the prior marker.
 fn has_no_changes(pr: &PullRequestDetail, prior: &PriorWatchMarker) -> bool {
-    pr.head_sha == prior.head_sha
-        && ReviewDecision::from_github_string(&pr.review_decision) == prior.review_decision
+    pr.head_sha == prior.head_sha && ReviewDecision::from_github_string(&pr.review_decision) == prior.review_decision
 }
 
 // ---------------------------------------------------------------------------
@@ -191,20 +188,16 @@ fn has_no_changes(pr: &PullRequestDetail, prior: &PriorWatchMarker) -> bool {
 /// conclusions. Returns `true` when at least one check has a failure conclusion.
 pub fn pr_has_failing_checks(pr: &PullRequestDetail) -> bool {
     pr.checks.iter().any(|check| {
-        check
-            .get("conclusion")
-            .and_then(|c| c.as_str())
-            .is_some_and(|c| matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale"))
+        check.get("conclusion").and_then(|c| c.as_str()).is_some_and(|c| {
+            matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale")
+        })
     })
 }
 
 /// Check if any CI checks on this PR are still pending/in-progress.
 pub fn pr_has_pending_checks(pr: &PullRequestDetail) -> bool {
     pr.checks.iter().any(|check| {
-        check
-            .get("status")
-            .and_then(|s| s.as_str())
-            .is_some_and(|s| matches!(s, "queued" | "in_progress" | "waiting"))
+        check.get("status").and_then(|s| s.as_str()).is_some_and(|s| matches!(s, "queued" | "in_progress" | "waiting"))
     })
 }
 
@@ -213,10 +206,9 @@ pub fn pr_failing_check_names(pr: &PullRequestDetail) -> Vec<String> {
     pr.checks
         .iter()
         .filter(|check| {
-            check
-                .get("conclusion")
-                .and_then(|c| c.as_str())
-                .is_some_and(|c| matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale"))
+            check.get("conclusion").and_then(|c| c.as_str()).is_some_and(|c| {
+                matches!(c, "failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure" | "stale")
+            })
         })
         .filter_map(|check| check.get("name").and_then(|n| n.as_str()).map(|n| n.to_string()))
         .collect()
