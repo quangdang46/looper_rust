@@ -156,6 +156,12 @@ pub fn verify(
 #[derive(Debug, Clone)]
 pub struct DefaultVerifier;
 
+impl Default for DefaultVerifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DefaultVerifier {
     pub fn new() -> Self {
         Self
@@ -370,7 +376,7 @@ fn parse_criterion_line(line: &str) -> Option<String> {
 }
 
 fn is_acceptance_criteria_heading(heading: &str) -> bool {
-    let h = heading.trim().trim_end_matches(|c: char| c == ':' || c == ';' || c == '.' || c == '!' || c == '?').trim();
+    let h = heading.trim().trim_end_matches([':', ';', '.', '!', '?']).trim();
     h.eq_ignore_ascii_case("acceptance criteria")
 }
 

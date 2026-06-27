@@ -469,7 +469,7 @@ impl Worker {
                     let validation_ok = if cargo_toml.exists() {
                         // Rust project - run cargo build
                         tracing::info!("Worker validate: running cargo build in {worktree_path}");
-                        match Command::new("cargo").args(["build"]).current_dir(&worktree_path).output() {
+                        match std::process::Command::new("cargo").args(["build"]).current_dir(&worktree_path).output() {
                             Ok(output) if output.status.success() => {
                                 tracing::info!("Worker validate: cargo build succeeded for run {}", run.id);
                                 true
@@ -491,7 +491,7 @@ impl Worker {
                     } else if package_json.exists() {
                         // Node.js project - check syntax only
                         tracing::info!("Worker validate: checking Node.js project in {worktree_path}");
-                        match Command::new("node").args(["--check", "index.js"]).current_dir(&worktree_path).output() {
+                        match std::process::Command::new("node").args(["--check", "index.js"]).current_dir(&worktree_path).output() {
                             Ok(output) if output.status.success() => {
                                 tracing::info!("Worker validate: Node.js syntax check passed for run {}", run.id);
                                 true
@@ -506,7 +506,7 @@ impl Worker {
                     } else if pyproject.exists() || setup_py.exists() {
                         // Python project - check syntax
                         tracing::info!("Worker validate: checking Python project in {worktree_path}");
-                        let python_check = Command::new("python3")
+                        let python_check = std::process::Command::new("python3")
                             .args(["-m", "py_compile", "."])
                             .current_dir(&worktree_path)
                             .output();
@@ -522,7 +522,7 @@ impl Worker {
                                     for entry in entries.flatten() {
                                         let path = entry.path();
                                         if path.extension().map(|e| e == "py").unwrap_or(false) {
-                                            if let Ok(output) = Command::new("python3")
+                                            if let Ok(output) = std::process::Command::new("python3")
                                                 .args(["-m", "py_compile", path.to_str().unwrap_or("")])
                                                 .output()
                                             {
@@ -728,15 +728,13 @@ impl Worker {
                                     let _ = github.create_issue_comment(IssueCommentInput {
                                         repo: item.repo.clone().unwrap_or_default(),
                                         issue_number: pr.number,
-                                        body: format!(
-                                            "## 🚀 Implementation Complete
+                                        body: "## 🚀 Implementation Complete
 
 Looper has finished implementing this issue.
 
 This PR is currently a draft. Once validation passes, it will be marked ready for review.
 
-_This is an automated message from looper._"
-                                        ),
+_This is an automated message from looper._".to_string(),
                                         cwd: ".".to_string(),
                                     });
                                 }

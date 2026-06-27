@@ -616,7 +616,7 @@ The spec file path MUST be included in the PR body as:
                         // Commit the spec document that the agent wrote
                         // directly from the existing worktree (no need to
                         // remove and recreate).
-                        let _ = self.tokio_handle.block_on(async {
+                        self.tokio_handle.block_on(async {
                             if let Err(e) = git
                                 .commit(looper_git::CommitInput {
                                     worktree_path: worktree_path.clone(),

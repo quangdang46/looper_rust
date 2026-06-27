@@ -55,6 +55,7 @@ pub struct Policy {
 /// Which agent or fallback performed each action.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct Actions {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub commit: String,
@@ -64,11 +65,6 @@ pub struct Actions {
     pub pr: String,
 }
 
-impl Default for Actions {
-    fn default() -> Self {
-        Self { commit: String::new(), push: String::new(), pr: String::new() }
-    }
-}
 
 impl Actions {}
 
@@ -257,11 +253,10 @@ impl State {
                         s.last_error = val.as_str().unwrap_or("").to_string();
                     }
                 }
-                "agent_ingested_at" => {
-                    if s.agent_ingested_at.is_empty() {
+                "agent_ingested_at"
+                    if s.agent_ingested_at.is_empty() => {
                         s.agent_ingested_at = val.as_str().unwrap_or("").to_string();
                     }
-                }
                 _ => {}
             }
         }

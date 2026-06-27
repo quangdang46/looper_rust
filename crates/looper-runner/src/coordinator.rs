@@ -93,7 +93,7 @@ impl CoordinatorScheduler for Coordinator {
 
             // If this loop references a PR, check if it's still open
             if let Some(pr_num) = l.pr_number {
-                if !pr_open_cache.contains_key(&pr_num) {
+                if let std::collections::hash_map::Entry::Vacant(e) = pr_open_cache.entry(pr_num) {
                     let is_open = if let Some(ref gw) = self.github {
                         // Use the GitHub gateway to check if PR is open
                         let pr_check = gw.view_pull_request(looper_github::types::ViewPullRequestInput {
@@ -108,7 +108,7 @@ impl CoordinatorScheduler for Coordinator {
                     } else {
                         true // assume open if no github
                     };
-                    pr_open_cache.insert(pr_num, is_open);
+                    e.insert(is_open);
                 }
                 if !pr_open_cache.get(&pr_num).copied().unwrap_or(false) {
                     // PR is closed - skip this loop
@@ -577,6 +577,7 @@ pub fn action_to_queue_dispatch(action: &WatchAction, _dispatch_config: &Dispatc
 ///
 /// Runs `gh pr merge <num> --auto --squash -R <repo>` to enable GitHub's
 /// auto-merge (merge-when-checks-pass) functionality with squash strategy.
+#[allow(clippy::disallowed_methods)]
 pub fn execute_auto_merge(pr_number: i64, repo: &str) -> Result<(), String> {
     let output = Command::new("gh")
         .args(["pr", "merge", &pr_number.to_string(), "--auto", "--squash", "-R", repo])

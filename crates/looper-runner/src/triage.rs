@@ -195,7 +195,7 @@ pub fn search_tokens(issue: &Issue) -> Vec<String> {
             continue;
         }
         // Trim trailing separators
-        while m.ends_with(|c: char| c == '.' || c == '/' || c == '-') {
+        while m.ends_with(['.', '/', '-']) {
             m.pop();
         }
         if m.len() < 3 || seen.contains(&m) {
