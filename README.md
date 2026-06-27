@@ -394,3 +394,38 @@ MIT — see [LICENSE](LICENSE).
 ---
 
 *Built with [clap](https://github.com/clap-rs/clap), [tokio](https://tokio.rs), [axum](https://github.com/tokio-rs/axum), [rusqlite](https://github.com/rusqlite/rusqlite), [serde](https://serde.rs), [tracing](https://docs.rs/tracing), and 30+ other Rust crates.*
+
+## Install
+
+### macOS / Linux
+```bash
+curl -fsSL "https://raw.githubusercontent.com/quangdang46/looper_rust/main/install.sh" | bash
+```
+
+### Windows PowerShell
+```powershell
+irm "https://raw.githubusercontent.com/quangdang46/looper_rust/main/install.ps1" | iex
+```
+
+### From Source
+```bash
+cargo build --release -p looperd -p looper-cli
+cp target/release/looperd target/release/looper-cli target/release/looper ~/.local/bin/
+```
+
+## Quick Start
+```bash
+# Start daemon
+looper daemon start
+
+# Add a project
+curl -X POST http://127.0.0.1:8080/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-project","repo_url":"owner/repo","path":"/path/to/repo","default_branch":"main"}'
+
+# Label an issue with `looper:plan` to trigger the pipeline
+```
+
+## CI/CD
+- CI: `cargo fmt` + `cargo clippy` + `cargo test` on ubuntu/macos/windows
+- Release: cross-compile 5 targets on `v*` tag → GitHub Release
