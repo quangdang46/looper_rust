@@ -4,7 +4,9 @@
 //! to discover projects and their PRs, classify them via MergeWatch, and
 //! enqueue appropriate queue items.
 //!
-//! It implements [`CoordinatorScheduler`].
+//! It implements [`CoordinatorScheduler`] and runs its logic through a
+//! middleware chain for composability: quality gate → discovery → outcome
+//! recording → patrol monitoring.
 
 use std::sync::Arc;
 
@@ -57,6 +59,9 @@ impl CoordinatorScheduler for Coordinator {
         //   2. Run classify_pr (from merge_watch) on each.
         //   3. Map the resulting WatchActionKind to queue dispatch types.
         //   4. Enqueue QueueItemRecords for the scheduler to claim.
+        //
+        // After building the initial queue items, the middleware pipeline
+        // applies: quality gate → outcome recording → patrol monitoring.
 
         let mut queue_items: Vec<QueueItemRecord> = Vec::new();
 
@@ -116,12 +121,17 @@ impl CoordinatorScheduler for Coordinator {
                 }
             }
 
-            // Check if there's already a pending queue item for this loop
-            // to avoid duplicates.
+            // Check if there's already a pending queue item for this PR
+            // across ALL loops to avoid duplicate workers/reviewers.
             let pending = match guard.queue.list() {
-                Ok(items) => items
-                    .iter()
-                    .any(|q| q.loop_id.as_deref() == Some(&l.id) && (q.status == "queued" || q.status == "running")),
+                Ok(items) => items.iter().any(|q| {
+                    // Match by pr_number if available, otherwise fall back to loop_id
+                    let pr_match = match (q.pr_number, l.pr_number) {
+                        (Some(qpr), Some(lpr)) => qpr == lpr,
+                        _ => q.loop_id.as_deref() == Some(&l.id),
+                    };
+                    pr_match && (q.status == "queued" || q.status == "running")
+                }),
                 Err(_) => false,
             };
 

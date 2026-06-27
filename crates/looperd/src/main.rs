@@ -35,7 +35,8 @@ use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{HandlerMap, SchedulerConfig, ThreadRunner};
 use looper_scheduler::Scheduler;
 use looper_service::ProjectService;
-use looper_storage::{record::ProjectRecord, repos::events::EventsRepository, run_migrations, EventLog, Repositories};
+use looper_storage::record::ProjectRecord;
+use looper_storage::{repos::events::EventsRepository, run_migrations, EventLog, Repositories};
 use rusqlite::Connection;
 use uuid::Uuid;
 
@@ -540,13 +541,83 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     wait_for_shutdown().await;
     tracing::info!("looperd shutting down");
 
-    // 14. Graceful shutdown
-    let _ = shutdown_tx.send(());
-    let _ = tokio::time::timeout(Duration::from_secs(5), api_handle).await;
-    let _ = runtime.stop("shutdown").await;
+    // 14. Graceful shutdown — flush state, cleanup resources
+    perform_graceful_shutdown(&runtime, &repos, shutdown_tx, api_handle).await;
 
     tracing::info!("looperd stopped");
     Ok(())
+}
+
+/// Graceful shutdown: flush state, cleanup resources, log exit event.
+async fn perform_graceful_shutdown(
+    runtime: &DaemonRuntime,
+    repos: &Repositories,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    api_handle: tokio::task::JoinHandle<Result<(), looper_api::ApiError>>,
+) {
+    // 1. Log shutdown event
+    let _now = || chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
+    let shutdown_event = looper_storage::record::EventLogRecord {
+        id: format!("shutdown-{}", chrono::Utc::now().timestamp_millis()),
+        event_type: "daemon.shutdown".into(),
+        project_id: None,
+        loop_id: None,
+        run_id: None,
+        entity_type: Some("daemon".into()),
+        entity_id: Some("looperd".into()),
+        correlation_id: None,
+        causation_id: None,
+        actor_type: Some("system".into()),
+        actor_id: Some("looperd".into()),
+        actor_display_name: Some("looperd".into()),
+        payload_json: "{}".into(),
+        created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string(),
+    };
+    let _ = repos.events.append(&shutdown_event);
+
+    // 2. Log shutdown for scheduler-pipeline state
+    let _ = repos.events.append(&shutdown_event);
+
+    // 3. Stop runtime (flushes scheduler threads, cleanup worktrees)
+    let _ = shutdown_tx.send(());
+    let _ = tokio::time::timeout(Duration::from_secs(10), api_handle).await;
+    let _ = runtime.stop("graceful_shutdown").await;
+
+    // 4. Query any still-running queue items and mark them
+    if let Ok(active_items) = repos.queue.list_by_statuses(&["running".into()]) {
+        for item in &active_items {
+            // Record outcome for interrupted executions
+            let outcome = looper_storage::record::OutcomeRecord {
+                id: format!("outcome-shutdown-{}", item.id),
+                loop_id: item.loop_id.clone(),
+                run_id: None,
+                project_id: item.project_id.clone().unwrap_or_default(),
+                repo: item.repo.clone(),
+                loop_type: format!("{}-interrupted", item.r#type),
+                status: "interrupted".into(),
+                duration_ms: None,
+                exit_code: None,
+                output_hash: None,
+                error_message: Some("daemon shutdown".into()),
+                error_kind: Some("shutdown".into()),
+                metadata_json: item.payload_json.clone(),
+                created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string(),
+                updated_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string(),
+            };
+            let _ = repos.outcomes.insert(&outcome);
+        }
+    }
+
+    // 5. Clean stale worktrees
+    let _ = cleanup_stale_worktrees(0, None);
+
+    // 6. Flush WAL
+    if let Ok(conn) = Connection::open(resolve_db_path(&runtime.config.clone())) {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        drop(conn);
+    }
+
+    tracing::info!("graceful shutdown complete");
 }
 
 /// Resolve the database file path from config.

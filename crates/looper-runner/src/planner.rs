@@ -553,15 +553,19 @@ The spec file path MUST be included in the PR body as:
                                                 .lines()
                                                 .filter(|l| !l.starts_with("__LOOPER_RESULT__="))
                                                 .collect::<Vec<_>>()
-                                                .join("
-");
+                                                .join(
+                                                    "
+",
+                                                );
                                             let raw_summary = &result.summary;
                                             let clean_summary: String = raw_summary
                                                 .lines()
                                                 .filter(|l| !l.starts_with("__LOOPER_RESULT__="))
                                                 .collect::<Vec<_>>()
-                                                .join("
-");
+                                                .join(
+                                                    "
+",
+                                                );
                                             let spec_content = if !clean_stdout.trim().is_empty() {
                                                 clean_stdout
                                             } else if !clean_summary.trim().is_empty() {

@@ -13,6 +13,7 @@
 pub mod error;
 pub mod eventlog;
 pub mod helpers;
+pub mod middleware;
 pub mod migration;
 pub mod record;
 pub mod repos;
@@ -21,7 +22,7 @@ pub use error::{Result, StorageError};
 pub use eventlog::EventLog;
 pub use migration::run_migrations;
 pub use record::*;
-pub use repos::Repositories;
+pub use repos::{OutcomesRepository, Repositories};
 
 #[cfg(test)]
 mod tests;

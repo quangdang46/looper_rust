@@ -133,6 +133,27 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
 
     let (claimed, _) = execute_claim_phase(scheduler, ctx, ClaimPhase::PostDiscovery, &discovered_runnable_ids);
     summary.total_claimed += claimed;
+
+    // Post-discovery middleware pipeline (quality gate → outcome → patrol).
+    // Runs on all queue items that were enqueued during this tick.
+    if !discovered_runnable_ids.is_empty() {
+        let ids: Vec<String> = discovered_runnable_ids.iter().cloned().collect();
+        tracing::info!("Middleware hook: {} discovered IDs", ids.len());
+        let repos = scheduler.repos();
+        let items: Vec<QueueItemRecord> =
+            ids.iter().filter_map(|id| repos.queue.get_by_id(id).ok().flatten()).collect();
+        drop(repos);
+
+        if !items.is_empty() {
+            tracing::info!("Middleware hook: running on {} items", items.len());
+            looper_storage::middleware::run_post_discovery_middleware(&items, &scheduler.repos());
+        } else {
+            tracing::info!("Middleware hook: discovered IDs but NO items found in DB");
+        }
+    } else {
+        tracing::info!("Middleware hook: no discovered runnable IDs — skipping");
+    }
+
     summary.duration = started_at.elapsed();
 
     tracing::info!(

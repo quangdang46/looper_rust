@@ -3,6 +3,7 @@ pub mod events;
 pub mod locks;
 pub mod loops;
 pub mod notifications;
+pub mod outcomes;
 pub mod projects;
 pub mod pull_request_snapshots;
 pub mod queue;
@@ -15,18 +16,19 @@ use std::sync::Arc;
 
 use rusqlite::Connection;
 
-use self::agent_executions::AgentExecutionsRepository;
-use self::events::EventsRepository;
-use self::locks::LocksRepository;
-use self::loops::LoopsRepository;
-use self::notifications::NotificationsRepository;
-use self::projects::ProjectsRepository;
-use self::pull_request_snapshots::PullRequestSnapshotsRepository;
-use self::queue::QueueRepository;
-use self::runs::RunsRepository;
-use self::webhook_forwarders::WebhookForwardersRepository;
-use self::webhook_tunnel_hooks::WebhookTunnelHooksRepository;
-use self::worktrees::WorktreesRepository;
+pub use self::agent_executions::AgentExecutionsRepository;
+pub use self::events::EventsRepository;
+pub use self::locks::LocksRepository;
+pub use self::loops::LoopsRepository;
+pub use self::notifications::NotificationsRepository;
+pub use self::outcomes::OutcomesRepository;
+pub use self::projects::ProjectsRepository;
+pub use self::pull_request_snapshots::PullRequestSnapshotsRepository;
+pub use self::queue::QueueRepository;
+pub use self::runs::RunsRepository;
+pub use self::webhook_forwarders::WebhookForwardersRepository;
+pub use self::webhook_tunnel_hooks::WebhookTunnelHooksRepository;
+pub use self::worktrees::WorktreesRepository;
 
 /// Container for all repository instances.
 ///
@@ -47,6 +49,7 @@ pub struct Repositories {
     pub locks: LocksRepository,
     pub queue: QueueRepository,
     pub notifications: NotificationsRepository,
+    pub outcomes: OutcomesRepository,
     pub worktrees: WorktreesRepository,
     pub webhook_forwarders: WebhookForwardersRepository,
     pub webhook_tunnel_hooks: WebhookTunnelHooksRepository,
@@ -67,6 +70,7 @@ impl Repositories {
             locks: LocksRepository::new(Arc::clone(&conn)),
             queue: QueueRepository::new(Arc::clone(&conn)),
             notifications: NotificationsRepository::new(Arc::clone(&conn)),
+            outcomes: OutcomesRepository::new(Arc::clone(&conn)),
             worktrees: WorktreesRepository::new(Arc::clone(&conn)),
             webhook_forwarders: WebhookForwardersRepository::new(Arc::clone(&conn)),
             webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(Arc::clone(&conn)),
@@ -94,6 +98,7 @@ impl Repositories {
             locks: LocksRepository::new(make_conn()?),
             queue: QueueRepository::new(make_conn()?),
             notifications: NotificationsRepository::new(make_conn()?),
+            outcomes: OutcomesRepository::new(make_conn()?),
             worktrees: WorktreesRepository::new(make_conn()?),
             webhook_forwarders: WebhookForwardersRepository::new(make_conn()?),
             webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(make_conn()?),

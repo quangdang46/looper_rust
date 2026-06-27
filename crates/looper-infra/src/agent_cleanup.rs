@@ -124,10 +124,7 @@ fn kill_orphan_by_workdir(exec: &AgentExecutionRecord) {
                             let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).output();
                             std::thread::sleep(std::time::Duration::from_millis(500));
                             let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).output();
-                            tracing::info!(
-                                "Killed orphan agent PID={} in workdir {} (after SIGTERM+SIGKILL)",
-                                pid, wd
-                            );
+                            tracing::info!("Killed orphan agent PID={} in workdir {} (after SIGTERM+SIGKILL)", pid, wd);
                         }
                     }
                 }

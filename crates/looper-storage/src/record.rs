@@ -299,6 +299,26 @@ impl AppendInput {
     }
 }
 
+/// Outcome record — per-execution result tracking.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutcomeRecord {
+    pub id: String,
+    pub loop_id: Option<String>,
+    pub run_id: Option<String>,
+    pub project_id: String,
+    pub repo: Option<String>,
+    pub loop_type: String,
+    pub status: String,
+    pub duration_ms: Option<i64>,
+    pub exit_code: Option<i64>,
+    pub output_hash: Option<String>,
+    pub error_message: Option<String>,
+    pub error_kind: Option<String>,
+    pub metadata_json: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Helper type for counts-by-status queries.
 pub type StatusCountMap = HashMap<String, i64>;
 

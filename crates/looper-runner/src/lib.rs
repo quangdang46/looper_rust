@@ -11,6 +11,7 @@ pub mod error;
 pub mod fixer;
 pub mod lifecycle;
 pub mod merge_watch;
+pub mod middleware;
 pub mod planner;
 pub mod reviewer;
 pub mod reviewer_criteria;
