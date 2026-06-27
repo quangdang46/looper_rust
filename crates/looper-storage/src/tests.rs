@@ -409,6 +409,8 @@ fn test_runs_upsert_and_get() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "run-1".into(),
             loop_id: lid,
             status: "running".into(),
@@ -438,6 +440,8 @@ fn test_runs_get_latest_by_loop_id() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "run-old".into(),
             loop_id: lid.clone(),
             status: "completed".into(),
@@ -456,6 +460,8 @@ fn test_runs_get_latest_by_loop_id() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "run-new".into(),
             loop_id: lid,
             status: "running".into(),
@@ -483,6 +489,8 @@ fn test_runs_has_running() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "r1".into(),
             loop_id: lid,
             status: "running".into(),
@@ -510,6 +518,8 @@ fn test_runs_list_by_loop() {
         repos
             .runs
             .upsert(&RunRecord {
+                agent_vendor: None,
+                model: None,
                 id: format!("r-{i}"),
                 loop_id: lid.clone(),
                 status: "completed".into(),
@@ -538,6 +548,8 @@ fn test_runs_list_by_status() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "r1".into(),
             loop_id: lid,
             status: "failed".into(),
@@ -566,6 +578,8 @@ fn test_runs_count_by_status() {
         repos
             .runs
             .upsert(&RunRecord {
+                agent_vendor: None,
+                model: None,
                 id: format!("r-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap()),
                 loop_id: lid.clone(),
                 status: s.into(),
@@ -1412,6 +1426,8 @@ fn test_agent_executions_get_latest_by_run_id() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "r-1".into(),
             loop_id: lid,
             status: "running".into(),
@@ -1500,6 +1516,8 @@ fn test_agent_executions_get_latest_active_by_run_id() {
     repos
         .runs
         .upsert(&RunRecord {
+            agent_vendor: None,
+            model: None,
             id: "r-1".into(),
             loop_id: lid,
             status: "running".into(),
