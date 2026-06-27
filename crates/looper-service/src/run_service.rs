@@ -306,7 +306,7 @@ mod tests {
     use looper_storage::migration::run_migrations;
     use looper_storage::record::{LoopRecord, ProjectRecord};
     use looper_storage::repos::Repositories;
-    
+
     use looper_types::{LoopType, RunStatus};
 
     use super::*;
