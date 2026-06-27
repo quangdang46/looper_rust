@@ -69,13 +69,15 @@ fn run_quality_gate(items: Vec<QueueItemRecord>, repos: &crate::Repositories) ->
         let exhausted =
             existing.iter().any(|q| q.id != item.id && q.dedupe_key == item.dedupe_key && q.attempts >= max_retries);
         // Also check loop_id / pr_number conflict
-        let conflict = item
-            .loop_id
-            .as_deref()
-            .is_some_and(|lid| existing.iter().any(|q| q.id != item.id && q.loop_id.as_deref() == Some(lid) && (q.status == "queued" || q.status == "running")))
-            || item
-                .pr_number
-                .is_some_and(|pr| existing.iter().any(|q| q.id != item.id && q.pr_number == Some(pr) && (q.status == "queued" || q.status == "running")));
+        let conflict = item.loop_id.as_deref().is_some_and(|lid| {
+            existing.iter().any(|q| {
+                q.id != item.id && q.loop_id.as_deref() == Some(lid) && (q.status == "queued" || q.status == "running")
+            })
+        }) || item.pr_number.is_some_and(|pr| {
+            existing
+                .iter()
+                .any(|q| q.id != item.id && q.pr_number == Some(pr) && (q.status == "queued" || q.status == "running"))
+        });
 
         if already_pending || conflict {
             tracing::debug!("quality_gate: skipping duplicate/conflict {}", item.id);
