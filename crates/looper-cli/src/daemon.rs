@@ -384,8 +384,10 @@ WantedBy=multi-user.target
     );
 
     // System-level install requires root; offer user-level if that fails
-    let systemd_paths =
-        [format!("/etc/systemd/system/looperd.service"), format!("{home}/.config/systemd/user/looperd.service")];
+    let systemd_paths = [
+        "/etc/systemd/system/looperd.service".to_string(),
+        format!("{home}/.config/systemd/user/looperd.service"),
+    ];
 
     let mut written = false;
     for path_str in &systemd_paths {
