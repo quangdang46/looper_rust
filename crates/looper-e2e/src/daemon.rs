@@ -13,6 +13,7 @@ use crate::binaries::BuiltBinaries;
 use crate::temp_home::TempHome;
 
 /// A running `looperd` daemon process for E2E tests.
+#[allow(dead_code)]
 pub struct DaemonProcess {
     child: Mutex<Option<Child>>,
     home: TempHome,

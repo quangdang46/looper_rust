@@ -51,6 +51,7 @@ const ENV_GIT_PATH: &str = "LOOPER_E2E_FAKE_GH_GIT_PATH";
 /// A single command response from the state file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stdout: Option<serde_json::Value>,
@@ -63,6 +64,7 @@ struct Response {
 /// JSON-schema that defines which JSON fields are allowed for each command key.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 struct Schema {
     #[serde(rename = "jsonFieldAllowlist")]
     json_field_allowlist: HashMap<String, Vec<String>>,
@@ -181,6 +183,7 @@ struct PullRequestState {
 /// Complete state of the fake-gh server, serialised to JSON.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 struct State {
     #[serde(default)]
     commands: HashMap<String, Response>,
@@ -453,7 +456,7 @@ fn handle_api(
 fn build_pr_view_json(st: &State, args: &[String], fields: &[String], git_path: &str) -> Option<String> {
     let repo = flag_value(args, "--repo");
     let pr_number = parse_pr_number(args)?;
-    let pr = lookup_pull_request(st, &repo, pr_number, git_path)?;
+    let pr = lookup_pull_request(st, repo, pr_number, git_path)?;
 
     let mut row = serde_json::Map::new();
     for field in fields {
@@ -514,7 +517,7 @@ fn handle_pr_merge(
         for cap in CLOSES_ISSUE_RE.captures_iter(&body) {
             if let Some(m) = cap.get(1) {
                 if let Ok(issue_num) = m.as_str().parse::<i64>() {
-                    close_linked_issue_route(&mut st, &repo, issue_num);
+                    close_linked_issue_route(&mut st, repo, issue_num);
                 }
             }
         }
@@ -1098,7 +1101,7 @@ fn build_compare_payload(route: &str, git_path: &str) -> Option<String> {
         return Some(r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string());
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let fields: Vec<&str> = stdout.trim().split_whitespace().collect();
+    let fields: Vec<&str> = stdout.split_whitespace().collect();
     if fields.len() != 2 {
         return Some(r#"{"ahead_by":0,"behind_by":0,"status":"identical","total_commits":0}"#.to_string());
     }
@@ -1465,26 +1468,5 @@ fn fatalf(code: i32, msg: &str) -> ! {
 // Default impls
 // ---------------------------------------------------------------------------
 
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            commands: HashMap::new(),
-            routes: HashMap::new(),
-            graphql: HashMap::new(),
-            current_user_login: String::new(),
-            pull_requests: HashMap::new(),
-        }
-    }
-}
 
-impl Default for Response {
-    fn default() -> Self {
-        Self { stdout: None, stderr: String::new(), exit_code: 0 }
-    }
-}
 
-impl Default for Schema {
-    fn default() -> Self {
-        Self { json_field_allowlist: HashMap::new() }
-    }
-}

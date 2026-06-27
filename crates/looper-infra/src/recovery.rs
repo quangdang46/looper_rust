@@ -25,6 +25,7 @@ const STALE_HEARTBEAT_THRESHOLD: Duration = Duration::from_secs(30 * 60);
 
 /// Summary of recovery operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct RecoverySummary {
     pub started_at: String,
     pub completed_at: String,
@@ -35,30 +36,14 @@ pub struct RecoverySummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct OrphanAgentCleanup {
     pub attempted: bool,
     pub cleaned_count: i64,
     pub warning: String,
 }
 
-impl Default for OrphanAgentCleanup {
-    fn default() -> Self {
-        Self { attempted: false, cleaned_count: 0, warning: String::new() }
-    }
-}
 
-impl Default for RecoverySummary {
-    fn default() -> Self {
-        Self {
-            started_at: String::new(),
-            completed_at: String::new(),
-            orphan_agent_cleanup: OrphanAgentCleanup::default(),
-            expired_locks_released: 0,
-            interrupted_runs_marked: 0,
-            events_written: 0,
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Phase 1: Orphan agent cleanup
@@ -111,14 +96,11 @@ pub fn cleanup_orphan_agents(repos: &Repositories) -> OrphanAgentCleanup {
 pub fn release_expired_locks(repos: &Repositories, now: DateTime<Utc>) -> i64 {
     let mut released: i64 = 0;
     let now_iso = now.to_rfc3339();
-    match repos.locks.list_expired(&now_iso) {
-        Ok(locks) => {
-            for lock in locks {
-                let _ = repos.locks.release(&lock.key);
-                released += 1;
-            }
+    if let Ok(locks) = repos.locks.list_expired(&now_iso) {
+        for lock in locks {
+            let _ = repos.locks.release(&lock.key);
+            released += 1;
         }
-        Err(_) => {}
     }
     released
 }
@@ -133,37 +115,34 @@ pub fn reconcile_stale_runs(repos: &Repositories, now: DateTime<Utc>) -> (i64, V
     let mut run_ids = Vec::new();
     let threshold_secs = STALE_HEARTBEAT_THRESHOLD.as_secs() as i64;
 
-    match repos.runs.list() {
-        Ok(runs) => {
-            for run in &runs {
-                let last_heartbeat = match &run.last_heartbeat_at {
-                    Some(hb) => match hb.parse::<DateTime<Utc>>() {
-                        Ok(dt) => dt,
-                        Err(_) => continue,
-                    },
-                    None => {
-                        if let Ok(created) = run.created_at.parse::<DateTime<Utc>>() {
-                            if now.signed_duration_since(created).num_seconds() > threshold_secs {
-                                interrupted += 1;
-                                let mut rec = run.clone();
-                                rec.status = "interrupted".into();
-                                let _ = repos.runs.upsert(&rec);
-                                run_ids.push(run.id.clone());
-                            }
+    if let Ok(runs) = repos.runs.list() {
+        for run in &runs {
+            let last_heartbeat = match &run.last_heartbeat_at {
+                Some(hb) => match hb.parse::<DateTime<Utc>>() {
+                    Ok(dt) => dt,
+                    Err(_) => continue,
+                },
+                None => {
+                    if let Ok(created) = run.created_at.parse::<DateTime<Utc>>() {
+                        if now.signed_duration_since(created).num_seconds() > threshold_secs {
+                            interrupted += 1;
+                            let mut rec = run.clone();
+                            rec.status = "interrupted".into();
+                            let _ = repos.runs.upsert(&rec);
+                            run_ids.push(run.id.clone());
                         }
-                        continue;
                     }
-                };
-                if now.signed_duration_since(last_heartbeat).num_seconds() > threshold_secs {
-                    interrupted += 1;
-                    let mut rec = run.clone();
-                    rec.status = "interrupted".into();
-                    let _ = repos.runs.upsert(&rec);
-                    run_ids.push(run.id.clone());
+                    continue;
                 }
+            };
+            if now.signed_duration_since(last_heartbeat).num_seconds() > threshold_secs {
+                interrupted += 1;
+                let mut rec = run.clone();
+                rec.status = "interrupted".into();
+                let _ = repos.runs.upsert(&rec);
+                run_ids.push(run.id.clone());
             }
         }
-        Err(_) => {}
     }
 
     (interrupted, run_ids)

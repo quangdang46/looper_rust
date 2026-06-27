@@ -5,7 +5,7 @@
 //! configuration helpers, and fake GitHub/Agent/osascript subprocess
 //! types used by integration-style tests.
 
-// Keep unused-crate-deps linter quiet — some deps are consumed only at the
+#![allow(unused_extern_crates)]
 // binary level but declared in this crate's manifest, or may be used by
 // test helpers in future iterations.
 #[allow(unused_imports)]

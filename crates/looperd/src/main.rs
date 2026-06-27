@@ -317,7 +317,7 @@ impl ProjectServiceTrait for DaemonProjectService {
 
     async fn list(&self) -> Result<Vec<ProjectSummary>, ApiError> {
         let records = self.service.list().map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok(records.into_iter().map(|r| project_record_to_summary(r)).collect())
+        Ok(records.into_iter().map(project_record_to_summary).collect())
     }
 
     async fn sync(&self, name: &str) -> Result<ProjectSummary, ApiError> {

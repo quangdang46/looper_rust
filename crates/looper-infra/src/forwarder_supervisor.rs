@@ -200,7 +200,7 @@ pub fn classify_exit(stderr: &str) -> ExitClass {
 }
 
 fn respawn_delay(attempt: u32, max: u64) -> u64 {
-    (1u64 * 2u64.pow(attempt.saturating_sub(1))).min(max)
+    2u64.pow(attempt.saturating_sub(1)).min(max)
 }
 
 #[cfg(test)]
