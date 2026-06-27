@@ -388,6 +388,13 @@ impl CoordinatorScheduler for Coordinator {
                                     labels: vec!["looper:implement".into()],
                                     cwd: ".".to_string(),
                                 });
+                                // Remove looper:plan so the planner doesn't re-discover it
+                                let _ = gw.remove_issue_labels(IssueLabelsInput {
+                                    repo: repo.clone(),
+                                    issue_number: issue.number,
+                                    labels: vec!["looper:plan".into()],
+                                    cwd: ".".to_string(),
+                                });
                             }
                         }
                     }

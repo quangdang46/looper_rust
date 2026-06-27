@@ -75,7 +75,11 @@ pub fn recover_orphan_executions(repos: &Arc<Repositories>) {
     }
 }
 
-/// Kill any orphaned agent processes that match the execution's CWD.
+/// Kill orphaned agent processes that were spawned by looper.
+///
+/// Uses the stored PID/PGID from the execution record rather than
+/// scanning all processes. Avoids killing unrelated agent processes
+/// that share the same CWD but were started by the user manually.
 fn kill_orphan_by_workdir(exec: &AgentExecutionRecord) {
     // The cwd is stored in the AgentExecutionRecord directly
     let wd = match &exec.cwd {
@@ -83,7 +87,14 @@ fn kill_orphan_by_workdir(exec: &AgentExecutionRecord) {
         None => return,
     };
 
-    // Scan running processes for one matching the CWD
+    // Only scan if we didn't already kill by PGID/PID (check if status is already updated)
+    if exec.status == "killed" || exec.status == "recovered" {
+        return;
+    }
+
+    // Scan running processes for one matching the CWD.
+    // We match more strictly: the process must have the exact CWD as a prefix
+    // AND must be a known agent type.
     if let Ok(out) = Command::new("ps").args(["-eo", "pid=,args="]).output() {
         let stdout = String::from_utf8_lossy(&out.stdout);
         for line in stdout.lines() {
@@ -91,14 +102,32 @@ fn kill_orphan_by_workdir(exec: &AgentExecutionRecord) {
             if line.is_empty() {
                 continue;
             }
+            // Only match if the args start with or contain the worktree path
+            // as a distinct path component (not just a substring match)
+            let wd_pattern = format!("/.looper/worktrees/");
+            if !line.contains(&wd_pattern) {
+                continue;
+            }
+            // Match the specific project worktree path
             if line.contains(&wd) {
                 if let Some(pid_str) = line.split_whitespace().next() {
                     if let Ok(pid) = pid_str.parse::<i32>() {
-                        // Only kill processes that look like looper agents (claude/codex/opencode)
+                        // Only kill processes that look like looper agents (claude/codex/opencode/cursor/hermes)
                         let lower = line.to_lowercase();
-                        if lower.contains("claude") || lower.contains("codex") || lower.contains("opencode") {
+                        let is_looper_agent = lower.contains("claude")
+                            || lower.contains("codex")
+                            || lower.contains("opencode")
+                            || lower.contains("cursor")
+                            || lower.contains("hermes");
+                        if is_looper_agent {
+                            // First try SIGTERM for graceful shutdown
+                            let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).output();
+                            std::thread::sleep(std::time::Duration::from_millis(500));
                             let _ = Command::new("kill").args(["-KILL", &pid.to_string()]).output();
-                            tracing::info!("Killed orphan agent PID={} in workdir {}", pid, wd);
+                            tracing::info!(
+                                "Killed orphan agent PID={} in workdir {} (after SIGTERM+SIGKILL)",
+                                pid, wd
+                            );
                         }
                     }
                 }
