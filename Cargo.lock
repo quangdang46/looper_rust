@@ -1030,6 +1030,7 @@ dependencies = [
  "looper-storage",
  "looper-types",
  "nix",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

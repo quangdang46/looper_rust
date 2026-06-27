@@ -23,6 +23,7 @@ looper-runner = { path = "../looper-runner" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

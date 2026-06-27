@@ -78,11 +78,11 @@ pub fn run_quality_gate(
 
         let duplicate = already_pending;
         // Also check loop_id / pr_number
-        let conflict = item.loop_id.as_deref().map_or(false, |lid| {
+        let conflict = item.loop_id.as_deref().is_some_and(|lid| {
             all_items
                 .iter()
                 .any(|q| q.loop_id.as_deref() == Some(lid) && (q.status == "queued" || q.status == "running"))
-        }) || item.pr_number.map_or(false, |pr| {
+        }) || item.pr_number.is_some_and(|pr| {
             all_items.iter().any(|q| q.pr_number == Some(pr) && (q.status == "queued" || q.status == "running"))
         });
 
@@ -92,7 +92,7 @@ pub fn run_quality_gate(
         if exhausted {
             tracing::warn!("QualityGate: exhausted after {max_retries} attempts: {}", item.id);
         }
-        !(duplicate || conflict) && !exhausted
+        !(duplicate || conflict || exhausted)
     });
 
     drop(guard);

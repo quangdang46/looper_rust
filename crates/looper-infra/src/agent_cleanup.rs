@@ -104,8 +104,8 @@ fn kill_orphan_by_workdir(exec: &AgentExecutionRecord) {
             }
             // Only match if the args start with or contain the worktree path
             // as a distinct path component (not just a substring match)
-            let wd_pattern = format!("/.looper/worktrees/");
-            if !line.contains(&wd_pattern) {
+            let wd_pattern = "/.looper/worktrees/";
+            if !line.contains(wd_pattern) {
                 continue;
             }
             // Match the specific project worktree path

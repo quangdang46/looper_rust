@@ -11,7 +11,7 @@
 #[allow(unused_imports)]
 use {
     anyhow as _, chrono as _, looper_agent as _, looper_git as _, looper_github as _, looper_runner as _,
-    looper_scheduler as _, looper_service as _, looper_storage as _, thiserror as _, tokio as _,
+    looper_scheduler as _, looper_service as _, looper_storage as _, regex as _, thiserror as _, tokio as _,
 };
 
 pub mod artifacts;
