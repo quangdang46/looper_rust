@@ -1,9 +1,10 @@
 use crate::enums::{LogFormat, StorageBackend};
 use crate::partial::Merge;
 use crate::partial::{
-    PartialConfig, PartialDaemonConfig, PartialLoggingConfig, PartialNotificationsConfig, PartialServerConfig,
-    PartialStorageConfig,
+    PartialConfig, PartialDaemonConfig, PartialDispatchConfig, PartialLoggingConfig, PartialNotificationsConfig,
+    PartialServerConfig, PartialStorageConfig,
 };
+use crate::types::DispatchMode;
 use looper_types::{DaemonMode, LogLevel};
 use std::str::FromStr;
 
@@ -71,6 +72,21 @@ pub fn load_env_overrides() -> PartialConfig {
         partial.notifications(PartialNotificationsConfig { webhook_url: Some(v), ..Default::default() });
     }
 
+    // -- Dispatch section --
+    if let Some(v) = get_env("DISPATCH_MODE") {
+        partial.dispatch(PartialDispatchConfig { mode: DispatchMode::from_str(&v).ok(), ..Default::default() });
+    }
+    if let Some(v) = get_env("DISPATCH_ALLOWED_USERS") {
+        partial.dispatch(PartialDispatchConfig {
+            allowed_users: Some(v.split(',').map(|s| s.trim().to_string()).collect()),
+            ..Default::default()
+        });
+    }
+    if let Some(v) = get_env("DISPATCH_AUTONOMOUS_DELAY_SECONDS") {
+        let secs: u64 = v.parse().unwrap_or(1800);
+        partial.dispatch(PartialDispatchConfig { autonomous_delay_seconds: Some(secs), ..Default::default() });
+    }
+
     partial
 }
 
@@ -94,6 +110,7 @@ trait PartialConfigExt {
     fn storage(&mut self, cfg: PartialStorageConfig);
     fn logging(&mut self, cfg: PartialLoggingConfig);
     fn notifications(&mut self, cfg: PartialNotificationsConfig);
+    fn dispatch(&mut self, cfg: PartialDispatchConfig);
 }
 
 impl PartialConfigExt for PartialConfig {
@@ -148,6 +165,17 @@ impl PartialConfigExt for PartialConfig {
             }
             None => {
                 self.notifications = Some(cfg);
+            }
+        }
+    }
+
+    fn dispatch(&mut self, cfg: PartialDispatchConfig) {
+        match &mut self.dispatch {
+            Some(existing) => {
+                existing.merge(cfg);
+            }
+            None => {
+                self.dispatch = Some(cfg);
             }
         }
     }

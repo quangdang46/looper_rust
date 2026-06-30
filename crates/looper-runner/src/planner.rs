@@ -119,6 +119,23 @@ impl PlannerScheduler for Planner {
                                 continue;
                             }
 
+                            // Permission check: only allow authorized users to trigger planning
+                            if let Some(ref gw) = self.github {
+                                if !crate::permissions::user_authorized_for_dispatch(
+                                    &issue.author,
+                                    &input.repo,
+                                    &self.config.dispatch_config,
+                                    gw.as_ref(),
+                                ) {
+                                    tracing::info!(
+                                        "Planner: issue #{} author '{}' not authorized, skipping",
+                                        issue.number,
+                                        issue.author
+                                    );
+                                    continue;
+                                }
+                            }
+
                             // Create a loop for this issue.
                             let loop_id = Uuid::new_v4().to_string();
                             let loop_seq = self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok());

@@ -58,6 +58,7 @@ pub struct PartialConfig {
     pub defaults: Option<PartialDefaultsConfig>,
     pub instructions: Option<PartialInstructionsConfig>,
     pub roles: Option<PartialRolesConfig>,
+    pub dispatch: Option<PartialDispatchConfig>,
     #[serde(default)]
     pub projects: Option<Vec<PartialProjectConfig>>,
 }
@@ -77,6 +78,7 @@ impl Merge for PartialConfig {
         self.defaults.merge(other.defaults);
         self.instructions.merge(other.instructions);
         self.roles.merge(other.roles);
+        self.dispatch.merge(other.dispatch);
         self.projects.merge(other.projects);
     }
 }
@@ -635,6 +637,39 @@ partial_default_impl!(PartialProjectConfig { name, path, default_loop_type, sche
 partial_merge_impl!(PartialProjectConfig { name, path, default_loop_type, schedule, enabled });
 
 // ---------------------------------------------------------------------------
+// Partial Dispatch
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct PartialDispatchConfig {
+    pub mode: Option<crate::types::DispatchMode>,
+    pub allowed_users: Option<Vec<String>>,
+    pub triaged_label: Option<String>,
+    pub hold_label: Option<String>,
+    pub autonomous_delay_seconds: Option<u64>,
+    pub slash_commands: Option<Vec<String>>,
+}
+
+partial_default_impl!(PartialDispatchConfig {
+    mode,
+    allowed_users,
+    triaged_label,
+    hold_label,
+    autonomous_delay_seconds,
+    slash_commands,
+});
+
+partial_merge_impl!(PartialDispatchConfig {
+    mode,
+    allowed_users,
+    triaged_label,
+    hold_label,
+    autonomous_delay_seconds,
+    slash_commands,
+});
+
+// ---------------------------------------------------------------------------
 // Conversion helpers: PartialConfig → Config (resolved with defaults)
 // ---------------------------------------------------------------------------
 
@@ -660,6 +695,7 @@ impl From<PartialConfig> for Config {
             defaults: partial.defaults.map(Into::into),
             instructions: partial.instructions.map(Into::into),
             roles: partial.roles.map(Into::into),
+            dispatch: partial.dispatch.map(Into::into),
             projects: partial.projects.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default(),
         }
     }
@@ -919,6 +955,20 @@ impl From<PartialProjectConfig> for ProjectConfig {
             default_loop_type: p.default_loop_type.or(d.default_loop_type),
             schedule: p.schedule.or(d.schedule),
             enabled: p.enabled.unwrap_or(d.enabled),
+        }
+    }
+}
+
+impl From<PartialDispatchConfig> for crate::types::DispatchConfig {
+    fn from(p: PartialDispatchConfig) -> Self {
+        let d = crate::types::DispatchConfig::default();
+        Self {
+            mode: p.mode.unwrap_or(d.mode),
+            allowed_users: p.allowed_users.unwrap_or(d.allowed_users),
+            triaged_label: p.triaged_label.unwrap_or(d.triaged_label),
+            hold_label: p.hold_label.unwrap_or(d.hold_label),
+            autonomous_delay_seconds: p.autonomous_delay_seconds.unwrap_or(d.autonomous_delay_seconds),
+            slash_commands: p.slash_commands.unwrap_or(d.slash_commands),
         }
     }
 }

@@ -91,6 +91,13 @@ pub fn validate_config(config: &Config) -> ConfigValidation {
         }
     }
 
+    // -- Dispatch --
+    if let Some(ref dispatch) = config.dispatch {
+        if dispatch.autonomous_delay_seconds == 0 {
+            issues.warn("dispatch.autonomous-delay-seconds", "delay is 0 — issues will be dispatched immediately");
+        }
+    }
+
     // -- Tools --
     if let Some(ref tools) = config.tools {
         if tools.timeout_secs == 0 {

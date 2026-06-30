@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Utc};
 
-use crate::types::{DispatchAction, DispatchConfig, DispatchMode};
+use looper_scheduler::types::{DispatchAction, DispatchConfig, DispatchMode};
 
 /// Labels used by the dispatch system.
 pub const DISPATCH_PLAN: &str = "dispatch/plan";
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_decide_human_gated_success() {
-        let cfg = DispatchConfig::default();
+        let cfg = DispatchConfig { mode: DispatchMode::HumanGated, ..Default::default() };
         let action = decide(
             &["looper:triaged".into(), "dispatch/plan".into()],
             &[("user".into(), "/plan".into(), 42)],
@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn test_decide_human_gated_not_triaged() {
-        let cfg = DispatchConfig::default();
+        let cfg = DispatchConfig { mode: DispatchMode::HumanGated, ..Default::default() };
         let action = decide(
             &["dispatch/plan".into()],
             &[("user".into(), "/plan".into(), 42)],

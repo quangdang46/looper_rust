@@ -507,3 +507,19 @@ parallel-tasks = 1
 # default-loop-type = ""
 # schedule = ""
 # enabled = true
+
+
+# =============================================================================
+# [dispatch]  — Issue dispatch access control
+# =============================================================================
+#
+# Controls who can trigger looper via issue labels and slash commands.
+# Empty allowed-users means only repo collaborators with write/admin
+# permission can trigger.
+#[dispatch]
+#mode = "autonomous"
+#allowed-users = []
+#triaged-label = "looper:triaged"
+#hold-label = "looper:hold"
+#autonomous-delay-seconds = 1800
+#slash-commands = ["/plan", "/implement"]

@@ -21,7 +21,8 @@ use looper_scheduler::types::{
 use looper_storage::record::QueueItemRecord;
 use std::process::Command;
 
-use crate::types::{DispatchConfig, WatchAction, WatchActionKind};
+use crate::types::{WatchAction, WatchActionKind};
+use looper_scheduler::types::DispatchConfig;
 
 /// The coordinator runner, registered in `HandlerMap::coordinator`.
 pub struct Coordinator {
@@ -355,6 +356,21 @@ impl CoordinatorScheduler for Coordinator {
                             issue_number: issue.number,
                             cwd: ".".to_string(),
                         }) {
+                            // Permission check: only allow authorized users
+                            if !crate::permissions::user_authorized_for_dispatch(
+                                &detail.author,
+                                repo,
+                                &self.config.dispatch_config,
+                                gw,
+                            ) {
+                                tracing::info!(
+                                    "Dispatch: issue #{} author '{}' not authorized for dispatch/plan, skipping",
+                                    issue.number,
+                                    detail.author
+                                );
+                                continue;
+                            }
+
                             let has_plan = detail.labels.iter().any(|l| l == "looper:plan");
                             if !has_plan {
                                 tracing::info!(
@@ -386,6 +402,21 @@ impl CoordinatorScheduler for Coordinator {
                             issue_number: issue.number,
                             cwd: ".".to_string(),
                         }) {
+                            // Permission check: only allow authorized users
+                            if !crate::permissions::user_authorized_for_dispatch(
+                                &detail.author,
+                                repo,
+                                &self.config.dispatch_config,
+                                gw,
+                            ) {
+                                tracing::info!(
+                                    "Dispatch: issue #{} author '{}' not authorized for dispatch/implement, skipping",
+                                    issue.number,
+                                    detail.author
+                                );
+                                continue;
+                            }
+
                             let has_implement = detail.labels.iter().any(|l| l == "looper:implement");
                             if !has_implement {
                                 tracing::info!(

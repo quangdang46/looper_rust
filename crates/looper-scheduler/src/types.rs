@@ -135,6 +135,7 @@ pub struct SchedulerConfig {
     pub retry_base_delay_ms: u64,
     pub slow_lane_warn_threshold: Duration,
     pub discovery_cache_ttl: Duration,
+    pub dispatch_config: DispatchConfig,
 }
 
 impl Default for SchedulerConfig {
@@ -146,6 +147,75 @@ impl Default for SchedulerConfig {
             retry_base_delay_ms: 1000,
             slow_lane_warn_threshold: Duration::from_secs(5),
             discovery_cache_ttl: Duration::from_secs(60),
+            dispatch_config: DispatchConfig::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DispatchMode {
+    HumanGated,
+    Autonomous,
+}
+
+impl Default for DispatchMode {
+    fn default() -> Self {
+        Self::Autonomous
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DispatchAction {
+    pub no_op: bool,
+    pub trigger_labels: Vec<String>,
+    pub assign_to: Option<String>,
+    pub reaction_comment_id: Option<i64>,
+    pub reaction_content: Option<String>,
+    pub failure_comment_body: Option<String>,
+}
+
+impl DispatchAction {
+    pub fn no_op() -> Self {
+        Self {
+            no_op: true,
+            trigger_labels: vec![],
+            assign_to: None,
+            reaction_comment_id: None,
+            reaction_content: None,
+            failure_comment_body: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DispatchConfig {
+    pub mode: DispatchMode,
+    pub triaged_label: String,
+    pub hold_label: Option<String>,
+    pub autonomous_delay: chrono::Duration,
+    pub allowed_users: Vec<String>,
+    pub slash_commands: Vec<String>,
+    pub assign_to: Option<String>,
+    pub planner_trigger_labels: Vec<String>,
+    pub worker_trigger_labels: Vec<String>,
+}
+
+impl Default for DispatchConfig {
+    fn default() -> Self {
+        Self {
+            mode: DispatchMode::Autonomous,
+            triaged_label: "looper:triaged".into(),
+            hold_label: Some("looper:hold".into()),
+            autonomous_delay: chrono::Duration::minutes(30),
+            allowed_users: vec![],
+            slash_commands: vec!["/plan".into(), "/implement".into()],
+            assign_to: None,
+            planner_trigger_labels: vec!["looper:plan".into()],
+            worker_trigger_labels: vec!["looper:implement".into()],
         }
     }
 }

@@ -429,7 +429,27 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let send_repos = Arc::new(SendRepos(std::sync::Mutex::new(Repositories::open(&db_path)?)));
 
     // 6. Build HandlerMap with all 5 runners + GitHub/git/agent gateways
-    let scheduler_cfg = SchedulerConfig::default();
+    let scheduler_cfg = {
+        let mut sc = SchedulerConfig::default();
+        if let Some(ref sched_cfg) = config.scheduler {
+            sc.max_concurrent_runs = sched_cfg.max_workers as usize;
+            sc.poll_interval = Duration::from_millis(sched_cfg.poll_interval_ms);
+            sc.retry_max_attempts = sched_cfg.retry.max_attempts;
+            sc.retry_base_delay_ms = sched_cfg.retry.base_delay_secs * 1000;
+        }
+        if let Some(ref disp_cfg) = config.dispatch {
+            sc.dispatch_config.mode = match disp_cfg.mode {
+                looper_config::types::DispatchMode::HumanGated => looper_scheduler::types::DispatchMode::HumanGated,
+                looper_config::types::DispatchMode::Autonomous => looper_scheduler::types::DispatchMode::Autonomous,
+            };
+            sc.dispatch_config.allowed_users = disp_cfg.allowed_users.clone();
+            sc.dispatch_config.triaged_label = disp_cfg.triaged_label.clone();
+            sc.dispatch_config.hold_label = Some(disp_cfg.hold_label.clone());
+            sc.dispatch_config.autonomous_delay = chrono::Duration::seconds(disp_cfg.autonomous_delay_seconds as i64);
+            sc.dispatch_config.slash_commands = disp_cfg.slash_commands.clone();
+        }
+        sc
+    };
     let github: Option<Arc<Gateway>> = Some(Arc::new(Gateway::new(GatewayOptions::default())));
 
     // Agent executor gateway — uses its own connection to avoid

@@ -30,6 +30,7 @@ pub struct Config {
     pub defaults: Option<DefaultsConfig>,
     pub instructions: Option<InstructionsConfig>,
     pub roles: Option<RolesConfig>,
+    pub dispatch: Option<DispatchConfig>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
 }
@@ -488,6 +489,60 @@ pub struct ProjectConfig {
 impl Default for ProjectConfig {
     fn default() -> Self {
         Self { name: String::new(), path: None, default_loop_type: None, schedule: None, enabled: true }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DispatchMode {
+    #[serde(rename = "human-gated")]
+    HumanGated,
+    #[serde(rename = "autonomous")]
+    Autonomous,
+}
+
+impl Default for DispatchMode {
+    fn default() -> Self {
+        Self::Autonomous
+    }
+}
+
+impl std::str::FromStr for DispatchMode {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "human-gated" => Ok(Self::HumanGated),
+            "autonomous" => Ok(Self::Autonomous),
+            _ => Err(format!("unknown dispatch mode: {s}")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct DispatchConfig {
+    pub mode: DispatchMode,
+    pub allowed_users: Vec<String>,
+    pub triaged_label: String,
+    pub hold_label: String,
+    pub autonomous_delay_seconds: u64,
+    pub slash_commands: Vec<String>,
+}
+
+impl Default for DispatchConfig {
+    fn default() -> Self {
+        Self {
+            mode: DispatchMode::Autonomous,
+            allowed_users: vec![],
+            triaged_label: "looper:triaged".into(),
+            hold_label: "looper:hold".into(),
+            autonomous_delay_seconds: 1800,
+            slash_commands: vec!["/plan".into(), "/implement".into()],
+        }
     }
 }
 
