@@ -114,7 +114,8 @@ pub enum Command {
     #[command(subcommand, hide = true)]
     Webhook(commands::webhook::WebhookCommand),
 
-    #[command(subcommand, hide = true)]
+    /// Daemon health + project/queue diagnostics
+    #[command(subcommand)]
     Diagnostics(commands::diagnostics::DiagnosticsCommand),
 
     // -- Worktree --
@@ -300,7 +301,10 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::Prompt(cmd) => commands::prompt::handle(client, cmd, json).await,
         Command::Feedback(cmd) => commands::feedback::handle(client, cmd, json).await,
         Command::Webhook(cmd) => commands::webhook::handle(client, cmd, json).await,
-        Command::Diagnostics(cmd) => commands::diagnostics::handle(client, cmd, json).await,
+        Command::Diagnostics(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::diagnostics::handle(client, cmd, json).await
+        }
         Command::Worktree(cmd) => {
             commands::ensure_daemon(client).await?;
             commands::worktree::handle(client, cmd, json).await
@@ -421,7 +425,6 @@ mod tests {
             "prompt",
             "feedback",
             "webhook",
-            "diagnostics",
             "reconcile-stale",
         ] {
             // clap help lines list subcommands as "  name  description".

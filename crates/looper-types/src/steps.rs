@@ -30,16 +30,16 @@ mod tests {
 
     #[test]
     fn test_valid_step_for_loop_type() {
-        assert!(assert_step_belongs_to_loop_type(LoopType::Planner, "discover").is_ok());
-        assert!(assert_step_belongs_to_loop_type(LoopType::Worker, "implement").is_ok());
-        assert!(assert_step_belongs_to_loop_type(LoopType::Fixer, "patch").is_ok());
+        assert!(assert_step_belongs_to_loop_type(LoopType::Planner, "discover-issues").is_ok());
+        assert!(assert_step_belongs_to_loop_type(LoopType::Worker, "execute").is_ok());
+        assert!(assert_step_belongs_to_loop_type(LoopType::Fixer, "repair").is_ok());
         assert!(assert_step_belongs_to_loop_type(LoopType::Reviewer, "review").is_ok());
     }
 
     #[test]
     fn test_invalid_step_for_loop_type() {
-        assert!(assert_step_belongs_to_loop_type(LoopType::Planner, "patch").is_err());
-        assert!(assert_step_belongs_to_loop_type(LoopType::Fixer, "discover").is_err());
+        assert!(assert_step_belongs_to_loop_type(LoopType::Planner, "repair").is_err());
+        assert!(assert_step_belongs_to_loop_type(LoopType::Fixer, "discover-issues").is_err());
     }
 
     #[test]

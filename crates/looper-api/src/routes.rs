@@ -18,7 +18,7 @@ use crate::types::{
     LoopSummary, PaginationParams, ProjectSummary, QueueItemResponse, RunDetail, RunSummary, StartRunInput,
     VersionResponse,
 };
-use looper_storage::record::{LockRecord, LoopRecord, QueueItemRecord, RunRecord};
+use looper_storage::record::{LockRecord, LoopRecord, QueueItemRecord};
 
 /// Shared application state available to all handlers.
 pub struct AppState {
@@ -151,54 +151,83 @@ pub async fn create_loop(
     Path(project_name): Path<String>,
     Json(input): Json<CreateLoopInput>,
 ) -> Result<(StatusCode, Json<Envelope<LoopDetail>>), ApiError> {
-    let repos = state.ctx.state.repos();
-    let now = crate::helpers::now_iso();
-    let id = uuid::Uuid::new_v4().to_string();
+    // Resource create via LoopService (conflict + type validation). Does **not**
+    // enqueue work — use POST .../work to schedule execution.
+    let record = {
+        let repos = state.ctx.state.repos_arc();
+        let project_id = {
+            let list = repos.projects.list().map_err(internal_error)?;
+            list.into_iter()
+                .find(|p| p.id == project_name || p.name == project_name)
+                .map(|p| p.id)
+                .ok_or_else(|| ApiError::not_found(format!("project '{project_name}' not found")))?
+        };
 
-    let seq = repos.loops.allocate_seq().map_err(internal_error)?;
+        let loop_type: looper_types::LoopType =
+            input.loop_type.parse().map_err(|e: looper_types::DomainError| ApiError::bad_request(e.to_string()))?;
 
-    let target_type = match input.target.as_deref() {
-        Some(t) if t.starts_with('#') || t.parse::<i64>().is_ok() => "issue",
-        Some(_) => "pull_request",
-        None => "project",
-    };
-    let target_id = input.target.clone();
-
-    repos
-        .loops
-        .upsert(&LoopRecord {
-            id: id.clone(),
-            seq,
-            project_id: project_name.clone(),
-            r#type: input.loop_type.clone(),
-            target_type: target_type.into(),
-            target_id,
-            repo: None,
-            pr_number: None,
-            status: "active".into(),
+        let target = parse_create_loop_target(&project_id, loop_type, input.target.as_deref())?;
+        let svc = looper_service::LoopService::new(Arc::clone(&repos), chrono::Utc::now);
+        svc.create(looper_service::CreateInput {
+            project_id,
+            r#type: loop_type,
+            target,
+            status: looper_types::LoopStatus::Idle,
             config_json: None,
             metadata_json: input.metadata.as_ref().map(|v| v.to_string()),
-            last_run_at: None,
-            next_run_at: None,
-            created_at: now.clone(),
-            updated_at: now.clone(),
         })
-        .map_err(internal_error)?;
+        .map_err(map_service_error)?
+    };
 
     let detail = LoopDetail {
-        project_name,
-        seq,
-        loop_type: input.loop_type,
-        status: "active".into(),
-        target: input.target,
-        metadata: input.metadata,
+        project_name: record.project_id.clone(),
+        seq: record.seq,
+        loop_type: record.r#type.clone(),
+        status: record.status.clone(),
+        target: record.target_id.clone(),
+        metadata: record.metadata_json.as_deref().and_then(|s| serde_json::from_str(s).ok()),
         worktree_path: None,
         runs: vec![],
-        created_at: now.clone(),
-        updated_at: now,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
     };
 
     Ok((StatusCode::CREATED, Json(Envelope::success(detail))))
+}
+
+/// Build a [`looper_types::LoopTarget`] from the free-form API `target` string.
+fn parse_create_loop_target(
+    project_id: &str,
+    loop_type: looper_types::LoopType,
+    target: Option<&str>,
+) -> Result<looper_types::LoopTarget, ApiError> {
+    use looper_types::{LoopTarget, LoopTargetType};
+    match target {
+        None | Some("") => {
+            if loop_type == looper_types::LoopType::Planner {
+                Ok(LoopTarget {
+                    target_type: LoopTargetType::Project,
+                    project_id: Some(project_id.to_string()),
+                    repo: None,
+                    number: None,
+                })
+            } else {
+                Err(ApiError::bad_request("target is required for non-planner loops (issue number or pr number)"))
+            }
+        }
+        Some(t) => {
+            let t = t.trim().trim_start_matches('#');
+            let number = t
+                .parse::<i64>()
+                .map_err(|_| ApiError::bad_request(format!("invalid target '{t}': expected issue/PR number")))?;
+            let target_type = match loop_type {
+                looper_types::LoopType::Planner => LoopTargetType::Issue,
+                looper_types::LoopType::Reviewer | looper_types::LoopType::Fixer => LoopTargetType::PullRequest,
+                looper_types::LoopType::Worker => LoopTargetType::Issue,
+            };
+            Ok(LoopTarget { target_type, project_id: None, repo: None, number: Some(number) })
+        }
+    }
 }
 
 pub async fn get_loop(
@@ -394,59 +423,15 @@ pub async fn list_runs(
 pub async fn start_run(
     State(state): State<Arc<AppState>>,
     Path((project_name, seq)): Path<(String, i64)>,
-    Json(input): Json<StartRunInput>,
+    Json(_input): Json<StartRunInput>,
 ) -> Result<(StatusCode, Json<Envelope<RunDetail>>), ApiError> {
-    let repos = state.ctx.state.repos();
-    let now = crate::helpers::now_iso();
-
-    // Find the loop by seq to get its UUID id
-    let loop_record = repos
-        .loops
-        .get_by_seq(seq)
-        .map_err(internal_error)?
-        .filter(|r| r.project_id == project_name)
-        .ok_or_else(|| ApiError::not_found(format!("Loop {project_name}/{seq} not found")))?;
-
-    let run_id = input.run_id;
-
-    repos
-        .runs
-        .upsert(&RunRecord {
-            id: run_id.clone(),
-            loop_id: loop_record.id,
-            status: "pending".into(),
-            current_step: Some(input.step_name.clone()),
-            last_completed_step: None,
-            checkpoint_json: None,
-            summary: None,
-            error_message: None,
-            agent_vendor: Some(input.agent_vendor.clone()),
-            model: input.model.clone(),
-            started_at: now.clone(),
-            last_heartbeat_at: None,
-            ended_at: None,
-            created_at: now.clone(),
-            updated_at: now.clone(),
-        })
-        .map_err(internal_error)?;
-
-    let detail = RunDetail {
-        run_id,
-        loop_seq: seq,
-        project_name,
-        step_name: input.step_name,
-        agent_vendor: input.agent_vendor,
-        model: input.model,
-        status: "pending".into(),
-        exit_code: None,
-        output_truncated: None,
-        native_session_id: None,
-        created_at: now.clone(),
-        started_at: Some(now),
-        completed_at: None,
-    };
-
-    Ok((StatusCode::CREATED, Json(Envelope::success(detail))))
+    // Record-only start_run creates orphan pending runs the scheduler never claims.
+    // Golden path is POST /api/projects/{name}/work (admit-work).
+    let _ = state;
+    Err(ApiError::bad_request(format!(
+        "POST .../loops/{seq}/runs is deprecated for scheduling; use POST /api/projects/{project_name}/work \
+         with role + issue/pr to create a claimable queue item and trigger a tick"
+    )))
 }
 
 pub async fn get_run(
@@ -1310,6 +1295,114 @@ mod tests {
         assert_eq!(data2.queue_item.id, data.queue_item.id, "dedupe same queue item");
         assert!(!data2.created_new_loop);
         assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) > before_ticks);
+    }
+
+    #[tokio::test]
+    async fn start_run_returns_400_use_work() {
+        let (state, _) = setup_state();
+        let now = crate::helpers::now_iso();
+        state
+            .ctx
+            .state
+            .repos()
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "p-start".into(),
+                name: "p-start".into(),
+                repo_path: "/tmp/p-start".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: Some(r#"{"repo":"acme/p"}"#.into()),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            })
+            .unwrap();
+        state
+            .ctx
+            .state
+            .repos()
+            .loops
+            .upsert(&LoopRecord {
+                id: "loop-s".into(),
+                seq: 9,
+                project_id: "p-start".into(),
+                r#type: "planner".into(),
+                target_type: "issue".into(),
+                target_id: Some("issue:acme/p#1".into()),
+                repo: Some("acme/p".into()),
+                pr_number: None,
+                status: "idle".into(),
+                config_json: None,
+                metadata_json: None,
+                last_run_at: None,
+                next_run_at: None,
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap();
+
+        let err = start_run(
+            State(state),
+            Path(("p-start".into(), 9)),
+            Json(StartRunInput {
+                run_id: "r1".into(),
+                step_name: "discover-issues".into(),
+                agent_vendor: "claude".into(),
+                model: None,
+                config_override: None,
+            }),
+        )
+        .await
+        .expect_err("start_run should reject");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.message.contains("/work"), "message should point at admit-work: {}", err.1.message);
+    }
+
+    #[tokio::test]
+    async fn create_loop_via_service_requires_project() {
+        let (state, _) = setup_state();
+        let err = create_loop(
+            State(state),
+            Path("missing-project".into()),
+            Json(CreateLoopInput { loop_type: "planner".into(), target: None, metadata: None }),
+        )
+        .await
+        .expect_err("missing project");
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn create_loop_via_service_ok_for_planner() {
+        let (state, _) = setup_state();
+        let now = crate::helpers::now_iso();
+        state
+            .ctx
+            .state
+            .repos()
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "p-c".into(),
+                name: "p-c".into(),
+                repo_path: "/tmp/p-c".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: Some(r#"{"repo":"acme/c"}"#.into()),
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap();
+
+        let (st, Json(env)) = create_loop(
+            State(state),
+            Path("p-c".into()),
+            Json(CreateLoopInput { loop_type: "planner".into(), target: None, metadata: None }),
+        )
+        .await
+        .expect("create planner");
+        assert_eq!(st, StatusCode::CREATED);
+        let d = env.data.expect("data");
+        assert_eq!(d.loop_type, "planner");
+        assert_eq!(d.status, "idle");
     }
 
     #[tokio::test]

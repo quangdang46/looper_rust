@@ -194,6 +194,20 @@ pub mod worker_steps {
     pub const ALL: &[&str] = &[PREPARE_WORK, PREPARE_WORKTREE, PLAN, EXECUTE, VALIDATE, OPEN_PR];
 }
 
+#[cfg(test)]
+mod step_alignment_tests {
+    use super::{fixer_steps, planner_steps, reviewer_steps, worker_steps};
+    use looper_types::LoopType;
+
+    #[test]
+    fn domain_steps_match_runner_pipelines() {
+        assert_eq!(LoopType::Planner.steps(), planner_steps::ALL);
+        assert_eq!(LoopType::Reviewer.steps(), reviewer_steps::ALL);
+        assert_eq!(LoopType::Worker.steps(), worker_steps::ALL);
+        assert_eq!(LoopType::Fixer.steps(), fixer_steps::ALL);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch types (re-exported from looper-scheduler)
 // ---------------------------------------------------------------------------

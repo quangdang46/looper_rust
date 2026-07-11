@@ -49,13 +49,27 @@ impl LoopType {
     }
 
     /// Return the steps that this loop type sequences through.
+    ///
+    /// Canonical names match the runner pipelines in `looper-runner`
+    /// (`planner_steps::ALL`, `reviewer_steps::ALL`, etc.).
     pub fn steps(self) -> &'static [&'static str] {
         use LoopType::*;
         match self {
-            Planner => &["discover", "assess", "plan", "present"],
-            Reviewer => &["select", "review", "summarize", "decide"],
-            Worker => &["select", "plan", "implement", "verify"],
-            Fixer => &["analyze", "patch", "verify"],
+            Planner => &["discover-issues", "prepare-worktree", "write-spec", "publish", "notify"],
+            Reviewer => &["discover", "filter", "claim", "snapshot", "prepare-worktree", "review", "publish"],
+            Worker => &["prepare-work", "prepare-worktree", "plan", "execute", "validate", "open-pr"],
+            Fixer => &[
+                "discover-pr",
+                "claim-pr",
+                "collect-fixes",
+                "prepare-worktree",
+                "repair",
+                "validate",
+                "push",
+                "reconcile-commits",
+                "resolve-comments",
+                "recheck",
+            ],
         }
     }
 }
@@ -113,12 +127,23 @@ mod tests {
 
     #[test]
     fn test_planner_steps() {
-        assert_eq!(LoopType::Planner.steps(), &["discover", "assess", "plan", "present"]);
+        assert_eq!(
+            LoopType::Planner.steps(),
+            &["discover-issues", "prepare-worktree", "write-spec", "publish", "notify"]
+        );
     }
 
     #[test]
     fn test_fixer_steps() {
-        assert_eq!(LoopType::Fixer.steps(), &["analyze", "patch", "verify"]);
+        assert!(LoopType::Fixer.steps().contains(&"repair"));
+        assert!(LoopType::Fixer.steps().contains(&"push"));
+        assert_eq!(LoopType::Fixer.steps().len(), 10);
+    }
+
+    #[test]
+    fn test_runner_aligned_step_counts() {
+        assert_eq!(LoopType::Reviewer.steps().len(), 7);
+        assert_eq!(LoopType::Worker.steps().len(), 6);
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub struct DaemonProcess {
 }
 
 impl DaemonProcess {
-    /// Base URL of the daemon's API server (e.g. `http://127.0.0.1:8080`).
+    /// Base URL of the daemon's API server (e.g. `http://127.0.0.1:7391`).
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -90,7 +90,7 @@ pub fn start_looperd(
 }
 
 impl DaemonProcess {
-    /// Poll the daemon's `/api/v1/status` endpoint until it responds with
+    /// Poll the daemon's `/health` endpoint until it responds with
     /// HTTP 200 and a valid JSON envelope, or until `timeout` elapses.
     pub fn wait_for_ready(&self, timeout: Duration) -> Result<serde_json::Value, String> {
         let deadline = std::time::Instant::now() + timeout;
