@@ -905,12 +905,17 @@ impl Fixer {
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
-        // Complete run -------------------------------------------------------
-        let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-        let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
-        final_run.status = RunStatus::Success.as_str().to_string();
-        final_run.ended_at = Some(now_iso);
-        guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+        // Complete run + queue + loop ----------------------------------------
+        {
+            let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+            let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
+            final_run.status = RunStatus::Success.as_str().to_string();
+            final_run.ended_at = Some(now_iso.clone());
+            final_run.updated_at = now_iso;
+            guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+        }
+        crate::completion::mark_queue_terminal(&self.repos, &item.id, "completed", None);
+        crate::completion::mark_loop_status(&self.repos, loop_id, "completed");
 
         tracing::info!("Fixer pipeline complete (loop={loop_id})");
         Ok(())
@@ -1116,7 +1121,16 @@ impl FixerScheduler for Fixer {
     }
 
     fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
-        self.execute_pipeline(item)
+        match self.execute_pipeline(item) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                crate::completion::mark_queue_terminal(&self.repos, &item.id, "failed", Some(e.clone()));
+                if let Some(ref loop_id) = item.loop_id {
+                    crate::completion::mark_loop_status(&self.repos, loop_id, "failed");
+                }
+                Err(e)
+            }
+        }
     }
 }
 

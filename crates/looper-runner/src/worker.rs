@@ -37,6 +37,7 @@ use looper_github::types::{
     CreatePullRequestInput, IssueCommentInput, ListOpenIssuesInput, ListOpenPullRequestsInput, ViewPullRequestInput,
 };
 
+use crate::completion::{mark_loop_status, mark_queue_terminal};
 use crate::types::{spec_labels, worker_steps, SpecPRInfo};
 
 /// Worker runner state machine.
@@ -1006,30 +1007,35 @@ impl Worker {
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
-        // Complete run -------------------------------------------------------
-        let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-        let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
-        final_run.status = RunStatus::Success.as_str().to_string();
-        final_run.ended_at = Some(now_iso.clone());
-        guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
-        if let Ok(Some(mut lp)) = guard.loops.get_by_id(loop_id) {
-            lp.status = "completed".into();
-            lp.updated_at = now_iso;
-            let _ = guard.loops.upsert(&lp);
+        // Complete run + queue + loop ----------------------------------------
+        {
+            let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+            let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
+            final_run.status = RunStatus::Success.as_str().to_string();
+            final_run.ended_at = Some(now_iso.clone());
+            final_run.updated_at = now_iso.clone();
+            guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
         }
+        mark_queue_terminal(&self.repos, &item.id, "completed", None);
+        mark_loop_status(&self.repos, loop_id, "completed");
 
         // Ensure implementation PR is ready for review (no-op if already ready).
         if let Some(ref gw) = self.github {
             if let Some(ref repo_path) = item.repo {
-                if let Ok(Some(loop_rec)) = guard.loops.get_by_id(&run.loop_id) {
-                    if let Some(pr_number) = loop_rec.pr_number {
-                        let _ = gw.mark_pr_ready(looper_github::types::MarkPullRequestReadyForReviewInput {
-                            repo: repo_path.clone(),
-                            pr_number,
-                            cwd: ".".to_string(),
-                        });
-                        tracing::info!("Worker: ensured PR #{} is ready for review", pr_number);
-                    }
+                let pr_number = self
+                    .repos
+                    .0
+                    .lock()
+                    .ok()
+                    .and_then(|g| g.loops.get_by_id(&run.loop_id).ok().flatten())
+                    .and_then(|lp| lp.pr_number);
+                if let Some(pr_number) = pr_number {
+                    let _ = gw.mark_pr_ready(looper_github::types::MarkPullRequestReadyForReviewInput {
+                        repo: repo_path.clone(),
+                        pr_number,
+                        cwd: ".".to_string(),
+                    });
+                    tracing::info!("Worker: ensured PR #{} is ready for review", pr_number);
                 }
             }
         }
@@ -1040,6 +1046,19 @@ impl Worker {
 }
 
 impl WorkerScheduler for Worker {
+    fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
+        match self.execute_pipeline(item) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                mark_queue_terminal(&self.repos, &item.id, "failed", Some(e.clone()));
+                if let Some(ref loop_id) = item.loop_id {
+                    mark_loop_status(&self.repos, loop_id, "failed");
+                }
+                Err(e)
+            }
+        }
+    }
+
     fn discover_issues(&self, _ctx: &Context, input: WorkerDiscoveryInput) -> WorkerDiscoveryResult {
         let repo = input.repo.clone();
         let mut new_queue_items: Vec<QueueItemRecord> = Vec::new();
@@ -1163,9 +1182,5 @@ impl WorkerScheduler for Worker {
             tracing::debug!("GitHub not configured, returning empty discovery for {}", repo);
         }
         WorkerDiscoveryResult { queue_items: new_queue_items, issues: found_issues }
-    }
-
-    fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
-        self.execute_pipeline(item)
     }
 }

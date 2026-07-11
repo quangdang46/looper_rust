@@ -21,6 +21,7 @@ use looper_config::types::DisclosureConfig;
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
 use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 
+use crate::completion::{mark_loop_status, mark_queue_terminal};
 use crate::fixer_handoff::{ensure_fixer_queue_item, should_enqueue_fixer, FixerEnqueueContext};
 use crate::merge_watch::pr_has_failing_checks;
 use crate::reviewer_criteria;
@@ -194,17 +195,48 @@ impl Reviewer {
                                             }
                                             SpecPhase::SpecReady => {
                                                 tracing::info!(
-                                                    "Reviewer: PR #{} spec already approved, skipping pipeline",
+                                                    "Reviewer: PR #{} spec already approved — complete without re-review",
                                                     pr_num
                                                 );
-                                                break;
+                                                // Terminal early: don't thrash remaining steps.
+                                                {
+                                                    let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+                                                    let mut final_run = guard
+                                                        .runs
+                                                        .get_by_id(&run.id)
+                                                        .map_err(|e| e.to_string())?
+                                                        .ok_or("run not found")?;
+                                                    final_run.status = RunStatus::Success.as_str().to_string();
+                                                    final_run.summary = Some("skipped: already spec-ready".into());
+                                                    final_run.ended_at = Some(now_iso.clone());
+                                                    final_run.updated_at = now_iso.clone();
+                                                    guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+                                                }
+                                                mark_queue_terminal(&self.repos, &item.id, "completed", None);
+                                                mark_loop_status(&self.repos, loop_id, "completed");
+                                                return Ok(());
                                             }
                                             SpecPhase::NeedsHuman => {
                                                 tracing::info!(
-                                                    "Reviewer: PR #{} needs human, skipping pipeline",
+                                                    "Reviewer: PR #{} needs human — complete without agent review",
                                                     pr_num
                                                 );
-                                                break;
+                                                {
+                                                    let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+                                                    let mut final_run = guard
+                                                        .runs
+                                                        .get_by_id(&run.id)
+                                                        .map_err(|e| e.to_string())?
+                                                        .ok_or("run not found")?;
+                                                    final_run.status = RunStatus::Success.as_str().to_string();
+                                                    final_run.summary = Some("skipped: needs-human".into());
+                                                    final_run.ended_at = Some(now_iso.clone());
+                                                    final_run.updated_at = now_iso.clone();
+                                                    guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+                                                }
+                                                mark_queue_terminal(&self.repos, &item.id, "completed", None);
+                                                mark_loop_status(&self.repos, loop_id, "completed");
+                                                return Ok(());
                                             }
                                             SpecPhase::Unknown => {
                                                 tracing::debug!("Reviewer: PR #{} has no spec label, treating as implementation review", pr_num);
@@ -863,12 +895,17 @@ impl Reviewer {
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
-        // Complete run -------------------------------------------------------
-        let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
-        let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
-        final_run.status = RunStatus::Success.as_str().to_string();
-        final_run.ended_at = Some(now_iso);
-        guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+        // Complete run + queue + loop ----------------------------------------
+        {
+            let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
+            let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
+            final_run.status = RunStatus::Success.as_str().to_string();
+            final_run.ended_at = Some(now_iso.clone());
+            final_run.updated_at = now_iso;
+            guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+        }
+        mark_queue_terminal(&self.repos, &item.id, "completed", None);
+        mark_loop_status(&self.repos, loop_id, "completed");
 
         tracing::info!("Reviewer pipeline complete (loop={loop_id})");
         Ok(())
@@ -941,6 +978,12 @@ impl ReviewerScheduler for Reviewer {
                     let phase = SpecPhase::from_labels(&pr.labels);
                     !matches!(phase, SpecPhase::SpecReady | SpecPhase::NeedsHuman)
                 });
+                // Skip already-reviewed PRs that are no longer in active reviewing phase.
+                prs.retain(|pr| {
+                    let reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
+                    let reviewed = pr.labels.iter().any(|l| l == "looper/reviewed");
+                    !(reviewed && !reviewing)
+                });
 
                 {
                         tracing::info!("Reviewer eligible PR set size={}", prs.len());
@@ -948,24 +991,59 @@ impl ReviewerScheduler for Reviewer {
                         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                         let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
                         if let Ok(guard) = self.repos.0.lock() {
+                            let all_loops: Vec<LoopRecord> = guard.loops.list().unwrap_or_default();
                             // Pre-fetch existing active loops for this project to avoid duplicates
-                            let existing_loops: Vec<LoopRecord> = match guard.loops.list() {
-                                Ok(all_loops) => all_loops
-                                    .into_iter()
-                                    .filter(|l| {
-                                        l.project_id == input.project_id
-                                            && l.target_type == "pull_request"
-                                            && !matches!(
-                                                l.status.as_str(),
-                                                "completed" | "failed" | "cancelled" | "terminated"
-                                            )
-                                    })
-                                    .collect(),
-                                Err(_) => Vec::new(),
-                            };
+                            let existing_loops: Vec<LoopRecord> = all_loops
+                                .iter()
+                                .filter(|l| {
+                                    l.project_id == input.project_id
+                                        && l.target_type == "pull_request"
+                                        && !matches!(
+                                            l.status.as_str(),
+                                            "completed" | "failed" | "cancelled" | "terminated"
+                                        )
+                                })
+                                .cloned()
+                                .collect();
+                            let completed_pr_numbers: std::collections::HashSet<i64> = all_loops
+                                .iter()
+                                .filter(|l| {
+                                    l.project_id == input.project_id
+                                        && l.r#type == "reviewer"
+                                        && l.status == "completed"
+                                        && l.pr_number.is_some()
+                                })
+                                .filter_map(|l| l.pr_number)
+                                .collect();
                             for (i, pr) in prs.iter().enumerate() {
                                 tracing::debug!("Reviewer processing PR #{}/{} (number={})", i + 1, prs.len(), pr.number);
                                 let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
+                                if completed_pr_numbers.contains(&pr.number) {
+                                    tracing::debug!(
+                                        "Reviewer skipping PR #{} (reviewer loop already completed)",
+                                        pr.number
+                                    );
+                                    continue;
+                                }
+                                // Anti-thrash: active or already-completed queue for this PR.
+                                let blocks = guard.queue.find_active_by_dedupe(&dedupe_key).ok().flatten().is_some()
+                                    || guard
+                                        .queue
+                                        .list()
+                                        .ok()
+                                        .map(|items| {
+                                            items
+                                                .iter()
+                                                .any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
+                                        })
+                                        .unwrap_or(false);
+                                if blocks {
+                                    tracing::debug!(
+                                        "Reviewer skipping PR #{} (dedupe active/completed)",
+                                        pr.number
+                                    );
+                                    continue;
+                                }
                                 // Check if a loop already exists for this PR
                                 if existing_loops.iter().any(|l| l.pr_number == Some(pr.number)) {
                                     tracing::debug!(
@@ -1162,7 +1240,16 @@ impl ReviewerScheduler for Reviewer {
     }
 
     fn process_claimed_queue_item(&self, _ctx: &Context, item: &QueueItemRecord) -> Result<(), String> {
-        self.execute_pipeline(item)
+        match self.execute_pipeline(item) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                mark_queue_terminal(&self.repos, &item.id, "failed", Some(e.clone()));
+                if let Some(ref loop_id) = item.loop_id {
+                    mark_loop_status(&self.repos, loop_id, "failed");
+                }
+                Err(e)
+            }
+        }
     }
 }
 

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use looper_github::types::{IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput};
+use looper_github::types::{IssueCommentInput, IssueLabelsInput, ListOpenIssuesInput, ViewIssueInput};
 use uuid::Uuid;
 
 use looper_agent::executor::ConfiguredExecutor;
@@ -360,20 +360,55 @@ impl PlannerScheduler for Planner {
         };
         drop(guard);
 
-        // Look up issue details for the PR title / agent prompt
+        // Look up issue details for the PR title / agent prompt.
+        // Prefer live GitHub title (admit_work metadata often lacks issue_title).
         let issue_number: i64 = item.target_id.parse().unwrap_or(0);
-        let issue_title = match self.repos.0.lock() {
-            Ok(g) => match g.loops.get_by_id(&loop_id) {
-                Ok(Some(l)) => l
+        let issue_title = {
+            let from_gh = self.github.as_ref().and_then(|gw| {
+                let repo = item.repo.as_deref().filter(|r| !r.is_empty())?;
+                if issue_number <= 0 {
+                    return None;
+                }
+                gw.view_issue(ViewIssueInput {
+                    repo: repo.to_string(),
+                    issue_number,
+                    cwd: ".".to_string(),
+                })
+                .ok()
+                .map(|d| d.title)
+                .filter(|t| !t.is_empty())
+            });
+            let from_meta = match self.repos.0.lock() {
+                Ok(g) => match g.loops.get_by_id(&loop_id) {
+                    Ok(Some(l)) => l
+                        .metadata_json
+                        .as_deref()
+                        .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+                        .and_then(|v| v.get("issue_title").and_then(|t| t.as_str()).map(String::from))
+                        .filter(|t| !t.is_empty() && t != &format!("Issue #{issue_number}")),
+                    _ => None,
+                },
+                Err(_) => None,
+            };
+            from_gh.or(from_meta).unwrap_or_else(|| format!("Issue #{issue_number}"))
+        };
+        // Persist title into loop metadata for downstream roles / UI.
+        if let Ok(g) = self.repos.0.lock() {
+            if let Ok(Some(mut lp)) = g.loops.get_by_id(&loop_id) {
+                let mut meta = lp
                     .metadata_json
                     .as_deref()
                     .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-                    .and_then(|v| v.get("issue_title").and_then(|t| t.as_str()).map(String::from))
-                    .unwrap_or_else(|| format!("Issue #{}", issue_number)),
-                _ => format!("Issue #{}", issue_number),
-            },
-            Err(_) => format!("Issue #{}", issue_number),
-        };
+                    .unwrap_or_else(|| serde_json::json!({}));
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert("issue_title".into(), serde_json::json!(&issue_title));
+                    obj.insert("issue_number".into(), serde_json::json!(issue_number));
+                }
+                lp.metadata_json = Some(meta.to_string());
+                lp.updated_at = now_iso.clone();
+                let _ = g.loops.upsert(&lp);
+            }
+        }
 
         // 3. Execute step pipeline -------------------------------------------
         let steps = planner_steps::ALL;

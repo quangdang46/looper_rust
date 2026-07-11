@@ -4,6 +4,7 @@
 #[allow(unused_imports)]
 use {looper_config as _, looper_types as _, tokio as _, uuid as _};
 
+pub mod completion;
 pub mod coordinator;
 pub mod depgraph;
 pub mod dispatch;
