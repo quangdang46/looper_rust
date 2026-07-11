@@ -40,6 +40,8 @@ pub const NO_CHANGES_RETRY_LIMIT: usize = 10;
 
 /// Labels used to track spec-PR lifecycle phases.
 pub mod spec_labels {
+    /// Issue ready for planner discovery (must also be assigned to current gh user).
+    pub const PLAN: &str = "looper:plan";
     /// PR is under specification review (initial state after planner creates PR).
     pub const SPEC_REVIEWING: &str = "looper:spec-reviewing";
     /// Specification review passed — ready for implementation.
@@ -48,6 +50,8 @@ pub mod spec_labels {
     pub const NEEDS_HUMAN: &str = "looper:needs-human";
     /// Implementation PR needs automated fixer (criteria fail / CI red / CHANGES_REQUESTED).
     pub const NEEDS_FIX: &str = "looper:needs-fix";
+    /// Issue ready for worker discovery (must also be assigned to current gh user).
+    pub const WORKER_READY: &str = "looper:worker-ready";
 }
 
 /// Phase of a spec-PR determined by its current labels.

@@ -28,7 +28,7 @@ use crate::reviewer_criteria::{DefaultVerifier, DiffFile, PRDiff};
 use crate::types::{reviewer_steps, spec_labels, SpecPhase};
 use looper_github::types::{
     GetPullRequestDiffInput, IssueAssigneesInput, IssueCommentInput, IssueLabelsInput, ListOpenPullRequestsInput,
-    ReviewComment, SubmitReviewInput, ViewPullRequestInput,
+    ListReviewRequestedPullRequestsInput, PullRequestSummary, ReviewComment, SubmitReviewInput, ViewPullRequestInput,
 };
 use looper_scheduler::scheduler::SendRepos;
 use looper_scheduler::types::{
@@ -194,14 +194,17 @@ impl Reviewer {
                                             }
                                             SpecPhase::SpecReady => {
                                                 tracing::info!(
-                                                    "Reviewer: PR #{} spec already approved, skipping",
+                                                    "Reviewer: PR #{} spec already approved, skipping pipeline",
                                                     pr_num
                                                 );
-                                                continue;
+                                                break;
                                             }
                                             SpecPhase::NeedsHuman => {
-                                                tracing::info!("Reviewer: PR #{} needs human, skipping", pr_num);
-                                                continue;
+                                                tracing::info!(
+                                                    "Reviewer: PR #{} needs human, skipping pipeline",
+                                                    pr_num
+                                                );
+                                                break;
                                             }
                                             SpecPhase::Unknown => {
                                                 tracing::debug!("Reviewer: PR #{} has no spec label, treating as implementation review", pr_num);
@@ -649,8 +652,8 @@ impl Reviewer {
                                     }
                                 }
 
-                                // Submit a formal PR review (not just labels)
-                                let event = if has_issues { "COMMENT" } else { "APPROVE" };
+                                // Go-compatible review events: blocking → REQUEST_CHANGES.
+                                let event = if has_issues { "REQUEST_CHANGES" } else { "APPROVE" };
                                 let pr_head_sha = gw
                                     .view_pull_request(ViewPullRequestInput {
                                         repo: repo_path.clone(),
@@ -719,25 +722,41 @@ impl Reviewer {
 
                                     let has_spec_reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
                                     if has_spec_reviewing {
-                                        let target =
-                                            if has_issues { spec_labels::NEEDS_HUMAN } else { spec_labels::SPEC_READY };
-                                        let _ = gw.add_issue_labels(IssueLabelsInput {
-                                            repo: repo_path.clone(),
-                                            issue_number: pr_num,
-                                            labels: vec![target.to_string()],
-                                            cwd: ".".to_string(),
-                                        });
-                                        // Mark PR ready for review since spec has been reviewed
-                                        if target == spec_labels::SPEC_READY {
-                                            let _ = gw.mark_pr_ready(
-                                                looper_github::types::MarkPullRequestReadyForReviewInput {
-                                                    repo: repo_path.clone(),
-                                                    pr_number: pr_num,
-                                                    cwd: ".".to_string(),
-                                                },
+                                        if has_issues {
+                                            // Criteria fail → fixer path, not HITL by default.
+                                            tracing::info!(
+                                                "Reviewer: PR #{} still in spec-reviewing (blocking findings)",
+                                                pr_num
+                                            );
+                                        } else {
+                                            // Clean: remove reviewing, add ready (Go publish semantics).
+                                            let _ = gw.remove_issue_labels(IssueLabelsInput {
+                                                repo: repo_path.clone(),
+                                                issue_number: pr_num,
+                                                labels: vec![spec_labels::SPEC_REVIEWING.to_string()],
+                                                cwd: ".".to_string(),
+                                            });
+                                            let _ = gw.add_issue_labels(IssueLabelsInput {
+                                                repo: repo_path.clone(),
+                                                issue_number: pr_num,
+                                                labels: vec![spec_labels::SPEC_READY.to_string()],
+                                                cwd: ".".to_string(),
+                                            });
+                                            if pr.is_draft {
+                                                let _ = gw.mark_pr_ready(
+                                                    looper_github::types::MarkPullRequestReadyForReviewInput {
+                                                        repo: repo_path.clone(),
+                                                        pr_number: pr_num,
+                                                        cwd: ".".to_string(),
+                                                    },
+                                                );
+                                            }
+                                            tracing::info!(
+                                                "Reviewer: PR #{} spec transitioned to {}",
+                                                pr_num,
+                                                spec_labels::SPEC_READY
                                             );
                                         }
-                                        tracing::info!("Reviewer: PR #{} spec transitioned to {}", pr_num, target);
                                     } else if !has_issues && !has_failing_required_checks {
                                         // Not a spec PR — clean implementation review.
                                         tracing::info!(
@@ -858,22 +877,73 @@ impl Reviewer {
 
 impl ReviewerScheduler for Reviewer {
     fn discover_pull_requests(&self, _ctx: &Context, input: ReviewerDiscoveryInput) -> ReviewerDiscoveryResult {
-        tracing::debug!("Reviewer discover_pull_requests — scanning for reviewable PRs via GitHub");
+        tracing::debug!("Reviewer discover_pull_requests — review-request + spec-reviewing only");
 
         if let Some(ref github) = self.github {
             if !input.repo.is_empty() {
+                let current_login = github.get_current_user_login(".").unwrap_or_default();
+                let mut prs: Vec<PullRequestSummary> = Vec::new();
+
+                // 1) PRs with review requested to current user (Go default gate).
+                if !current_login.is_empty() {
+                    match github.list_review_requested_pull_requests(ListReviewRequestedPullRequestsInput {
+                        repo: input.repo.clone(),
+                        cwd: ".".to_string(),
+                        limit: 50,
+                        reviewer: current_login.clone(),
+                        timeout: None,
+                    }) {
+                        Ok(mut requested) => {
+                            tracing::info!(
+                                "Reviewer discovery: {} PR(s) with review-request for @{current_login}",
+                                requested.len()
+                            );
+                            prs.append(&mut requested);
+                        }
+                        Err(e) => tracing::warn!("Reviewer review-request discovery failed: {e}"),
+                    }
+                }
+
+                // 2) Spec-phase PRs labeled looper:spec-reviewing.
                 match github.list_open_pull_requests(ListOpenPullRequestsInput {
                     repo: input.repo.clone(),
                     cwd: ".".to_string(),
                     limit: 50,
-                    label: "".into(),
+                    label: spec_labels::SPEC_REVIEWING.into(),
                     labels: vec![],
                     author: "".into(),
                     base_ref_name: "".into(),
                     timeout: None,
                 }) {
-                    Ok(prs) => {
-                        tracing::info!("Reviewer discovered {} open PRs via GitHub", prs.len());
+                    Ok(spec_prs) => {
+                        tracing::info!(
+                            "Reviewer discovery: {} PR(s) with {}",
+                            spec_prs.len(),
+                            spec_labels::SPEC_REVIEWING
+                        );
+                        for pr in spec_prs {
+                            if !prs.iter().any(|p| p.number == pr.number) {
+                                prs.push(pr);
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("Reviewer spec-label discovery failed: {e}"),
+                }
+
+                // Drop drafts that are not in spec-reviewing (Go includeDrafts=false default).
+                prs.retain(|pr| {
+                    !pr.is_draft
+                        || pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING)
+                        || pr.labels.iter().any(|l| l == spec_labels::SPEC_READY)
+                });
+                // Skip already-ready / needs-human (not actionable for re-review enqueue).
+                prs.retain(|pr| {
+                    let phase = SpecPhase::from_labels(&pr.labels);
+                    !matches!(phase, SpecPhase::SpecReady | SpecPhase::NeedsHuman)
+                });
+
+                {
+                        tracing::info!("Reviewer eligible PR set size={}", prs.len());
                         // Convert discovered PRs into queue items
                         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                         let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
@@ -894,7 +964,7 @@ impl ReviewerScheduler for Reviewer {
                                 Err(_) => Vec::new(),
                             };
                             for (i, pr) in prs.iter().enumerate() {
-                                tracing::debug!("Reviewer processing PR #{}/50 (number={})", i + 1, pr.number);
+                                tracing::debug!("Reviewer processing PR #{}/{} (number={})", i + 1, prs.len(), pr.number);
                                 let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
                                 // Check if a loop already exists for this PR
                                 if existing_loops.iter().any(|l| l.pr_number == Some(pr.number)) {
@@ -1048,8 +1118,6 @@ impl ReviewerScheduler for Reviewer {
                             drop(guard);
                             return ReviewerDiscoveryResult { queue_items: discovered_items };
                         }
-                    }
-                    Err(e) => tracing::warn!("GitHub discovery failed for {}: {}", input.repo, e),
                 }
             }
         }

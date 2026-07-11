@@ -70,31 +70,44 @@ impl PlannerScheduler for Planner {
 
         let mut new_queue_items: Vec<QueueItemRecord> = Vec::new();
 
-        // GitHub-powered issue discovery — creates a loop + queue item
-        // for every open issue that carries the `looper:plan` label.
+        // GitHub-powered issue discovery — open issues with `looper:plan`
+        // assigned to the current gh user (Go-compatible eligibility).
         if let Some(ref gw) = self.github {
             if !input.repo.is_empty() {
+                let current_login = match gw.get_current_user_login(".") {
+                    Ok(login) if !login.is_empty() => login,
+                    Ok(_) => {
+                        tracing::warn!("Planner discovery: empty gh login — skipping auto-discovery");
+                        String::new()
+                    }
+                    Err(e) => {
+                        tracing::warn!("Planner discovery: cannot resolve gh login ({e}) — skipping auto-discovery");
+                        String::new()
+                    }
+                };
+                if current_login.is_empty() {
+                    // Fall through to existing queue merge below.
+                } else {
                 match gw.list_open_issues(ListOpenIssuesInput {
                     repo: input.repo.clone(),
                     cwd: ".".to_string(),
                     limit: 50,
-                    assignee: String::new(),
-                    label: "looper:plan".to_string(),
+                    assignee: current_login.clone(),
+                    label: crate::types::spec_labels::PLAN.to_string(),
                     labels: vec![],
                 }) {
                     Ok(issues) => {
                         tracing::info!(
-                            "Planner GitHub discovery — {} candidate issue(s) with looper:plan",
+                            "Planner GitHub discovery — {} candidate issue(s) with looper:plan assigned to @{current_login}",
                             issues.len()
                         );
                         let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
                         for issue in issues {
-                            // Skip issues that have already been
-                            // planned in a previous pipeline run.
-                            if issue.labels.iter().any(|l| l == "looper/planned") {
+                            // Defense-in-depth: assignee must include current user.
+                            if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
                                 tracing::debug!(
-                                    "Planner skipping issue #{} (already labeled looper/planned)",
+                                    "Planner skipping issue #{} (not assigned to @{current_login})",
                                     issue.number
                                 );
                                 continue;
@@ -228,6 +241,7 @@ impl PlannerScheduler for Planner {
                     }
                     Err(e) => tracing::warn!("Planner GitHub issue discovery failed: {e}"),
                 }
+                } // end else current_login non-empty
             }
         }
 
@@ -370,7 +384,18 @@ impl PlannerScheduler for Planner {
             .map(|p| p + 1)
             .unwrap_or(0);
 
-        for &step in &steps[start_idx..] {
+        // Flip loop to running while pipeline executes.
+        if let Ok(g) = self.repos.0.lock() {
+            if let Ok(Some(mut lp)) = g.loops.get_by_id(&loop_id) {
+                lp.status = "running".into();
+                lp.updated_at.clone_from(&now_iso);
+                let _ = g.loops.upsert(&lp);
+            }
+        }
+
+        let mut pipeline_error: Option<String> = None;
+
+        'pipeline: for &step in &steps[start_idx..] {
             if ctx.is_cancelled() {
                 tracing::info!("Planner pipeline cancelled at step {step}");
                 break;
@@ -659,7 +684,7 @@ The spec file path MUST be included in the PR body as:
                         // Commit the spec document that the agent wrote
                         // directly from the existing worktree (no need to
                         // remove and recreate).
-                        self.tokio_handle.block_on(async {
+                        let push_result = self.tokio_handle.block_on(async {
                             if let Err(e) = git
                                 .commit(looper_git::CommitInput {
                                     worktree_path: worktree_path.clone(),
@@ -667,28 +692,35 @@ The spec file path MUST be included in the PR body as:
                                 })
                                 .await
                             {
-                                tracing::warn!("Planner commit (non-fatal): {e}");
+                                // Empty commit is non-fatal (agent may have committed already).
+                                tracing::warn!("Planner commit (may already be clean): {e}");
                             }
-                            if let Err(e) = git
-                                .push(looper_git::PushInput {
-                                    worktree_path: worktree_path.clone(),
-                                    remote: "origin".into(),
-                                    branch: branch.clone(),
-                                    expected_head_sha: None,
-                                    protected_branches: vec!["main".into(), "master".into()],
-                                    set_upstream: true,
-                                })
-                                .await
-                            {
-                                tracing::warn!("Planner push (non-fatal): {e}");
-                            }
+                            git.push(looper_git::PushInput {
+                                worktree_path: worktree_path.clone(),
+                                remote: "origin".into(),
+                                branch: branch.clone(),
+                                expected_head_sha: None,
+                                protected_branches: vec!["main".into(), "master".into()],
+                                set_upstream: true,
+                            })
+                            .await
                         });
+                        if let Err(e) = push_result {
+                            pipeline_error = Some(format!("planner push failed: {e}"));
+                            tracing::error!("Planner push (fatal): {e}");
+                            break 'pipeline;
+                        }
+                    } else {
+                        pipeline_error = Some("planner publish requires git gateway for push".into());
+                        break 'pipeline;
                     }
-                    // When GitHub is available, create a spec pull request
+                    // When GitHub is available, create a ready (non-draft) spec pull request
                     if let Some(ref gw) = self.github {
                         if let Some(ref repo_path) = item.repo {
                             if !repo_path.is_empty() {
-                                // Close any existing open spec PRs for this issue to avoid duplicates
+                                // Prefer adopting an existing open PR on this planner branch.
+                                let branch_name = format!("planner/{loop_id}");
+                                let mut adopted_pr: Option<i64> = None;
                                 if let Ok(open_prs) =
                                     gw.list_open_pull_requests(looper_github::types::ListOpenPullRequestsInput {
                                         repo: repo_path.clone(),
@@ -701,117 +733,89 @@ The spec file path MUST be included in the PR body as:
                                         timeout: None,
                                     })
                                 {
-                                    for pr in &open_prs {
-                                        if pr.title.starts_with(&format!("[{}]", issue_number)) {
-                                            tracing::info!(
-                                                "Planner closing old PR #{} for issue #{}",
-                                                pr.number,
-                                                issue_number
-                                            );
-                                            let _ =
-                                                gw.close_pull_request(looper_github::types::ClosePullRequestInput {
-                                                    repo: repo_path.clone(),
-                                                    pr_number: pr.number,
-                                                    cwd: ".".to_string(),
-                                                });
-                                            // Also cancel any old loops referencing this PR
-                                            if let Ok(guard) = self.repos.0.lock() {
-                                                if let Ok(loops) = guard.loops.list() {
-                                                    for old_loop in &loops {
-                                                        if old_loop.pr_number == Some(pr.number)
-                                                            && !matches!(
-                                                                old_loop.status.as_str(),
-                                                                "completed" | "failed" | "cancelled" | "terminated"
-                                                            )
-                                                        {
-                                                            let mut updated = old_loop.clone();
-                                                            updated.status = "cancelled".to_string();
-                                                            updated.updated_at = chrono::Utc::now()
-                                                                .format("%Y-%m-%dT%H:%M:%S%.3fZ")
-                                                                .to_string();
-                                                            let _ = guard.loops.upsert(&updated);
-                                                            tracing::info!(
-                                                                "Cancelled old loop {} for PR #{}",
-                                                                old_loop.id,
-                                                                pr.number
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                drop(guard);
-                                            }
-                                        }
+                                    if let Some(existing) =
+                                        open_prs.iter().find(|pr| pr.head_ref_name == branch_name)
+                                    {
+                                        adopted_pr = Some(existing.number);
+                                        tracing::info!(
+                                            "Planner adopting existing PR #{} for branch {branch_name}",
+                                            existing.number
+                                        );
                                     }
                                 }
-                                let body = format!(
-                                    "## Spec: {}\n\n**Issue**: #{} | **Repository**: {} | **Status**: `planning`\n\n---\n\n## Objective\n\nThe planning spec for issue #{} has been written.\n\n## Spec Location\n\n`specs/{}-spec/spec.md`\n\nSpec: specs/{}-spec/spec.md\n\n## Next Steps\n\n1. Review the spec in the `specs/` directory of this PR\n2. The reviewer will check the spec for completeness\n3. Once approved, implementation will begin automatically\n\n---\n\n*Generated by [Looper](https://github.com/quangdang46/looper_rust)*",
-                                    issue_title,
-                                    issue_number,
-                                    repo_path,
-                                    issue_number,
-                                    issue_number,
-                                    issue_number
-                                );
-                                match gw.create_pull_request(looper_github::types::CreatePullRequestInput {
-                                    repo: repo_path.clone(),
-                                    head_branch: format!("planner/{loop_id}"),
-                                    base_branch: "main".to_string(),
-                                    title: format!(
-                                        "docs: add spec for {} (#{})",
-                                        issue_title.to_lowercase(),
+                                let pr_number = if let Some(n) = adopted_pr {
+                                    n
+                                } else {
+                                    let body = format!(
+                                        "## Spec: {}\n\n**Issue**: #{} | **Repository**: {} | **Status**: `planning`\n\n---\n\n## Objective\n\nThe planning spec for issue #{} has been written.\n\n## Spec Location\n\n`specs/{}-spec/spec.md`\n\nSpec: specs/{}-spec/spec.md\n\n## Next Steps\n\n1. Review the spec in the `specs/` directory of this PR\n2. The reviewer will check the spec for completeness\n3. Once approved, implementation will begin automatically\n\n---\n\n*Generated by [Looper](https://github.com/quangdang46/looper_rust)*",
+                                        issue_title,
+                                        issue_number,
+                                        repo_path,
+                                        issue_number,
+                                        issue_number,
                                         issue_number
-                                    ),
-                                    body,
-                                    draft: true,
-                                    cwd: ".".to_string(),
-                                }) {
-                                    Ok(result) => {
-                                        tracing::info!(
-                                            "Planner created draft PR #{} for loop {loop_id}",
-                                            result.number
-                                        );
-                                        // Mark the PR as being in spec-review phase
-                                        let _ = gw.add_issue_labels(IssueLabelsInput {
-                                            repo: repo_path.clone(),
-                                            issue_number: result.number,
-                                            labels: vec!["looper:spec-reviewing".into()],
-                                            cwd: ".".to_string(),
-                                        });
-                                        // Mark PR as ready for review when pipeline completes (done in cleanup)
-                                        // Post spec content as a PR comment for easy review
-                                        // Spec was written to specs/{issue_number}-spec/spec.md in the worktree
-                                        // Try reading from the local clone's worktree directory
-                                        // Resolve worktree path from project record
-                                        let spec_repo_path = if let Ok(guard) = self.repos.0.lock() {
-                                            guard
-                                                .projects
-                                                .get_by_id(&project_id)
-                                                .ok()
-                                                .flatten()
-                                                .map(|p| p.repo_path.clone())
-                                                .filter(|p| !p.is_empty())
-                                                .unwrap_or_else(|| ".".to_string())
-                                        } else {
-                                            ".".to_string()
-                                        };
-                                        let spec_path = format!("{spec_repo_path}/.looper/worktrees/planner-{loop_id}/specs/{issue_number}-spec/spec.md");
-                                        if let Ok(spec_content) = std::fs::read_to_string(&spec_path) {
-                                            let comment = format!(
-                                                "## 📋 Spec: {issue_title}
-
-{}",
-                                                spec_content
+                                    );
+                                    match gw.create_pull_request(looper_github::types::CreatePullRequestInput {
+                                        repo: repo_path.clone(),
+                                        head_branch: branch_name.clone(),
+                                        base_branch: "main".to_string(),
+                                        title: format!("Spec: {issue_title}"),
+                                        body,
+                                        draft: false,
+                                        cwd: ".".to_string(),
+                                    }) {
+                                        Ok(result) => {
+                                            tracing::info!(
+                                                "Planner created ready PR #{} for loop {loop_id}",
+                                                result.number
                                             );
-                                            let _ = gw.create_issue_comment(IssueCommentInput {
-                                                repo: repo_path.clone(),
-                                                issue_number: result.number,
-                                                body: comment,
-                                                cwd: ".".to_string(),
-                                            });
-                                            tracing::info!("Planner posted spec comment to PR #{}", result.number);
+                                            result.number
+                                        }
+                                        Err(e) => {
+                                            pipeline_error = Some(format!("planner create PR failed: {e}"));
+                                            tracing::error!("Planner create PR failed: {e}");
+                                            break 'pipeline;
                                         }
                                     }
-                                    Err(e) => tracing::warn!("Planner create PR failed: {e}"),
+                                };
+                                // Mark the PR as being in spec-review phase
+                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                    repo: repo_path.clone(),
+                                    issue_number: pr_number,
+                                    labels: vec![crate::types::spec_labels::SPEC_REVIEWING.into()],
+                                    cwd: ".".to_string(),
+                                });
+                                if let Ok(g) = self.repos.0.lock() {
+                                    if let Ok(Some(mut lp)) = g.loops.get_by_id(&loop_id) {
+                                        lp.pr_number = Some(pr_number);
+                                        lp.updated_at = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                                        let _ = g.loops.upsert(&lp);
+                                    }
+                                }
+                                let spec_repo_path = if let Ok(guard) = self.repos.0.lock() {
+                                    guard
+                                        .projects
+                                        .get_by_id(&project_id)
+                                        .ok()
+                                        .flatten()
+                                        .map(|p| p.repo_path.clone())
+                                        .filter(|p| !p.is_empty())
+                                        .unwrap_or_else(|| ".".to_string())
+                                } else {
+                                    ".".to_string()
+                                };
+                                let spec_path = format!(
+                                    "{spec_repo_path}/.looper/worktrees/planner-{loop_id}/specs/{issue_number}-spec/spec.md"
+                                );
+                                if let Ok(spec_content) = std::fs::read_to_string(&spec_path) {
+                                    let comment = format!("## 📋 Spec: {issue_title}\n\n{spec_content}");
+                                    let _ = gw.create_issue_comment(IssueCommentInput {
+                                        repo: repo_path.clone(),
+                                        issue_number: pr_number,
+                                        body: comment,
+                                        cwd: ".".to_string(),
+                                    });
+                                    tracing::info!("Planner posted spec comment to PR #{pr_number}");
                                 }
                             }
                         }
@@ -845,21 +849,8 @@ The spec file path MUST be included in the PR body as:
                             tracing::warn!("Planner notification: {e}");
                         }
                     }
-                    // When GitHub is available, add a label to track planned items
-                    if let Some(ref gw) = self.github {
-                        if let Some(ref repo_path) = item.repo {
-                            // Label the original issue (target_id) so it
-                            // is excluded from future looper:plan discovery.
-                            if let Ok(issue_num) = item.target_id.parse::<i64>() {
-                                let _ = gw.add_issue_labels(IssueLabelsInput {
-                                    repo: repo_path.clone(),
-                                    issue_number: issue_num,
-                                    labels: vec!["looper/planned".into()],
-                                    cwd: ".".to_string(),
-                                });
-                            }
-                        }
-                    }
+                    // Anti-thrash is loop status completed + queue dedupe,
+                    // not a slash label (Go-compatible).
                 }
 
                 _ => {
@@ -921,7 +912,7 @@ The spec file path MUST be included in the PR body as:
             let _ = std::fs::remove_dir_all(&worktree_path);
         }
 
-        // 4. Mark run as Success ---------------------------------------------
+        // 4. Mark run / queue / loop terminal state ---------------------------
         let guard = match self.repos.0.lock() {
             Ok(g) => g,
             Err(e) => {
@@ -933,6 +924,36 @@ The spec file path MUST be included in the PR body as:
             Ok(Some(r)) => r,
             _ => return PlannerProcessResult,
         };
+
+        if let Some(ref err) = pipeline_error {
+            final_run.status = RunStatus::Failed.as_str().to_string();
+            final_run.error_message = Some(err.clone());
+            final_run.ended_at = Some(now_iso.clone());
+            final_run.updated_at = now_iso.clone();
+            if let Err(e) = guard.runs.upsert(&final_run) {
+                tracing::error!("Planner fail run: {e}");
+            }
+            if let Ok(Some(mut qi)) = guard.queue.get_by_id(&item.id) {
+                // Retryable remote publish failures → requeue with backoff class.
+                qi.status = "failed".into();
+                qi.last_error = Some(err.clone());
+                qi.last_error_kind = Some("retryable_after_resume".into());
+                qi.finished_at = Some(now_iso.clone());
+                qi.updated_at = now_iso.clone();
+                if let Err(e) = guard.queue.upsert(&qi) {
+                    tracing::error!("Planner fail queue item: {e}");
+                }
+            }
+            if let Ok(Some(mut lp)) = guard.loops.get_by_id(&loop_id) {
+                // Hold thrashing until operator/resume (Go: pause on publish fail).
+                lp.status = "paused".into();
+                lp.updated_at = now_iso.clone();
+                let _ = guard.loops.upsert(&lp);
+            }
+            tracing::error!("Planner pipeline failed (loop={loop_id}): {err}");
+            return PlannerProcessResult;
+        }
+
         final_run.status = RunStatus::Success.as_str().to_string();
         final_run.ended_at = Some(now_iso.clone());
         final_run.updated_at = now_iso.clone();
@@ -946,6 +967,13 @@ The spec file path MUST be included in the PR body as:
             qi.updated_at = now_iso.clone();
             if let Err(e) = guard.queue.upsert(&qi) {
                 tracing::error!("Planner release queue item: {e}");
+            }
+        }
+        if let Ok(Some(mut lp)) = guard.loops.get_by_id(&loop_id) {
+            lp.status = "completed".into();
+            lp.updated_at = now_iso.clone();
+            if let Err(e) = guard.loops.upsert(&lp) {
+                tracing::error!("Planner complete loop: {e}");
             }
         }
 

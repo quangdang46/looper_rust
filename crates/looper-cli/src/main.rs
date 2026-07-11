@@ -86,10 +86,16 @@ pub enum Command {
     #[command(subcommand)]
     Autoupgrade(AutoupgradeCommand),
 
-    // -- Disabled stubs (hidden; return unsupported if invoked) --
-    #[command(subcommand, hide = true)]
-    Review(commands::review::ReviewCommand),
+    /// Admit planner work for an issue (Go-compatible: `looper plan --issue N`)
+    Plan(commands::plan::PlanArgs),
 
+    /// Admit reviewer work for a PR (Go-compatible: `looper review --pr N`)
+    Review(commands::review::ReviewArgs),
+
+    /// Admit fixer work for a PR (Go-compatible: `looper fix --pr N`)
+    Fix(commands::fix::FixArgs),
+
+    // -- Disabled stubs (hidden; return unsupported if invoked) --
     #[command(subcommand, hide = true)]
     Takeover(commands::takeover::TakeoverCommand),
 
@@ -142,9 +148,8 @@ pub enum Command {
     #[command(subcommand)]
     Bootstrap(BootstrapCommand),
 
-    /// Admit planner/reviewer/worker/fixer work into the scheduler
-    #[command(subcommand)]
-    Work(commands::work::WorkCommand),
+    /// Admit worker work (`work --issue N`) or generic `work start --role …`
+    Work(commands::work::WorkArgs),
 
     /// Destructive: terminates ALL active/running loops (misnamed; hidden).
     /// Requires --i-know-this-terminates-all-active-loops.
@@ -291,8 +296,19 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::ConfigLocal(cmd) => run_config_local(cmd, json),
         Command::Daemon(cmd) => run_daemon(cmd, json).await,
         Command::Autoupgrade(cmd) => run_autoupgrade(cmd, json).await,
+        Command::Plan(args) => {
+            commands::ensure_daemon(client).await?;
+            commands::plan::handle(client, args, json).await
+        }
+        Command::Review(args) => {
+            commands::ensure_daemon(client).await?;
+            commands::review::handle(client, args, json).await
+        }
+        Command::Fix(args) => {
+            commands::ensure_daemon(client).await?;
+            commands::fix::handle(client, args, json).await
+        }
         // Stubs: no daemon ping — always unsupported (non-zero exit).
-        Command::Review(cmd) => commands::review::handle(client, cmd, json).await,
         Command::Takeover(cmd) => commands::takeover::handle(client, cmd, json).await,
         Command::RunStats(cmd) => commands::run_stats::handle(client, cmd, json).await,
         Command::LogsFollow(cmd) => commands::logs_follow::handle(client, cmd, json).await,
@@ -326,9 +342,9 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
             commands::pr::handle(client, cmd, json).await
         }
         Command::Bootstrap(cmd) => run_bootstrap(cmd, json).await,
-        Command::Work(cmd) => {
+        Command::Work(args) => {
             commands::ensure_daemon(client).await?;
-            commands::work::handle(client, cmd, json).await
+            commands::work::handle(client, args, json).await
         }
         Command::ReconcileStale { confirm_terminate_all } => {
             // Require confirm flag before touching the daemon (avoids silent mass-kill).
@@ -417,7 +433,6 @@ mod tests {
         // Primary surface must not advertise disabled stubs or destructive misnomer.
         for stub in [
             "takeover",
-            "review",
             "run-stats",
             "logs-follow",
             "netadmin",
@@ -436,17 +451,19 @@ mod tests {
                 "main help must not list stub '{stub}' as a command:\n{help}"
             );
         }
-        // Sanity: real commands still visible.
+        // Sanity: real commands still visible (including Go-compatible role admits).
         assert!(help.contains("health") || help.contains("Health"));
         assert!(help.contains("projects") || help.contains("Projects"));
         assert!(help.contains("work") || help.contains("Work"));
+        assert!(help.contains("plan") || help.contains("Plan"));
+        assert!(help.contains("review") || help.contains("Review"));
+        assert!(help.contains("fix") || help.contains("Fix"));
     }
 
     #[test]
     fn stub_subcommands_still_parse_when_invoked() {
         // Hidden but invokable — must parse so handlers can return unsupported.
         assert!(Cli::try_parse_from(["looper", "takeover", "status", "r1"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "review", "status", "1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "run-stats", "show", "r1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "logs-follow", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "netadmin", "status"]).is_ok());
@@ -457,5 +474,14 @@ mod tests {
         assert!(Cli::try_parse_from(["looper", "diagnostics", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "reconcile-stale"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "reconcile-stale", "--i-know-this-terminates-all-active-loops"]).is_ok());
+        // Go-compatible role admits parse.
+        assert!(Cli::try_parse_from(["looper", "plan", "--project", "p", "--issue", "1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "review", "--project", "p", "--pr", "2"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "fix", "--project", "p", "--pr", "3"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "work", "--project", "p", "--issue", "4"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["looper", "work", "start", "--project", "p", "--role", "planner", "--issue", "5"])
+                .is_ok()
+        );
     }
 }

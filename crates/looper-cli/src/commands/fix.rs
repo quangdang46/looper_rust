@@ -1,4 +1,4 @@
-//! `looper review` — admit reviewer work (Go-compatible surface).
+//! `looper fix` — admit fixer work for a PR (Go-compatible surface).
 
 use clap::Args;
 
@@ -8,16 +8,16 @@ use crate::error::CliError;
 use super::work::{admit_role, RoleIssueArgs};
 
 #[derive(Debug, Args)]
-pub struct ReviewArgs {
+pub struct FixArgs {
     #[command(flatten)]
     pub common: RoleIssueArgs,
 }
 
-pub async fn handle(client: &DaemonAPIClient, args: &ReviewArgs, json: bool) -> Result<(), CliError> {
+pub async fn handle(client: &DaemonAPIClient, args: &FixArgs, json: bool) -> Result<(), CliError> {
     admit_role(
         client,
         &args.common.project,
-        "reviewer",
+        "fixer",
         args.common.issue,
         args.common.pr,
         args.common.repo.clone(),
@@ -35,12 +35,12 @@ mod tests {
     #[derive(Debug, Parser)]
     struct Wrap {
         #[command(flatten)]
-        args: ReviewArgs,
+        args: FixArgs,
     }
 
     #[test]
-    fn parse_review_pr() {
-        let w = Wrap::try_parse_from(["t", "--project", "p", "--pr", "9"]).unwrap();
-        assert_eq!(w.args.common.pr, Some(9));
+    fn parse_fix_pr() {
+        let w = Wrap::try_parse_from(["t", "--project", "p", "--pr", "11"]).unwrap();
+        assert_eq!(w.args.common.pr, Some(11));
     }
 }

@@ -215,7 +215,7 @@ impl Default for DispatchConfig {
             slash_commands: vec!["/plan".into(), "/implement".into()],
             assign_to: None,
             planner_trigger_labels: vec!["looper:plan".into()],
-            worker_trigger_labels: vec!["looper:implement".into()],
+            worker_trigger_labels: vec!["looper:worker-ready".into()],
         }
     }
 }

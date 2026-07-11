@@ -245,10 +245,11 @@ impl CoordinatorScheduler for Coordinator {
                                 }) {
                                     let has_dispatch_plan =
                                         issue.labels.iter().any(|l| l == "dispatch/plan" || l == "looper:plan");
-                                    let has_dispatch_implement = issue
-                                        .labels
-                                        .iter()
-                                        .any(|l| l == "dispatch/implement" || l == "looper:implement");
+                                    let has_dispatch_implement = issue.labels.iter().any(|l| {
+                                        l == "dispatch/implement"
+                                            || l == "looper:worker-ready"
+                                            || l == "looper:implement"
+                                    });
                                     if has_dispatch_plan && !has_dispatch_implement {
                                         tracing::info!(
                                             "Spec transition: PR #{} spec-ready → issue #{} dispatch/plan → dispatch/implement",
@@ -387,7 +388,7 @@ impl CoordinatorScheduler for Coordinator {
                         }
                     }
                 }
-                // Dispatch/implement → add looper:implement
+                // Dispatch/implement → add looper:worker-ready (Go worker discovery label)
                 if let Ok(issues) = gw.list_open_issues(ListOpenIssuesInput {
                     repo: repo.clone(),
                     cwd: ".".to_string(),
@@ -417,16 +418,18 @@ impl CoordinatorScheduler for Coordinator {
                                 continue;
                             }
 
-                            let has_implement = detail.labels.iter().any(|l| l == "looper:implement");
-                            if !has_implement {
+                            let has_worker_ready = detail.labels.iter().any(|l| {
+                                l == "looper:worker-ready" || l == "looper:implement"
+                            });
+                            if !has_worker_ready {
                                 tracing::info!(
-                                    "Dispatch: issue #{} has dispatch/implement, adding looper:implement",
+                                    "Dispatch: issue #{} has dispatch/implement, adding looper:worker-ready",
                                     issue.number
                                 );
                                 let _ = gw.add_issue_labels(IssueLabelsInput {
                                     repo: repo.clone(),
                                     issue_number: issue.number,
-                                    labels: vec!["looper:implement".into()],
+                                    labels: vec!["looper:worker-ready".into()],
                                     cwd: ".".to_string(),
                                 });
                                 // Remove looper:plan so the planner doesn't re-discover it

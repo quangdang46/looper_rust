@@ -231,6 +231,52 @@ impl Worker {
                             tracing::warn!("Worker prepare_worktree event: {e}");
                         }
                     }
+                    // Prefer planner PR branch (push-existing) when a tracked
+                    // spec PR exists for this issue — same PR through implement.
+                    let (existing_pr_number, existing_branch) = {
+                        let repo = item.repo.as_deref().unwrap_or("");
+                        let issue_num: i64 = item.target_id.parse().unwrap_or(0);
+                        if !repo.is_empty() && issue_num > 0 {
+                            if let Some(pr) = self.find_spec_pr_for_issue(repo, issue_num) {
+                                tracing::info!(
+                                    "Worker: will implement on existing PR #{} branch {}",
+                                    pr.number,
+                                    pr.head_ref_name
+                                );
+                                (Some(pr.number), Some(pr.head_ref_name.clone()))
+                            } else {
+                                (None, None)
+                            }
+                        } else {
+                            (None, None)
+                        }
+                    };
+                    let work_branch =
+                        existing_branch.clone().unwrap_or_else(|| format!("worker/{loop_id}"));
+                    // Persist for open-pr step.
+                    if let Ok(guard) = self.repos.0.lock() {
+                        if let Ok(Some(mut r)) = guard.runs.get_by_id(&run.id) {
+                            let mut cp = r
+                                .checkpoint_json
+                                .as_deref()
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                .unwrap_or_else(|| serde_json::json!({}));
+                            if let Some(n) = existing_pr_number {
+                                cp["existing_pr_number"] = serde_json::json!(n);
+                            }
+                            cp["work_branch"] = serde_json::json!(&work_branch);
+                            cp["push_existing"] = serde_json::json!(existing_pr_number.is_some());
+                            r.checkpoint_json = Some(cp.to_string());
+                            let _ = guard.runs.upsert(&r);
+                        }
+                        if let Some(n) = existing_pr_number {
+                            if let Ok(Some(mut lp)) = guard.loops.get_by_id(loop_id) {
+                                lp.pr_number = Some(n);
+                                lp.updated_at = now_iso.clone();
+                                let _ = guard.loops.upsert(&lp);
+                            }
+                        }
+                    }
                     // Perform git worktree creation
                     if let Some(ref git) = self.git {
                         // Resolve the repo path from project record
@@ -252,20 +298,27 @@ impl Worker {
                                 Err(_) => (".".to_string(), ".".to_string()),
                             }
                         };
-                        tracing::info!("Worker worktree: repo_path={wt_repo_path}, wt_root={wt_root}");
+                        tracing::info!(
+                            "Worker worktree: repo_path={wt_repo_path}, wt_root={wt_root}, branch={work_branch}"
+                        );
                         let input = looper_git::types::CreateWorktreeInput {
                             project_id: item.project_id.clone().unwrap_or_default(),
                             repo_path: wt_repo_path.clone(),
                             worktree_root: wt_root.clone(),
-                            branch: format!("worker/{loop_id}"),
+                            branch: work_branch.clone(),
                             base_branch: Some("main".to_string()),
-                            start_point: Some("main".to_string()),
-                            pr_number: None,
+                            // When reusing planner branch, start from that remote branch tip.
+                            start_point: if existing_pr_number.is_some() {
+                                Some(work_branch.clone())
+                            } else {
+                                Some("main".to_string())
+                            },
+                            pr_number: existing_pr_number,
                             checkout_mode: looper_git::types::CheckoutMode::Branch,
                             protected_branches: vec!["main".to_string(), "master".to_string()],
                         };
                         match self.tokio_handle.block_on(git.create_worktree(input)) {
-                            Ok(_) => tracing::info!("Worktree created"),
+                            Ok(_) => tracing::info!("Worktree created on branch {work_branch}"),
                             Err(e) => tracing::warn!("Worktree creation failed: {e}"),
                         }
                     }
@@ -676,11 +729,31 @@ impl Worker {
                                 item.target_id,
                                 issue_title_text,
                             );
-                            // Commit changes, then push branch to GitHub before creating PR
+                            // Resolve branch / existing PR from checkpoint (push-existing path).
+                            let (work_branch, push_existing, existing_pr) = {
+                                let guard = self.repos.0.lock().ok();
+                                let cp = guard
+                                    .as_ref()
+                                    .and_then(|g| g.runs.get_by_id(&run.id).ok().flatten())
+                                    .and_then(|r| r.checkpoint_json)
+                                    .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+                                let branch = cp
+                                    .as_ref()
+                                    .and_then(|v| v.get("work_branch").and_then(|b| b.as_str()))
+                                    .map(String::from)
+                                    .unwrap_or_else(|| format!("worker/{loop_id}"));
+                                let push_ex = cp
+                                    .as_ref()
+                                    .and_then(|v| v.get("push_existing").and_then(|b| b.as_bool()))
+                                    .unwrap_or(false);
+                                let prn = cp
+                                    .as_ref()
+                                    .and_then(|v| v.get("existing_pr_number").and_then(|n| n.as_i64()));
+                                (branch, push_ex, prn)
+                            };
+                            // Commit + push (fatal on push failure).
                             if let Some(ref git) = self.git {
-                                let branch = format!("worker/{loop_id}");
                                 let wt_path = resolve_worker_wt(self, item, loop_id);
-                                // Commit any uncommitted files written by the agent
                                 let _ = self.tokio_handle.block_on(git.commit(looper_git::CommitInput {
                                     worktree_path: wt_path.clone(),
                                     message: format!(
@@ -689,69 +762,93 @@ impl Worker {
                                         item.target_id
                                     ),
                                 }));
-                                match self.tokio_handle.block_on(git.push(looper_git::PushInput {
+                                if let Err(e) = self.tokio_handle.block_on(git.push(looper_git::PushInput {
                                     worktree_path: wt_path.clone(),
                                     remote: "origin".into(),
-                                    branch: branch.clone(),
+                                    branch: work_branch.clone(),
                                     expected_head_sha: None,
                                     protected_branches: vec!["main".into(), "master".into()],
                                     set_upstream: true,
                                 })) {
-                                    Ok(_) => tracing::info!("Worker: pushed branch {} to origin", branch),
-                                    Err(e) => tracing::warn!("Worker: push failed (branch {}): {}", branch, e),
+                                    return Err(format!("Worker push failed (branch {work_branch}): {e}"));
                                 }
+                                tracing::info!("Worker: pushed branch {work_branch} to origin");
+                            } else {
+                                return Err("Worker open-pr requires git gateway".into());
                             }
-                            // Remove looper:implement and add looper:implemented to prevent re-discovery
+                            // Clear worker-ready so discovery does not thrash.
                             if let Ok(num) = item.target_id.parse::<i64>() {
                                 let _ = github.remove_issue_labels(looper_github::types::IssueLabelsInput {
                                     repo: item.repo.clone().unwrap_or_default(),
                                     issue_number: num,
-                                    labels: vec!["looper:implement".into()],
+                                    labels: vec![spec_labels::WORKER_READY.into()],
                                     cwd: ".".to_string(),
                                 });
                             }
-                            match github.create_pull_request(CreatePullRequestInput {
-                                repo: item.repo.clone().unwrap_or_default(),
-                                head_branch: format!("worker/{loop_id}"),
-                                base_branch: "main".to_string(),
-                                title: format!(
-                                    "feat: implement {} (#{})",
-                                    issue_title_text.to_lowercase(),
-                                    item.target_id
-                                ),
-                                body,
-                                draft: true,
-                                cwd: ".".to_string(),
-                            }) {
-                                Ok(pr) => {
-                                    tracing::info!("PR #{} created for run {}", pr.number, run.id);
-                                    // Store PR number in loop record
-                                    if let Ok(guard) = self.repos.0.lock() {
-                                        if let Ok(Some(mut loop_rec)) = guard.loops.get_by_id(&run.loop_id) {
-                                            loop_rec.pr_number = Some(pr.number);
-                                            loop_rec.updated_at =
-                                                chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                                            let _ = guard.loops.upsert(&loop_rec);
-                                        }
-                                        drop(guard);
+                            let pr_number = if push_existing {
+                                let n = existing_pr.ok_or_else(|| {
+                                    "push_existing set but existing_pr_number missing".to_string()
+                                })?;
+                                // Strip spec-ready — implementation is in progress on same PR.
+                                let _ = github.remove_issue_labels(looper_github::types::IssueLabelsInput {
+                                    repo: item.repo.clone().unwrap_or_default(),
+                                    issue_number: n,
+                                    labels: vec![
+                                        spec_labels::SPEC_READY.into(),
+                                        spec_labels::SPEC_REVIEWING.into(),
+                                    ],
+                                    cwd: ".".to_string(),
+                                });
+                                let _ = github.create_issue_comment(IssueCommentInput {
+                                    repo: item.repo.clone().unwrap_or_default(),
+                                    issue_number: n,
+                                    body: format!(
+                                        "## 🚀 Implementation pushed\n\n\
+                                         Looper implemented issue #{} on this PR (push-existing).\n\n\
+                                         _Automated by looper._",
+                                        item.target_id
+                                    ),
+                                    cwd: ".".to_string(),
+                                });
+                                tracing::info!("Worker: updated existing PR #{n} (push-existing)");
+                                n
+                            } else {
+                                match github.create_pull_request(CreatePullRequestInput {
+                                    repo: item.repo.clone().unwrap_or_default(),
+                                    head_branch: work_branch.clone(),
+                                    base_branch: "main".to_string(),
+                                    title: format!(
+                                        "feat: implement {} (#{})",
+                                        issue_title_text.to_lowercase(),
+                                        item.target_id
+                                    ),
+                                    body,
+                                    draft: false,
+                                    cwd: ".".to_string(),
+                                }) {
+                                    Ok(pr) => {
+                                        tracing::info!("PR #{} created for run {}", pr.number, run.id);
+                                        let _ = github.create_issue_comment(IssueCommentInput {
+                                            repo: item.repo.clone().unwrap_or_default(),
+                                            issue_number: pr.number,
+                                            body: "## 🚀 Implementation Complete\n\n\
+                                                   Looper has finished implementing this issue.\n\n\
+                                                   _This is an automated message from looper._"
+                                                .to_string(),
+                                            cwd: ".".to_string(),
+                                        });
+                                        pr.number
                                     }
-                                    // Keep PR as draft for now — mark ready when full pipeline completes
-                                    // Post implementation comment
-                                    let _ = github.create_issue_comment(IssueCommentInput {
-                                        repo: item.repo.clone().unwrap_or_default(),
-                                        issue_number: pr.number,
-                                        body: "## 🚀 Implementation Complete
-
-Looper has finished implementing this issue.
-
-This PR is currently a draft. Once validation passes, it will be marked ready for review.
-
-_This is an automated message from looper._"
-                                            .to_string(),
-                                        cwd: ".".to_string(),
-                                    });
+                                    Err(e) => return Err(format!("PR creation failed: {e}")),
                                 }
-                                Err(e) => tracing::warn!("PR creation failed: {}", e),
+                            };
+                            if let Ok(guard) = self.repos.0.lock() {
+                                if let Ok(Some(mut loop_rec)) = guard.loops.get_by_id(&run.loop_id) {
+                                    loop_rec.pr_number = Some(pr_number);
+                                    loop_rec.updated_at =
+                                        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                                    let _ = guard.loops.upsert(&loop_rec);
+                                }
                             }
                         }
                     }
@@ -772,6 +869,16 @@ _This is an automated message from looper._"
 
         // Clean up worktree after pipeline completes
         if let Some(ref git) = self.git {
+            let work_branch = {
+                let guard = self.repos.0.lock().ok();
+                guard
+                    .as_ref()
+                    .and_then(|g| g.runs.get_by_id(&run.id).ok().flatten())
+                    .and_then(|r| r.checkpoint_json)
+                    .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok())
+                    .and_then(|v| v.get("work_branch").and_then(|b| b.as_str()).map(String::from))
+                    .unwrap_or_else(|| format!("worker/{loop_id}"))
+            };
             // Resolve the repo path from project record
             let (wt_repo_path, wt_root) = {
                 let repos_lock = self.repos.0.lock();
@@ -795,7 +902,7 @@ _This is an automated message from looper._"
                 project_id: item.project_id.clone().unwrap_or_default(),
                 repo_path: wt_repo_path.clone(),
                 worktree_root: wt_root.clone(),
-                branch: format!("worker/{loop_id}"),
+                branch: work_branch.clone(),
                 base_branch: None,
                 start_point: None,
                 pr_number: None,
@@ -806,7 +913,7 @@ _This is an automated message from looper._"
             let _ = self.tokio_handle.block_on(git.cleanup_worktree(CleanupWorktreeInput {
                 repo_path: wt_repo_path.clone(),
                 worktree_path: worktree_path.clone(),
-                branch: format!("worker/{loop_id}"),
+                branch: work_branch,
                 protected_branches: vec!["main".to_string(), "master".to_string()],
             }));
             let _ = std::fs::remove_dir_all(&worktree_path);
@@ -816,10 +923,15 @@ _This is an automated message from looper._"
         let guard = self.repos.0.lock().map_err(|e| e.to_string())?;
         let mut final_run = guard.runs.get_by_id(&run.id).map_err(|e| e.to_string())?.ok_or("run not found")?;
         final_run.status = RunStatus::Success.as_str().to_string();
-        final_run.ended_at = Some(now_iso);
+        final_run.ended_at = Some(now_iso.clone());
         guard.runs.upsert(&final_run).map_err(|e| e.to_string())?;
+        if let Ok(Some(mut lp)) = guard.loops.get_by_id(loop_id) {
+            lp.status = "completed".into();
+            lp.updated_at = now_iso;
+            let _ = guard.loops.upsert(&lp);
+        }
 
-        // Mark implementation PR as ready for review
+        // Ensure implementation PR is ready for review (no-op if already ready).
         if let Some(ref gw) = self.github {
             if let Some(ref repo_path) = item.repo {
                 if let Ok(Some(loop_rec)) = guard.loops.get_by_id(&run.loop_id) {
@@ -829,7 +941,7 @@ _This is an automated message from looper._"
                             pr_number,
                             cwd: ".".to_string(),
                         });
-                        tracing::info!("Worker: Marked PR #{} as ready for review", pr_number);
+                        tracing::info!("Worker: ensured PR #{} is ready for review", pr_number);
                     }
                 }
             }
@@ -846,22 +958,36 @@ impl WorkerScheduler for Worker {
         let mut new_queue_items: Vec<QueueItemRecord> = Vec::new();
         let mut found_issues: Vec<WorkerIssueEntry> = Vec::new();
         if let Some(ref github) = self.github {
+            let current_login = match github.get_current_user_login(".") {
+                Ok(l) if !l.is_empty() => l,
+                _ => {
+                    tracing::warn!("Worker discovery: no gh login — skipping auto-discovery");
+                    String::new()
+                }
+            };
+            if current_login.is_empty() {
+                // Fall through to empty return after block.
+            } else {
             let gh_input = ListOpenIssuesInput {
                 repo: repo.clone(),
                 cwd: ".".to_string(),
                 limit: 50,
-                assignee: String::new(),
-                label: "looper:implement".to_string(),
+                assignee: current_login.clone(),
+                label: spec_labels::WORKER_READY.to_string(),
                 labels: vec![],
             };
             match github.list_open_issues(gh_input) {
                 Ok(issues) => {
                     tracing::info!(
-                        "Worker GitHub discovery — {} candidate issue(s) with looper:implement",
-                        issues.len()
+                        "Worker GitHub discovery — {} candidate issue(s) with {} assigned to @{current_login}",
+                        issues.len(),
+                        spec_labels::WORKER_READY
                     );
                     let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
                     for issue in issues {
+                        if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
+                            continue;
+                        }
                         let dedupe_key = format!("worker-{}-issue-{}", input.project_id, issue.number);
                         let exists = self
                             .repos
@@ -945,6 +1071,7 @@ impl WorkerScheduler for Worker {
                     tracing::warn!("Worker GitHub discovery failed for {}: {}", repo, e);
                 }
             }
+            } // end current_login non-empty
         } else {
             tracing::debug!("GitHub not configured, returning empty discovery for {}", repo);
         }
