@@ -171,16 +171,18 @@ impl RuntimeState for DaemonState {
     }
 
     async fn stop_loop(&self, _project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
-        let mut rec = self
+        let rec = self
             .repos
             .loops
             .get_by_seq(loop_seq)
             .map_err(|e| ApiError::internal(format!("get loop: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("loop seq={loop_seq}")))?;
         let finished = now_iso();
-        rec.status = "stopped".into();
-        rec.updated_at = finished.clone();
-        self.repos.loops.upsert(&rec).map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
+        // UPDATE status only — avoid INSERT OR REPLACE cascading queue deletes.
+        self.repos
+            .loops
+            .update_status(&rec.id, "stopped", &finished)
+            .map_err(|e| ApiError::internal(format!("update loop status: {e}")))?;
 
         self.repos
             .queue
@@ -190,16 +192,17 @@ impl RuntimeState for DaemonState {
     }
 
     async fn close_loop(&self, _project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
-        let mut rec = self
+        let rec = self
             .repos
             .loops
             .get_by_seq(loop_seq)
             .map_err(|e| ApiError::internal(format!("get loop: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("loop seq={loop_seq}")))?;
         let finished = now_iso();
-        rec.status = "closed".into();
-        rec.updated_at = finished.clone();
-        self.repos.loops.upsert(&rec).map_err(|e| ApiError::internal(format!("upsert loop: {e}")))?;
+        self.repos
+            .loops
+            .update_status(&rec.id, "closed", &finished)
+            .map_err(|e| ApiError::internal(format!("update loop status: {e}")))?;
         self.repos
             .queue
             .cancel_by_loop(&rec.id, &finished, Some("loop closed"))

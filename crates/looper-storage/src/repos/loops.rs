@@ -39,9 +39,10 @@ impl LoopsRepository {
     }
 
     pub fn upsert(&self, record: &LoopRecord) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO loops (id, seq, project_id, type, target_type, target_id, repo, pr_number, status, config_json, metadata_json, last_run_at, next_run_at, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        // Prefer UPDATE-then-INSERT so we never REPLACE an existing row (REPLACE
+        // deletes the row first and cascades to queue_items via ON DELETE CASCADE).
+        let updated = self.conn.execute(
+            "UPDATE loops SET seq=?2, project_id=?3, type=?4, target_type=?5, target_id=?6, repo=?7, pr_number=?8, status=?9, config_json=?10, metadata_json=?11, last_run_at=?12, next_run_at=?13, updated_at=?15 WHERE id=?1",
             rusqlite::params![
                 &record.id,
                 &record.seq,
@@ -60,6 +61,41 @@ impl LoopsRepository {
                 &record.updated_at,
             ],
         )?;
+        if updated == 0 {
+            self.conn.execute(
+                "INSERT INTO loops (id, seq, project_id, type, target_type, target_id, repo, pr_number, status, config_json, metadata_json, last_run_at, next_run_at, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                rusqlite::params![
+                    &record.id,
+                    &record.seq,
+                    &record.project_id,
+                    &record.r#type,
+                    &record.target_type,
+                    &record.target_id,
+                    &record.repo,
+                    &record.pr_number,
+                    &record.status,
+                    &record.config_json,
+                    &record.metadata_json,
+                    &record.last_run_at,
+                    &record.next_run_at,
+                    &record.created_at,
+                    &record.updated_at,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Update only status/updated_at without cascading deletes on child tables.
+    pub fn update_status(&self, id: &str, status: &str, updated_at: &str) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE loops SET status=?2, updated_at=?3 WHERE id=?1",
+            rusqlite::params![id, status, updated_at],
+        )?;
+        if n == 0 {
+            return Err(crate::error::StorageError::NotFound(format!("loop {id}")));
+        }
         Ok(())
     }
 

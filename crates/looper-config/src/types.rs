@@ -496,19 +496,14 @@ impl Default for ProjectConfig {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DispatchMode {
     #[serde(rename = "human-gated")]
     HumanGated,
+    #[default]
     #[serde(rename = "autonomous")]
     Autonomous,
-}
-
-impl Default for DispatchMode {
-    fn default() -> Self {
-        Self::Autonomous
-    }
 }
 
 impl std::str::FromStr for DispatchMode {

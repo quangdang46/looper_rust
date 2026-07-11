@@ -238,14 +238,15 @@ fn test_loops_get_by_seq() {
 #[test]
 fn test_loops_list_by_statuses() {
     let (repos, _dir) = setup();
-    let (pid, _) = insert_project_and_loop(&repos); // creates "l-1" with status "idle"
+    let (pid, _) = insert_project_and_loop(&repos); // creates "l-1" with status "idle", seq=1
     let t = now();
-    for s in ["running", "paused"] {
+    // Unique seqs required (UNIQUE constraint); do not rely on REPLACE-by-seq.
+    for (seq, s) in [(2i64, "running"), (3, "paused")] {
         repos
             .loops
             .upsert(&LoopRecord {
                 id: format!("l-{s}"),
-                seq: 0,
+                seq,
                 project_id: pid.clone(),
                 r#type: "worker".into(),
                 target_type: "issue".into(),

@@ -21,6 +21,7 @@ pub mod runs;
 pub mod stop;
 pub mod takeover;
 pub mod webhook;
+pub mod work;
 pub mod worktree;
 
 use crate::client::DaemonAPIClient;

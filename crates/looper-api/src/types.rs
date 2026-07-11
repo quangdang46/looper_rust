@@ -185,6 +185,32 @@ pub struct EnqueueInput {
     pub payload: Option<serde_json::Value>,
 }
 
+/// `POST /api/projects/{name}/work` — admit role work into the scheduler.
+#[derive(Debug, Deserialize)]
+pub struct AdmitWorkRequest {
+    /// Role: `planner` | `reviewer` | `worker` | `fixer`.
+    pub role: String,
+    #[serde(default)]
+    pub issue_number: Option<i64>,
+    #[serde(default)]
+    pub pr_number: Option<i64>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub metadata: Option<serde_json::Value>,
+}
+
+/// Response for admit-work: loop + queue item created or reused.
+#[derive(Debug, Serialize)]
+pub struct AdmitWorkResponse {
+    pub loop_detail: LoopDetail,
+    pub queue_item: QueueItemResponse,
+    pub created_new_loop: bool,
+    pub tick_triggered: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AcquireLockInput {
     pub resource: String,

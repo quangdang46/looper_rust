@@ -13,9 +13,10 @@ use crate::envelope::Envelope;
 use crate::error::ApiError;
 use crate::sse::{global_event_stream, project_event_stream};
 use crate::types::{
-    internal_error, AcquireLockInput, AddProjectInput, AgentConfigResponse, ConfigResponse, CreateLoopInput,
-    EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail, LoopSummary, PaginationParams,
-    ProjectSummary, QueueItemResponse, RunDetail, RunSummary, StartRunInput, VersionResponse,
+    internal_error, AcquireLockInput, AddProjectInput, AdmitWorkRequest, AdmitWorkResponse, AgentConfigResponse,
+    ConfigResponse, CreateLoopInput, EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail,
+    LoopSummary, PaginationParams, ProjectSummary, QueueItemResponse, RunDetail, RunSummary, StartRunInput,
+    VersionResponse,
 };
 use looper_storage::record::{LockRecord, LoopRecord, QueueItemRecord, RunRecord};
 
@@ -262,7 +263,38 @@ pub async fn pause_loop(
     State(state): State<Arc<AppState>>,
     Path((project_name, seq)): Path<(String, i64)>,
 ) -> Result<Json<Envelope<()>>, ApiError> {
-    state.ctx.state.stop_loop(&project_name, seq).await?;
+    // Pause is reversible — do NOT call stop_loop (terminal).
+    let repos = state.ctx.state.repos();
+    let record = repos
+        .loops
+        .get_by_seq(seq)
+        .map_err(internal_error)?
+        .filter(|r| r.project_id == project_name)
+        .ok_or_else(|| ApiError::not_found(format!("Loop {project_name}/{seq} not found")))?;
+
+    let now = crate::helpers::now_iso();
+    let from = record.status.clone();
+    if record.status == "stopped" || record.status == "closed" || record.status == "terminated" {
+        return Err(ApiError::bad_request(format!(
+            "cannot pause terminal loop {project_name}/{seq} (status={})",
+            record.status
+        )));
+    }
+    // UPDATE only — never REPLACE (would CASCADE-delete queue items).
+    repos.loops.update_status(&record.id, "paused", &now).map_err(internal_error)?;
+
+    // Hold work: cancel active queue items for this loop (resume requeues).
+    let cancelled = repos.queue.cancel_by_loop(&record.id, &now, Some("paused by user")).map_err(internal_error)?;
+
+    info!(
+        project = %project_name,
+        seq,
+        loop_id = %record.id,
+        from_status = %from,
+        to_status = "paused",
+        queue_cancelled = cancelled,
+        "loop paused"
+    );
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -272,19 +304,46 @@ pub async fn resume_loop(
 ) -> Result<Json<Envelope<()>>, ApiError> {
     let repos = state.ctx.state.repos();
 
-    // Fetch current record, set status to active, write back.
-    let mut record = repos
+    let record = repos
         .loops
         .get_by_seq(seq)
         .map_err(internal_error)?
         .filter(|r| r.project_id == project_name)
         .ok_or_else(|| ApiError::not_found(format!("Loop {project_name}/{seq} not found")))?;
 
-    let now = crate::helpers::now_iso();
-    record.status = "active".into();
-    record.updated_at = now;
+    if record.status == "stopped" || record.status == "closed" || record.status == "terminated" {
+        return Err(ApiError::bad_request(format!(
+            "cannot resume terminal loop {project_name}/{seq} (status={})",
+            record.status
+        )));
+    }
 
-    repos.loops.upsert(&record).map_err(internal_error)?;
+    let now = crate::helpers::now_iso();
+    let from = record.status.clone();
+    repos.loops.update_status(&record.id, "active", &now).map_err(internal_error)?;
+
+    // Re-activate most recent cancelled/failed queue item for this loop.
+    let mut requeued = repos.queue.requeue_latest_cancelled_by_loop(&record.id, &now).map_err(internal_error)?;
+    if requeued == 0 {
+        requeued = repos.queue.requeue_latest_failed_by_loop(&record.id, &now).map_err(internal_error)?;
+    }
+    if requeued == 0 {
+        // Also try requeue running stuck items.
+        requeued = repos.queue.requeue_running_by_loop(&record.id, &now).map_err(internal_error)?;
+    }
+
+    state.ctx.state.trigger_scheduler_tick().await;
+
+    info!(
+        project = %project_name,
+        seq,
+        loop_id = %record.id,
+        from_status = %from,
+        to_status = "active",
+        queue_requeued = requeued,
+        tick_triggered = true,
+        "loop resumed"
+    );
     Ok(Json(Envelope::success_empty()))
 }
 
@@ -522,6 +581,9 @@ pub async fn enqueue(
 
     let (item, _created) = repos.queue.create_or_get_active_by_dedupe(&record).map_err(internal_error)?;
 
+    // Immediate scheduling so manual enqueue is not stuck until poll_interval.
+    state.ctx.state.trigger_scheduler_tick().await;
+
     let resp = QueueItemResponse {
         id: item.id,
         project_name: item.project_id.unwrap_or(project_name),
@@ -539,6 +601,111 @@ pub async fn enqueue(
     };
 
     Ok((StatusCode::CREATED, Json(Envelope::success(resp))))
+}
+
+// ---------------------------------------------------------------------------
+// Admit work (B2)
+// ---------------------------------------------------------------------------
+
+fn map_service_error(e: looper_service::ServiceError) -> ApiError {
+    use looper_service::ServiceError;
+    match e {
+        ServiceError::ProjectNotFound(id) => ApiError::not_found(format!("project '{id}' not found")),
+        ServiceError::LoopNotFound(id) => ApiError::not_found(format!("loop '{id}' not found")),
+        ServiceError::RunNotFound(id) => ApiError::not_found(format!("run '{id}' not found")),
+        ServiceError::ActiveLoopConflict { project_id, loop_type, target_key } => {
+            ApiError::conflict(format!("active loop conflict {project_id}/{loop_type}/{target_key}"))
+        }
+        ServiceError::LoopHasRunningRun { loop_id } => {
+            ApiError::conflict(format!("loop '{loop_id}' already has a running run"))
+        }
+        ServiceError::ProjectRepoUnresolved(msg) => ApiError::bad_request(msg),
+        ServiceError::InvalidProjectID(msg) | ServiceError::Other(msg) => ApiError::bad_request(msg),
+        ServiceError::Domain(d) => ApiError::bad_request(d.to_string()),
+        other => ApiError::internal(other.to_string()),
+    }
+}
+
+pub async fn admit_work(
+    State(state): State<Arc<AppState>>,
+    Path(project_name): Path<String>,
+    Json(input): Json<AdmitWorkRequest>,
+) -> Result<(StatusCode, Json<Envelope<AdmitWorkResponse>>), ApiError> {
+    // All SQLite / service work is synchronous and must complete before `.await`
+    // so the handler future stays `Send` (rusqlite Connection is !Send).
+    let response = {
+        let repos = state.ctx.state.repos_arc();
+
+        let project_id = {
+            let list = repos.projects.list().map_err(internal_error)?;
+            list.into_iter()
+                .find(|p| p.id == project_name || p.name == project_name)
+                .map(|p| p.id)
+                .ok_or_else(|| ApiError::not_found(format!("project '{project_name}' not found")))?
+        };
+
+        let svc = looper_service::AdmitWorkService::new(Arc::clone(&repos), chrono::Utc::now);
+        let result = svc
+            .admit_work(looper_service::AdmitWorkInput {
+                project_id: project_id.clone(),
+                role: input.role.clone(),
+                issue_number: input.issue_number,
+                pr_number: input.pr_number,
+                repo: input.repo,
+                priority: input.priority,
+                metadata: input.metadata,
+            })
+            .map_err(map_service_error)?;
+
+        let loop_rec = result.loop_record;
+        let item = result.queue_item;
+
+        info!(
+            project = %project_name,
+            role = %input.role,
+            loop_id = %loop_rec.id,
+            queue_id = %item.id,
+            created_new_loop = result.created_new_loop,
+            tick_triggered = true,
+            "admit_work"
+        );
+
+        AdmitWorkResponse {
+            loop_detail: LoopDetail {
+                project_name: loop_rec.project_id.clone(),
+                seq: loop_rec.seq,
+                loop_type: loop_rec.r#type.clone(),
+                status: loop_rec.status.clone(),
+                target: loop_rec.target_id.clone(),
+                metadata: loop_rec.metadata_json.as_deref().and_then(|s| serde_json::from_str(s).ok()),
+                worktree_path: None,
+                runs: vec![],
+                created_at: loop_rec.created_at.clone(),
+                updated_at: loop_rec.updated_at.clone(),
+            },
+            queue_item: QueueItemResponse {
+                id: item.id.clone(),
+                project_name: item.project_id.clone().unwrap_or(project_id),
+                queue_type: item.r#type.clone(),
+                loop_seq: Some(loop_rec.seq),
+                run_id: None,
+                status: item.status.clone(),
+                priority: item.priority as i32,
+                attempts: item.attempts as i32,
+                last_error: item.last_error.clone(),
+                scheduled_not_before: None,
+                claimed_by: item.claimed_by.clone(),
+                created_at: item.created_at.clone(),
+                updated_at: item.updated_at.clone(),
+            },
+            created_new_loop: result.created_new_loop,
+            tick_triggered: true,
+        }
+    };
+
+    state.ctx.state.trigger_scheduler_tick().await;
+
+    Ok((StatusCode::CREATED, Json(Envelope::success(response))))
 }
 
 pub async fn dequeue(
@@ -792,6 +959,7 @@ mod tests {
     struct TestState {
         repos: Arc<Repositories>,
         event_log: EventLog,
+        ticks: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     // rusqlite::Connection is !Send/!Sync; tests are single-threaded.
@@ -828,7 +996,9 @@ mod tests {
             Ok(())
         }
 
-        async fn trigger_scheduler_tick(&self) {}
+        async fn trigger_scheduler_tick(&self) {
+            self.ticks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     struct StubProjects {
@@ -918,7 +1088,7 @@ mod tests {
         }
     }
 
-    fn setup_state() -> Arc<AppState> {
+    fn setup_state() -> (Arc<AppState>, Arc<std::sync::atomic::AtomicUsize>) {
         let mut conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         run_migrations(&mut conn).unwrap();
@@ -932,18 +1102,19 @@ mod tests {
             looper_service::ProjectServiceCallbacks::new(),
             chrono::Utc::now,
         );
-        let state = TestState { repos: Arc::clone(&repos), event_log };
+        let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let state = TestState { repos: Arc::clone(&repos), event_log, ticks: Arc::clone(&ticks) };
         let ctx = Arc::new(Context {
             config: Arc::new(looper_config::Config::default()),
             state: Arc::new(state),
             projects: Arc::new(StubProjects { service: project_svc }),
         });
-        Arc::new(AppState { ctx, started_at: Instant::now() })
+        (Arc::new(AppState { ctx, started_at: Instant::now() }), ticks)
     }
 
     #[tokio::test]
     async fn dequeue_cancels_only_target_item() {
-        let state = setup_state();
+        let (state, ticks) = setup_state();
         let project = "proj-a".to_string();
         let now = crate::helpers::now_iso();
         state
@@ -1009,11 +1180,17 @@ mod tests {
 
         assert_eq!(after_a.status, "cancelled", "A should be cancelled; got {}", after_a.status);
         assert_eq!(after_b.status, "queued", "B must remain queued; got {}", after_b.status);
+        // Each enqueue triggers a tick.
+        assert!(
+            ticks.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "enqueue should trigger scheduler ticks, got {}",
+            ticks.load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 
     #[tokio::test]
     async fn dequeue_missing_item_returns_404() {
-        let state = setup_state();
+        let (state, _) = setup_state();
         let err =
             dequeue(State(state), Path(("proj-a".into(), "does-not-exist".into()))).await.expect_err("expected 404");
         assert_eq!(err.0, StatusCode::NOT_FOUND);
@@ -1021,7 +1198,7 @@ mod tests {
 
     #[tokio::test]
     async fn update_project_persists_and_get_reflects() {
-        let state = setup_state();
+        let (state, _) = setup_state();
 
         let (status, Json(env)) = add_project(
             State(Arc::clone(&state)),
@@ -1070,8 +1247,174 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admit_work_creates_queue_and_triggers_tick() {
+        let (state, ticks) = setup_state();
+        let now = crate::helpers::now_iso();
+        state
+            .ctx
+            .state
+            .repos()
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "proj-work".into(),
+                name: "proj-work".into(),
+                repo_path: "/tmp/proj-work".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: Some(r#"{"repo":"acme/widget"}"#.into()),
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap();
+
+        let (status, Json(env)) = admit_work(
+            State(Arc::clone(&state)),
+            Path("proj-work".into()),
+            Json(AdmitWorkRequest {
+                role: "planner".into(),
+                issue_number: Some(12),
+                pr_number: None,
+                repo: None,
+                priority: None,
+                metadata: None,
+            }),
+        )
+        .await
+        .expect("admit_work");
+
+        assert_eq!(status, StatusCode::CREATED);
+        let data = env.data.expect("data");
+        assert_eq!(data.queue_item.queue_type, "planner");
+        assert_eq!(data.queue_item.status, "queued");
+        assert!(data.tick_triggered);
+        assert_eq!(data.loop_detail.loop_type, "planner");
+        assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) >= 1, "tick should fire after admit_work");
+
+        // Idempotent re-admit
+        let before_ticks = ticks.load(std::sync::atomic::Ordering::SeqCst);
+        let (_, Json(env2)) = admit_work(
+            State(Arc::clone(&state)),
+            Path("proj-work".into()),
+            Json(AdmitWorkRequest {
+                role: "planner".into(),
+                issue_number: Some(12),
+                pr_number: None,
+                repo: None,
+                priority: None,
+                metadata: None,
+            }),
+        )
+        .await
+        .expect("re-admit");
+        let data2 = env2.data.expect("data2");
+        assert_eq!(data2.queue_item.id, data.queue_item.id, "dedupe same queue item");
+        assert!(!data2.created_new_loop);
+        assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) > before_ticks);
+    }
+
+    #[tokio::test]
+    async fn admit_work_missing_repo_is_400() {
+        let (state, _) = setup_state();
+        let now = crate::helpers::now_iso();
+        state
+            .ctx
+            .state
+            .repos()
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "no-repo".into(),
+                name: "no-repo".into(),
+                repo_path: "/tmp/no-repo".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: None,
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap();
+
+        let err = admit_work(
+            State(state),
+            Path("no-repo".into()),
+            Json(AdmitWorkRequest {
+                role: "planner".into(),
+                issue_number: Some(1),
+                pr_number: None,
+                repo: None,
+                priority: None,
+                metadata: None,
+            }),
+        )
+        .await
+        .expect_err("expected bad request");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn pause_is_reversible_resume_requeues() {
+        let (state, ticks) = setup_state();
+        let repos = state.ctx.state.repos();
+        let now = crate::helpers::now_iso();
+        repos
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "p-pause".into(),
+                name: "p-pause".into(),
+                repo_path: "/tmp/p-pause".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: Some(r#"{"repo":"acme/p"}"#.into()),
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            })
+            .unwrap();
+
+        let (_, Json(env)) = admit_work(
+            State(Arc::clone(&state)),
+            Path("p-pause".into()),
+            Json(AdmitWorkRequest {
+                role: "worker".into(),
+                issue_number: Some(3),
+                pr_number: None,
+                repo: None,
+                priority: None,
+                metadata: None,
+            }),
+        )
+        .await
+        .expect("admit");
+        let data = env.data.expect("data");
+        let seq = data.loop_detail.seq;
+        let qid = data.queue_item.id.clone();
+
+        let _ = pause_loop(State(Arc::clone(&state)), Path(("p-pause".into(), seq))).await.expect("pause");
+        let loop_rec = repos.loops.get_by_seq(seq).unwrap().expect("loop after pause");
+        assert_eq!(loop_rec.status, "paused");
+        let q = repos
+            .queue
+            .get_by_id(&qid)
+            .unwrap()
+            .or_else(|| repos.queue.get_latest_by_loop_id(&loop_rec.id).unwrap())
+            .expect("queue item after pause");
+        assert_eq!(q.status, "cancelled", "pause should cancel active queue; id={}", q.id);
+
+        let before = ticks.load(std::sync::atomic::Ordering::SeqCst);
+        let _ = resume_loop(State(Arc::clone(&state)), Path(("p-pause".into(), seq))).await.expect("resume");
+        let loop_rec = repos.loops.get_by_seq(seq).unwrap().expect("loop after resume");
+        assert_eq!(loop_rec.status, "active");
+        let q = repos
+            .queue
+            .get_by_id(&qid)
+            .unwrap()
+            .or_else(|| repos.queue.get_latest_by_loop_id(&loop_rec.id).unwrap())
+            .expect("queue item after resume");
+        assert_eq!(q.status, "queued", "resume should requeue cancelled item");
+        assert!(ticks.load(std::sync::atomic::Ordering::SeqCst) > before);
+    }
+
+    #[tokio::test]
     async fn get_loop_includes_worktree_path_from_table() {
-        let state = setup_state();
+        let (state, _) = setup_state();
         let repos = state.ctx.state.repos();
         let now = crate::helpers::now_iso();
 

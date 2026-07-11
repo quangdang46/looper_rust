@@ -31,8 +31,8 @@ pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode, ErrorInfo};
 pub use server::{build_router, serve, ServerConfig};
 pub use types::{
-    AcquireLockInput, AddProjectInput, AgentConfigResponse, ConfigResponse, Context, CreateLoopInput, EnqueueInput,
-    EventLogResponse, HealthResponse, LockResponse, LoopDetail, LoopSummary, PaginationParams, ProjectService,
-    ProjectSummary, QueueItemResponse, RunDetail, RunSummary, RuntimeState, StartRunInput, UpdateProjectInput,
-    VersionResponse,
+    AcquireLockInput, AddProjectInput, AdmitWorkRequest, AdmitWorkResponse, AgentConfigResponse, ConfigResponse,
+    Context, CreateLoopInput, EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail, LoopSummary,
+    PaginationParams, ProjectService, ProjectSummary, QueueItemResponse, RunDetail, RunSummary, RuntimeState,
+    StartRunInput, UpdateProjectInput, VersionResponse,
 };

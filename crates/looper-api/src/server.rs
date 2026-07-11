@@ -50,6 +50,8 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         .route("/api/projects/{name}/queue", get(routes::list_queue))
         .route("/api/projects/{name}/queue/enqueue", post(routes::enqueue))
         .route("/api/projects/{name}/queue/{item_id}", delete(routes::dequeue))
+        // Admit work (golden path)
+        .route("/api/projects/{name}/work", post(routes::admit_work))
         // Events
         .route("/api/projects/{name}/events", get(routes::list_events))
         .route("/api/projects/{name}/events/stream", get(routes::project_events_stream))

@@ -938,7 +938,7 @@ impl FixerScheduler for Fixer {
         tracing::debug!("Fixer discover_pull_requests — found {} existing fixer items", fixer_items.len());
         drop(guard);
 
-        // GitHub-powered PR discovery
+        // GitHub-powered discovery: enqueue fixer items for PRs that need fixes.
         if let Some(ref gw) = self.github {
             if !input.repo.is_empty() {
                 match gw.list_open_pull_requests(ListOpenPullRequestsInput {
@@ -951,11 +951,78 @@ impl FixerScheduler for Fixer {
                     base_ref_name: "".into(),
                     timeout: None,
                 }) {
-                    Ok(prs) => tracing::debug!("Fixer discovered {} open PRs via GitHub", prs.len()),
+                    Ok(prs) => {
+                        tracing::debug!("Fixer discovered {} open PRs via GitHub", prs.len());
+                        for pr in prs {
+                            let has_needs_fix = pr.labels.iter().any(|l| l == crate::types::spec_labels::NEEDS_FIX);
+                            let mut failing = false;
+                            let mut decision = Some(pr.review_decision.clone()).filter(|s| !s.is_empty());
+                            if let Ok(detail) = gw.view_pull_request(ViewPullRequestInput {
+                                repo: input.repo.clone(),
+                                pr_number: pr.number,
+                                cwd: ".".to_string(),
+                            }) {
+                                failing = crate::merge_watch::pr_has_failing_checks(&detail);
+                                if decision.is_none() {
+                                    decision = Some(detail.review_decision.clone()).filter(|s| !s.is_empty());
+                                }
+                            }
+                            let ctx = crate::fixer_handoff::FixerEnqueueContext {
+                                has_criteria_issues: false,
+                                review_decision: decision,
+                                has_failing_required_checks: failing,
+                            };
+                            let decision = crate::fixer_handoff::should_enqueue_fixer(&ctx);
+                            let enqueue = decision.should_enqueue() || has_needs_fix;
+                            if !enqueue {
+                                continue;
+                            }
+                            let reason = if has_needs_fix { "label_needs_fix" } else { decision.reason() };
+                            let project_id = input.project_id.clone();
+                            if project_id.is_empty() {
+                                continue;
+                            }
+                            if let Ok(g) = self.repos.0.lock() {
+                                match crate::fixer_handoff::ensure_fixer_queue_item(
+                                    &g,
+                                    &project_id,
+                                    Some(&input.repo),
+                                    pr.number,
+                                    reason,
+                                ) {
+                                    Ok(res) => {
+                                        tracing::info!(
+                                            project_id = %project_id,
+                                            pr = pr.number,
+                                            reason,
+                                            queue_id = %res.queue_item.id,
+                                            is_new = res.is_new,
+                                            "Fixer discovery enqueued"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(pr = pr.number, "Fixer discovery enqueue failed: {e}");
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Err(e) => tracing::warn!("Fixer GitHub discovery failed: {e}"),
                 }
             }
         }
+
+        // Re-list after potential enqueues so claim path sees new items.
+        let fixer_items = {
+            let guard = match self.repos.0.lock() {
+                Ok(g) => g,
+                Err(_) => return FixerDiscoveryResult { queue_items: fixer_items },
+            };
+            match guard.queue.list_by_statuses(&["queued".into()]) {
+                Ok(items) => items.into_iter().filter(|item| item.r#type == "fixer").collect(),
+                Err(_) => fixer_items,
+            }
+        };
 
         FixerDiscoveryResult { queue_items: fixer_items }
     }

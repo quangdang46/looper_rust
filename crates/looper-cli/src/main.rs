@@ -141,6 +141,10 @@ pub enum Command {
     #[command(subcommand)]
     Bootstrap(BootstrapCommand),
 
+    /// Admit planner/reviewer/worker/fixer work into the scheduler
+    #[command(subcommand)]
+    Work(commands::work::WorkCommand),
+
     /// Destructive: terminates ALL active/running loops (misnamed; hidden).
     /// Requires --i-know-this-terminates-all-active-loops.
     #[command(hide = true)]
@@ -318,6 +322,10 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
             commands::pr::handle(client, cmd, json).await
         }
         Command::Bootstrap(cmd) => run_bootstrap(cmd, json).await,
+        Command::Work(cmd) => {
+            commands::ensure_daemon(client).await?;
+            commands::work::handle(client, cmd, json).await
+        }
         Command::ReconcileStale { confirm_terminate_all } => {
             // Require confirm flag before touching the daemon (avoids silent mass-kill).
             if !*confirm_terminate_all {
@@ -416,18 +424,19 @@ mod tests {
             "diagnostics",
             "reconcile-stale",
         ] {
-            // clap help lines list subcommands; avoid false positives on prose.
+            // clap help lines list subcommands as "  name  description".
+            // Do not use bare contains(stub) — prose may mention "reviewer" etc.
             let as_cmd_line = format!("  {stub} ");
             let as_cmd_eol = format!("  {stub}\n");
             assert!(
-                !help.contains(&as_cmd_line) && !help.contains(stub),
-                "main help must not list stub '{stub}':\n{help}"
+                !help.contains(&as_cmd_line) && !help.contains(&as_cmd_eol),
+                "main help must not list stub '{stub}' as a command:\n{help}"
             );
-            let _ = as_cmd_eol;
         }
         // Sanity: real commands still visible.
         assert!(help.contains("health") || help.contains("Health"));
         assert!(help.contains("projects") || help.contains("Projects"));
+        assert!(help.contains("work") || help.contains("Work"));
     }
 
     #[test]

@@ -126,6 +126,14 @@ pub struct QueueItemResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct AdmitWorkResponse {
+    pub loop_detail: LoopDetail,
+    pub queue_item: QueueItemResponse,
+    pub created_new_loop: bool,
+    pub tick_triggered: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct EventLogResponse {
     pub id: String,
     pub timestamp: String,
@@ -216,6 +224,19 @@ pub struct EnqueueInput {
     pub priority: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AdmitWorkInput {
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue_number: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -411,6 +432,11 @@ impl DaemonAPIClient {
 
     pub async fn dequeue(&self, project: &str, item_id: &str) -> Result<(), CliError> {
         self.delete_unit(&format!("/api/projects/{project}/queue/{item_id}")).await
+    }
+
+    /// Admit planner/reviewer/worker/fixer work (creates loop + queue + tick).
+    pub async fn admit_work(&self, project: &str, input: &AdmitWorkInput) -> Result<AdmitWorkResponse, CliError> {
+        self.post(&format!("/api/projects/{project}/work"), input).await
     }
 
     // -----------------------------------------------------------------------
