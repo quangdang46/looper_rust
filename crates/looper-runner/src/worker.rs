@@ -496,15 +496,21 @@ impl Worker {
                             String::new()
                         }
                     };
-                    // Store spec context in checkpoint so OPEN_PR can use it
+                    // Merge spec context into checkpoint — do NOT replace the
+                    // whole JSON (would wipe push_existing / work_branch).
                     if let Ok(guard) = self.repos.0.lock() {
                         let mut r = match guard.runs.get_by_id(&run.id).map_err(|e| e.to_string()) {
                             Ok(Some(rr)) => rr,
                             _ => run.clone(),
                         };
                         if !spec_context.is_empty() {
-                            r.checkpoint_json =
-                                Some(serde_json::json!({"planner_spec_context": spec_context}).to_string());
+                            let mut cp = r
+                                .checkpoint_json
+                                .as_deref()
+                                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                                .unwrap_or_else(|| serde_json::json!({}));
+                            cp["planner_spec_context"] = serde_json::json!(spec_context);
+                            r.checkpoint_json = Some(cp.to_string());
                         }
                         let _ = guard.runs.upsert(&r);
                         drop(guard);
