@@ -25,11 +25,13 @@ pub async fn handle(client: &DaemonAPIClient, cmd: &JumpCommand, json: bool) -> 
         JumpCommand::Jump(args) => {
             let project = commands::resolve_project(client, &args.project).await?;
             let detail = client.get_loop(&project, args.seq).await?;
+            // Prefer top-level worktree_path from the API (worktrees table join),
+            // then fall back to loop metadata for older daemons.
             let wt_path = detail
-                .metadata
-                .as_ref()
-                .and_then(|m| m.get("worktree_path"))
-                .and_then(|v| v.as_str())
+                .worktree_path
+                .as_deref()
+                .filter(|p| !p.is_empty())
+                .or_else(|| detail.metadata.as_ref().and_then(|m| m.get("worktree_path")).and_then(|v| v.as_str()))
                 .unwrap_or("(not available via API)");
             if !json {
                 println!("Project: {}", project);

@@ -235,21 +235,14 @@ async fn download_version(version: &str) -> Result<PathBuf, CliError> {
 
     std::fs::create_dir_all(&install_dir)?;
 
-    // Detect platform triple
-    let arch = std::env::consts::ARCH;
-    let os = std::env::consts::OS;
-    let triple = match (os, arch) {
-        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
-        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
-        ("macos", "x86_64") => "x86_64-apple-darwin",
-        ("macos", "aarch64") => "aarch64-apple-darwin",
-        _ => {
-            return Err(CliError::daemon_lifecycle(format!("unsupported platform: {os}/{arch}")));
-        }
-    };
+    // Detect platform triple (shared with autoupgrade RELEASE_REPO conventions)
+    let triple = crate::autoupgrade::platform_triple().ok_or_else(|| {
+        CliError::daemon_lifecycle(format!("unsupported platform: {}/{}", std::env::consts::OS, std::env::consts::ARCH))
+    })?;
 
-    let asset_name = format!("looperd-{triple}.tar.gz");
-    let url = format!("https://github.com/quangdang46/looper/releases/download/{version}/{asset_name}");
+    let asset_name = crate::autoupgrade::asset_name_for_triple("looperd", triple);
+    let url =
+        format!("https://github.com/{}/releases/download/{version}/{asset_name}", crate::autoupgrade::RELEASE_REPO);
 
     println!("Downloading looperd {version} for {triple}...");
     let client = reqwest::Client::builder()

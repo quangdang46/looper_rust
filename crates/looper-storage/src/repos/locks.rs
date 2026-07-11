@@ -77,4 +77,16 @@ impl LocksRepository {
         }
         Ok(records)
     }
+
+    /// List locks that are still held (`expires_at > now_iso`).
+    pub fn list_active(&self, now_iso: &str) -> Result<Vec<LockRecord>> {
+        let sql = format!("SELECT {} FROM locks WHERE expires_at > ?1 ORDER BY expires_at", LOCK_COLUMNS);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params![now_iso], scan_lock)?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(row?);
+        }
+        Ok(records)
+    }
 }

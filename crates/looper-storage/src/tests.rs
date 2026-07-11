@@ -943,6 +943,36 @@ fn test_locks_list_expired() {
 }
 
 #[test]
+fn test_locks_list_active() {
+    let (repos, _dir) = setup();
+    repos
+        .locks
+        .acquire(&LockRecord {
+            key: "expired".into(),
+            owner: "w".into(),
+            reason: None,
+            expires_at: hours_ago(1),
+            created_at: now(),
+            updated_at: now(),
+        })
+        .unwrap();
+    repos
+        .locks
+        .acquire(&LockRecord {
+            key: "active".into(),
+            owner: "w".into(),
+            reason: None,
+            expires_at: hours_ago(-1),
+            created_at: now(),
+            updated_at: now(),
+        })
+        .unwrap();
+    let active = repos.locks.list_active(&now()).unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].key, "active");
+}
+
+#[test]
 fn test_locks_get_missing() {
     let (repos, _dir) = setup();
     assert!(repos.locks.get("no-such").unwrap().is_none());
@@ -1353,6 +1383,52 @@ fn test_worktrees_list_active() {
         })
         .unwrap();
     assert_eq!(repos.worktrees.list_active().unwrap().len(), 1);
+}
+
+#[test]
+fn test_worktrees_get_latest_by_loop_id() {
+    let (repos, _dir) = setup();
+    let (pid, lid) = insert_project_and_loop(&repos);
+    let t = now();
+    repos
+        .worktrees
+        .upsert(&WorktreeRecord {
+            id: "wt-other".into(),
+            project_id: pid.clone(),
+            repo_path: "/tmp/r".into(),
+            worktree_path: "/tmp/other".into(),
+            branch: "planner/other-loop".into(),
+            base_branch: None,
+            status: "active".into(),
+            head_sha: None,
+            metadata_json: Some(r#"{"loop_id":"other-loop"}"#.into()),
+            created_at: t.clone(),
+            updated_at: t.clone(),
+            cleaned_at: None,
+        })
+        .unwrap();
+    repos
+        .worktrees
+        .upsert(&WorktreeRecord {
+            id: "wt-loop".into(),
+            project_id: pid,
+            repo_path: "/tmp/r".into(),
+            worktree_path: "/tmp/loop-wt".into(),
+            branch: format!("planner/{lid}"),
+            base_branch: None,
+            status: "created".into(),
+            head_sha: None,
+            metadata_json: Some(format!(r#"{{"loop_id":"{lid}","step":"prepare-worktree"}}"#)),
+            created_at: t.clone(),
+            updated_at: t,
+            cleaned_at: None,
+        })
+        .unwrap();
+
+    let got = repos.worktrees.get_latest_by_loop_id(&lid).unwrap().unwrap();
+    assert_eq!(got.id, "wt-loop");
+    assert_eq!(got.worktree_path, "/tmp/loop-wt");
+    assert!(repos.worktrees.get_latest_by_loop_id("missing").unwrap().is_none());
 }
 
 #[test]

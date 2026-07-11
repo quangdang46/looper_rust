@@ -109,6 +109,35 @@ impl WorktreesRepository {
         Ok(records)
     }
 
+    /// Latest non-cleaned worktree for a loop id.
+    ///
+    /// Matches planner/reviewer conventions:
+    /// - `metadata_json.loop_id`
+    /// - branch ending with `/{loop_id}` (e.g. `planner/{id}`, `review/{id}`)
+    pub fn get_latest_by_loop_id(&self, loop_id: &str) -> Result<Option<WorktreeRecord>> {
+        let sql = format!(
+            "SELECT {} FROM worktrees
+             WHERE cleaned_at IS NULL
+               AND (
+                 json_extract(COALESCE(metadata_json, '{{}}'), '$.loop_id') = ?1
+                 OR branch LIKE ?2
+               )
+             ORDER BY
+               CASE WHEN status = 'active' THEN 0 ELSE 1 END,
+               updated_at DESC
+             LIMIT 1",
+            WT_COLUMNS
+        );
+        let branch_suffix = format!("%/{}", loop_id);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = stmt.query_map(rusqlite::params![loop_id, branch_suffix], scan_worktree)?;
+        match rows.next() {
+            Some(Ok(record)) => Ok(Some(record)),
+            Some(Err(e)) => Err(e.into()),
+            None => Ok(None),
+        }
+    }
+
     pub fn touch_cleanup_attempt(&self, id: &str, updated_at: &str) -> Result<()> {
         self.conn.execute("UPDATE worktrees SET updated_at = ?2 WHERE id = ?1", rusqlite::params![id, updated_at])?;
         Ok(())

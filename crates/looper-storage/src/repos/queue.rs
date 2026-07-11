@@ -587,6 +587,15 @@ impl QueueRepository {
         Ok(rows as i64)
     }
 
+    /// Cancel a single active queue item by id. Returns number of rows updated (0 or 1).
+    pub fn cancel_by_id(&self, id: &str, finished_at: &str, reason: Option<&str>) -> Result<i64> {
+        let rows = self.conn.execute(
+            "UPDATE queue_items SET status='cancelled', finished_at=?2, last_error=?3, updated_at=?2 WHERE id=?1 AND status IN ('queued','running')",
+            rusqlite::params![id, finished_at, reason],
+        )?;
+        Ok(rows as i64)
+    }
+
     pub fn cancel_active_by_loop_except(
         &self,
         loop_id: &str,
