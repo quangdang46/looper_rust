@@ -24,6 +24,7 @@ pub mod fake_gh;
 pub mod git;
 pub mod ports;
 pub mod temp_home;
+pub mod wait;
 
 pub use artifacts::{artifact_base_dir, artifact_temp_dir};
 pub use assertions::{assert_cwd_inside_worktree, assert_repo_unchanged, load_cwd_evidence, CWDEvidence};
@@ -34,3 +35,4 @@ pub use fake_gh::{FakeGH, GHPullRequest, GHSchema, GHState, GHThread, GHThreadCo
 pub use git::{create_seeded_repo, run_git, snapshot_repo, RepoSnapshot, SeededRepo};
 pub use ports::{base_url, must_free_port};
 pub use temp_home::TempHome;
+pub use wait::{wait_for_health, wait_for_queue_type};
