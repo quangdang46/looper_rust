@@ -53,24 +53,61 @@ pub struct Worker {
 unsafe impl Send for Worker {}
 unsafe impl Sync for Worker {}
 
-/// Resolve the worker worktree path from the project record.
-fn resolve_worker_wt(worker: &Worker, item: &QueueItemRecord, loop_id: &str) -> String {
-    // Try to get repo_path from project record
-    if let Some(ref pid) = item.project_id {
-        if let Ok(g) = worker.repos.0.lock() {
-            if let Ok(Some(proj)) = g.projects.get_by_id(pid) {
-                if !proj.repo_path.is_empty() {
-                    return format!("{}/.looper/worktrees/worker-{loop_id}", proj.repo_path);
-                }
-            }
-        }
-    }
-    // Fallback: use CWD
-    if let Ok(cwd) = std::env::current_dir() {
-        format!("{}/.looper/worktrees/worker-{loop_id}", cwd.display())
+/// Resolve the worker worktree directory so agent/commit/push all use the
+/// **same** path that [`GitGateway::create_worktree`] created.
+///
+/// Directory naming must match `looper_git::build_worktree_directory_name`
+/// (branch slug, or `looper-fix-{project}-pr-{n}` when reusing a planner PR).
+fn resolve_worker_wt(
+    worker: &Worker,
+    item: &QueueItemRecord,
+    loop_id: &str,
+    work_branch: Option<&str>,
+    existing_pr: Option<i64>,
+) -> String {
+    let project_id = item.project_id.clone().unwrap_or_default();
+    let repo_path = if let Some(ref pid) = item.project_id {
+        worker
+            .repos
+            .0
+            .lock()
+            .ok()
+            .and_then(|g| g.projects.get_by_id(pid).ok().flatten())
+            .map(|p| p.repo_path)
+            .filter(|p| !p.is_empty())
     } else {
-        format!(".looper/worktrees/worker-{loop_id}")
-    }
+        None
+    };
+    let repo_path = repo_path.unwrap_or_else(|| {
+        std::env::current_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| ".".into())
+    });
+    let branch = work_branch.map(str::to_string).unwrap_or_else(|| format!("worker/{loop_id}"));
+    let dir = build_worktree_directory_name(&CreateWorktreeInput {
+        project_id,
+        repo_path: repo_path.clone(),
+        worktree_root: format!("{repo_path}/.looper/worktrees"),
+        branch,
+        base_branch: None,
+        start_point: None,
+        pr_number: existing_pr,
+        checkout_mode: CheckoutMode::Branch,
+        protected_branches: vec![],
+    });
+    format!("{repo_path}/.looper/worktrees/{dir}")
+}
+
+/// Read work_branch / existing_pr / push_existing from the run checkpoint.
+fn worker_checkpoint(worker: &Worker, run_id: &str) -> (Option<String>, Option<i64>, bool) {
+    let guard = worker.repos.0.lock().ok();
+    let cp = guard
+        .as_ref()
+        .and_then(|g| g.runs.get_by_id(run_id).ok().flatten())
+        .and_then(|r| r.checkpoint_json)
+        .and_then(|j| serde_json::from_str::<serde_json::Value>(&j).ok());
+    let branch = cp.as_ref().and_then(|v| v.get("work_branch").and_then(|b| b.as_str()).map(String::from));
+    let pr = cp.as_ref().and_then(|v| v.get("existing_pr_number").and_then(|n| n.as_i64()));
+    let push_ex = cp.as_ref().and_then(|v| v.get("push_existing").and_then(|b| b.as_bool())).unwrap_or(false);
+    (branch, pr, push_ex)
 }
 
 impl Worker {
@@ -92,29 +129,49 @@ impl Worker {
     /// worker falls back to implementing from the issue body directly.
     fn find_spec_pr_for_issue(&self, repo: &str, issue_number: i64) -> Option<looper_github::types::PullRequestDetail> {
         let gateway = self.github.as_ref()?;
-        // Planner spec PRs have the `looper:spec-reviewing` or `looper:spec-ready`
-        // label.  Search both in one pass by listing without a filter, then
-        // checking labels in-memory.
-        let open_prs = gateway
-            .list_open_pull_requests(ListOpenPullRequestsInput {
+        // Prefer labeled list queries (more reliable than empty-label dump).
+        let mut open_prs = Vec::new();
+        for label in [spec_labels::SPEC_READY, spec_labels::SPEC_REVIEWING] {
+            if let Ok(mut batch) = gateway.list_open_pull_requests(ListOpenPullRequestsInput {
                 repo: repo.to_string(),
                 cwd: ".".to_string(),
                 limit: 50,
-                label: String::new(),
+                label: label.to_string(),
                 labels: vec![],
                 author: String::new(),
                 base_ref_name: String::new(),
                 timeout: None,
-            })
-            .ok()?;
+            }) {
+                for pr in batch.drain(..) {
+                    if !open_prs.iter().any(|p: &looper_github::types::PullRequestSummary| p.number == pr.number) {
+                        open_prs.push(pr);
+                    }
+                }
+            }
+        }
+        // Fallback: list all open PRs and filter by labels in memory.
+        if open_prs.is_empty() {
+            open_prs = gateway
+                .list_open_pull_requests(ListOpenPullRequestsInput {
+                    repo: repo.to_string(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    label: String::new(),
+                    labels: vec![],
+                    author: String::new(),
+                    base_ref_name: String::new(),
+                    timeout: None,
+                })
+                .ok()?
+                .into_iter()
+                .filter(|pr| {
+                    pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING || l == spec_labels::SPEC_READY)
+                        || pr.head_ref_name.starts_with("planner/")
+                })
+                .collect();
+        }
 
-        // Only consider PRs with spec-phase labels.
-        let spec_prs: Vec<_> = open_prs
-            .into_iter()
-            .filter(|pr| pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING || l == spec_labels::SPEC_READY))
-            .collect();
-
-        for pr in &spec_prs {
+        for pr in &open_prs {
             let detail = gateway
                 .view_pull_request(ViewPullRequestInput {
                     repo: repo.to_string(),
@@ -123,15 +180,23 @@ impl Worker {
                 })
                 .ok()?;
 
-            // Check if the PR body references the target issue number
-            let body_ref = format!("#{}", issue_number);
-            if detail.body.contains(&body_ref)
+            let body_ref = format!("#{issue_number}");
+            let title_issue = format!("Issue #{issue_number}");
+            let refs_issue = detail.body.contains(&body_ref)
                 || detail.title.contains(&body_ref)
-                || detail.body.contains(&format!("issue #{}", issue_number))
-                || detail.body.contains(&format!("Fixes #{}", issue_number))
-                || detail.body.contains(&format!("Closes #{}", issue_number))
-                || detail.body.contains(&format!("Resolves #{}", issue_number))
-            {
+                || detail.title.contains(&title_issue)
+                || detail.body.contains(&format!("issue #{issue_number}"))
+                || detail.body.contains(&format!("Issue #{issue_number}"))
+                || detail.body.contains(&format!("Fixes #{issue_number}"))
+                || detail.body.contains(&format!("Closes #{issue_number}"))
+                || detail.body.contains(&format!("Resolves #{issue_number}"))
+                || pr.head_ref_name.contains(&format!("issue-{issue_number}"));
+            if refs_issue {
+                tracing::info!(
+                    "Worker: matched planner PR #{} head={} for issue #{issue_number}",
+                    detail.number,
+                    detail.head_ref_name
+                );
                 return Some(detail);
             }
         }
@@ -341,7 +406,9 @@ impl Worker {
                     }
                     // Plan via agent
                     if let Some(ref agent) = self.agent {
-                        let plan_wt = resolve_worker_wt(self, item, loop_id);
+                        let (wb, epr, _) = worker_checkpoint(self, &run.id);
+                        let plan_wt =
+                            resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                         // Create working directory if it doesn't exist
                         let _ = std::fs::create_dir_all(&plan_wt);
                         let input = looper_agent::executor::StartInput {
@@ -445,7 +512,9 @@ impl Worker {
 
                     // Execute via agent
                     if let Some(ref agent) = self.agent {
-                        let exec_wt = resolve_worker_wt(self, item, loop_id);
+                        let (wb, epr, _) = worker_checkpoint(self, &run.id);
+                        let exec_wt =
+                            resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                         // Create working directory if it doesn't exist
                         let _ = std::fs::create_dir_all(&exec_wt);
                         let input = looper_agent::executor::StartInput {
@@ -509,7 +578,9 @@ impl Worker {
 
                     // Use resolve_worker_wt() to get the correct worktree path,
                     // matching PLAN and EXECUTE steps.
-                    let worktree_path = resolve_worker_wt(self, item, loop_id);
+                    let (wb, epr, _) = worker_checkpoint(self, &run.id);
+                    let worktree_path =
+                        resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                     let _ = std::fs::create_dir_all(&worktree_path);
 
                     // Detect project type and run appropriate validation
@@ -751,9 +822,17 @@ impl Worker {
                                     .and_then(|v| v.get("existing_pr_number").and_then(|n| n.as_i64()));
                                 (branch, push_ex, prn)
                             };
-                            // Commit + push (fatal on push failure).
+                            // Commit + push (fatal on push failure) from the
+                            // same directory create_worktree used.
                             if let Some(ref git) = self.git {
-                                let wt_path = resolve_worker_wt(self, item, loop_id);
+                                let wt_path = resolve_worker_wt(
+                                    self,
+                                    item,
+                                    loop_id,
+                                    Some(work_branch.as_str()),
+                                    if push_existing { existing_pr } else { None },
+                                );
+                                tracing::info!("Worker open-pr worktree path={wt_path}");
                                 let _ = self.tokio_handle.block_on(git.commit(looper_git::CommitInput {
                                     worktree_path: wt_path.clone(),
                                     message: format!(
@@ -772,7 +851,9 @@ impl Worker {
                                 })) {
                                     return Err(format!("Worker push failed (branch {work_branch}): {e}"));
                                 }
-                                tracing::info!("Worker: pushed branch {work_branch} to origin");
+                                tracing::info!(
+                                    "Worker: pushed branch {work_branch} to origin (push_existing={push_existing})"
+                                );
                             } else {
                                 return Err("Worker open-pr requires git gateway".into());
                             }
