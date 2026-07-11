@@ -72,6 +72,9 @@ pub struct LoopDetail {
     pub status: String,
     pub target: Option<String>,
     pub metadata: Option<Value>,
+    /// Worktree path resolved by the API from the worktrees table (or metadata).
+    #[serde(default)]
+    pub worktree_path: Option<String>,
     pub runs: Vec<RunSummary>,
     pub created_at: String,
     pub updated_at: String,
@@ -246,9 +249,19 @@ pub struct DaemonAPIClient {
 }
 
 impl DaemonAPIClient {
-    /// Create a new client connecting to the given base URL (e.g. "http://127.0.0.1:8080").
+    /// Create a new client connecting to the given base URL (e.g. "http://127.0.0.1:7391").
     pub fn new(base_url: String, token: Option<String>) -> Self {
         Self { base_url, token, inner: Client::new() }
+    }
+
+    /// Configured daemon base URL (for tests and diagnostics).
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// API path for project agent config (must match looper-api route).
+    pub fn agent_config_path(project: &str) -> String {
+        format!("/api/projects/{project}/agent-config")
     }
 
     fn request_builder(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -433,7 +446,7 @@ impl DaemonAPIClient {
     }
 
     pub async fn get_agent_config(&self, project: &str) -> Result<AgentConfigResponse, CliError> {
-        self.get(&format!("/api/config/agent/{project}")).await
+        self.get(&Self::agent_config_path(project)).await
     }
 
     // -----------------------------------------------------------------------
@@ -484,5 +497,16 @@ pub fn into_unit_result(env: Envelope<()>) -> Result<(), CliError> {
     } else {
         let info = env.error.unwrap_or(ErrorInfo { code: "Unknown".into(), message: "no error details".into() });
         Err(CliError::api(info.code, info.message))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agent_config_path_matches_server_route() {
+        assert_eq!(DaemonAPIClient::agent_config_path("myproj"), "/api/projects/myproj/agent-config");
+        assert!(!DaemonAPIClient::agent_config_path("x").contains("/api/config/agent/"));
     }
 }

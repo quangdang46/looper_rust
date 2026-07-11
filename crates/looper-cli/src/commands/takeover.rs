@@ -1,8 +1,4 @@
-//! `looper takeover` — claim or inspect a running agent session.
-//!
-//! In the Go original, `looper takeover` lets you adopt an existing PR
-//! and run the agent loop on it until it merges. Here we implement the
-//! inspection/claim side.
+//! `looper takeover` — disabled stub (hidden from help).
 
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -36,34 +32,20 @@ pub struct TakeoverStatusArgs {
     pub run_id: String,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, cmd: &TakeoverCommand, _json: bool) -> Result<(), CliError> {
-    match cmd {
-        TakeoverCommand::Claim(args) => {
-            let result = serde_json::json!({
-                "run_id": args.run_id,
-                "action": "claim",
-                "status": "claimed",
-                "message": "Run claimed. Use 'looper logs-follow' to follow agent output."
-            });
-            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-        }
-        TakeoverCommand::Release(args) => {
-            let result = serde_json::json!({
-                "run_id": args.run_id,
-                "action": "release",
-                "status": "released",
-            });
-            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-        }
-        TakeoverCommand::Status(args) => {
-            let result = serde_json::json!({
-                "run_id": args.run_id,
-                "action": "status",
-                "status": "active",
-                "note": "Full status requires daemon API enhancement"
-            });
-            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
-        }
+pub async fn handle(_client: &DaemonAPIClient, _cmd: &TakeoverCommand, _json: bool) -> Result<(), CliError> {
+    Err(CliError::unsupported("looper takeover"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn takeover_is_unsupported() {
+        let client = DaemonAPIClient::new("http://127.0.0.1:7391".into(), None);
+        let err = handle(&client, &TakeoverCommand::Status(TakeoverStatusArgs { run_id: "r1".into() }), false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("unsupported"));
     }
-    Ok(())
 }

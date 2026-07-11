@@ -24,7 +24,7 @@ pub struct Cli {
     no_auto_upgrade: bool,
 
     /// Daemon API base URL
-    #[arg(long, global = true, default_value = "http://127.0.0.1:8080")]
+    #[arg(long, global = true, default_value = looper_cli::commands::DEFAULT_DAEMON_BASE_URL)]
     daemon_url: String,
 
     /// API token for daemon auth
@@ -86,44 +86,35 @@ pub enum Command {
     #[command(subcommand)]
     Autoupgrade(AutoupgradeCommand),
 
-    // -- Review --
-    #[command(subcommand)]
+    // -- Disabled stubs (hidden; return unsupported if invoked) --
+    #[command(subcommand, hide = true)]
     Review(commands::review::ReviewCommand),
 
-    // -- Takeover --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Takeover(commands::takeover::TakeoverCommand),
 
-    // -- Run Stats --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     RunStats(commands::run_stats::RunStatsCommand),
 
-    // -- Logs Follow --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     LogsFollow(commands::logs_follow::LogsFollowCommand),
 
-    // -- Netadmin --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Netadmin(commands::netadmin::NetadminCommand),
 
-    // -- Labels --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Labels(commands::labels::LabelsCommand),
 
-    // -- Prompt --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Prompt(commands::prompt::PromptCommand),
 
-    // -- Feedback --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Feedback(commands::feedback::FeedbackCommand),
 
-    // -- Webhook --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Webhook(commands::webhook::WebhookCommand),
 
-    // -- Diagnostics --
-    #[command(subcommand)]
+    #[command(subcommand, hide = true)]
     Diagnostics(commands::diagnostics::DiagnosticsCommand),
 
     // -- Worktree --
@@ -150,8 +141,14 @@ pub enum Command {
     #[command(subcommand)]
     Bootstrap(BootstrapCommand),
 
-    // -- Reconcile stale runs --
-    ReconcileStale,
+    /// Destructive: terminates ALL active/running loops (misnamed; hidden).
+    /// Requires --i-know-this-terminates-all-active-loops.
+    #[command(hide = true)]
+    ReconcileStale {
+        /// Confirm mass-terminate of every active/running loop (not only stale).
+        #[arg(long = "i-know-this-terminates-all-active-loops")]
+        confirm_terminate_all: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -289,46 +286,17 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
         Command::ConfigLocal(cmd) => run_config_local(cmd, json),
         Command::Daemon(cmd) => run_daemon(cmd, json).await,
         Command::Autoupgrade(cmd) => run_autoupgrade(cmd, json).await,
-        Command::Review(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::review::handle(client, cmd, json).await
-        }
-        Command::Takeover(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::takeover::handle(client, cmd, json).await
-        }
-        Command::RunStats(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::run_stats::handle(client, cmd, json).await
-        }
-        Command::LogsFollow(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::logs_follow::handle(client, cmd, json).await
-        }
-        Command::Netadmin(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::netadmin::handle(client, cmd, json).await
-        }
-        Command::Labels(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::labels::handle(client, cmd, json).await
-        }
-        Command::Prompt(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::prompt::handle(client, cmd, json).await
-        }
-        Command::Feedback(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::feedback::handle(client, cmd, json).await
-        }
-        Command::Webhook(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::webhook::handle(client, cmd, json).await
-        }
-        Command::Diagnostics(cmd) => {
-            commands::ensure_daemon(client).await?;
-            commands::diagnostics::handle(client, cmd, json).await
-        }
+        // Stubs: no daemon ping — always unsupported (non-zero exit).
+        Command::Review(cmd) => commands::review::handle(client, cmd, json).await,
+        Command::Takeover(cmd) => commands::takeover::handle(client, cmd, json).await,
+        Command::RunStats(cmd) => commands::run_stats::handle(client, cmd, json).await,
+        Command::LogsFollow(cmd) => commands::logs_follow::handle(client, cmd, json).await,
+        Command::Netadmin(cmd) => commands::netadmin::handle(client, cmd, json).await,
+        Command::Labels(cmd) => commands::labels::handle(client, cmd, json).await,
+        Command::Prompt(cmd) => commands::prompt::handle(client, cmd, json).await,
+        Command::Feedback(cmd) => commands::feedback::handle(client, cmd, json).await,
+        Command::Webhook(cmd) => commands::webhook::handle(client, cmd, json).await,
+        Command::Diagnostics(cmd) => commands::diagnostics::handle(client, cmd, json).await,
         Command::Worktree(cmd) => {
             commands::ensure_daemon(client).await?;
             commands::worktree::handle(client, cmd, json).await
@@ -350,9 +318,13 @@ async fn run(client: &looper_cli::client::DaemonAPIClient, cmd: &Command, json: 
             commands::pr::handle(client, cmd, json).await
         }
         Command::Bootstrap(cmd) => run_bootstrap(cmd, json).await,
-        Command::ReconcileStale => {
+        Command::ReconcileStale { confirm_terminate_all } => {
+            // Require confirm flag before touching the daemon (avoids silent mass-kill).
+            if !*confirm_terminate_all {
+                return commands::reconcile::handle(client, json, false).await;
+            }
             commands::ensure_daemon(client).await?;
-            commands::reconcile::handle(client, json).await
+            commands::reconcile::handle(client, json, true).await
         }
     }
 }
@@ -411,5 +383,67 @@ async fn run_autoupgrade(cmd: &AutoupgradeCommand, _json: bool) -> Result<(), Cl
         AutoupgradeCommand::Check => looper_cli::autoupgrade::check().await,
         AutoupgradeCommand::Status => looper_cli::autoupgrade::status().await,
         AutoupgradeCommand::Upgrade => looper_cli::autoupgrade::upgrade().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn default_daemon_url_is_7391() {
+        let cli = Cli::try_parse_from(["looper", "health"]).expect("parse");
+        assert_eq!(cli.daemon_url, "http://127.0.0.1:7391");
+        assert!(!cli.daemon_url.contains("8080"));
+    }
+
+    #[test]
+    fn help_surface_hides_stub_commands() {
+        let mut cmd = Cli::command();
+        let help = cmd.render_long_help().to_string();
+        // Primary surface must not advertise disabled stubs or destructive misnomer.
+        for stub in [
+            "takeover",
+            "review",
+            "run-stats",
+            "logs-follow",
+            "netadmin",
+            "labels",
+            "prompt",
+            "feedback",
+            "webhook",
+            "diagnostics",
+            "reconcile-stale",
+        ] {
+            // clap help lines list subcommands; avoid false positives on prose.
+            let as_cmd_line = format!("  {stub} ");
+            let as_cmd_eol = format!("  {stub}\n");
+            assert!(
+                !help.contains(&as_cmd_line) && !help.contains(stub),
+                "main help must not list stub '{stub}':\n{help}"
+            );
+            let _ = as_cmd_eol;
+        }
+        // Sanity: real commands still visible.
+        assert!(help.contains("health") || help.contains("Health"));
+        assert!(help.contains("projects") || help.contains("Projects"));
+    }
+
+    #[test]
+    fn stub_subcommands_still_parse_when_invoked() {
+        // Hidden but invokable — must parse so handlers can return unsupported.
+        assert!(Cli::try_parse_from(["looper", "takeover", "status", "r1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "review", "status", "1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "run-stats", "show", "r1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "logs-follow", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "netadmin", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "labels", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "prompt", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "feedback", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "webhook", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "diagnostics", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "reconcile-stale"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "reconcile-stale", "--i-know-this-terminates-all-active-loops"]).is_ok());
     }
 }

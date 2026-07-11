@@ -65,4 +65,9 @@ impl CliError {
     pub fn daemon_lifecycle<T: Into<String>>(m: T) -> Self {
         Self::DaemonLifecycle(m.into())
     }
+
+    /// Stable error for disabled stub commands (exit non-zero; never fake success).
+    pub fn unsupported(cmd: &str) -> Self {
+        Self::Other(format!("unsupported: '{cmd}' was a stub and has been disabled; see docs"))
+    }
 }
