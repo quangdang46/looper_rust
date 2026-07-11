@@ -479,9 +479,17 @@ mod tests {
         assert!(Cli::try_parse_from(["looper", "review", "--project", "p", "--pr", "2"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "fix", "--project", "p", "--pr", "3"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "work", "--project", "p", "--issue", "4"]).is_ok());
-        assert!(
-            Cli::try_parse_from(["looper", "work", "start", "--project", "p", "--role", "planner", "--issue", "5"])
-                .is_ok()
-        );
+        assert!(Cli::try_parse_from([
+            "looper",
+            "work",
+            "start",
+            "--project",
+            "p",
+            "--role",
+            "planner",
+            "--issue",
+            "5"
+        ])
+        .is_ok());
     }
 }

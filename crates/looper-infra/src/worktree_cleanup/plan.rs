@@ -238,7 +238,10 @@ pub fn plan(repos: &Arc<Repositories>, options: &CleanupOptions) -> Result<PlanR
 // Helpers
 // --------------------------------------------------------------------------
 
-const PROTECTED_LOOP_STATUSES: &[&str] = &["idle", "queued", "running", "waiting", "paused", "failed", "interrupted"];
+// Only block cleanup for loops that may still use the worktree.
+// Terminal / dead statuses (failed, interrupted, completed, cancelled, …) must NOT
+// protect worktrees forever — that leaks disk and causes LGA under agent churn.
+const PROTECTED_LOOP_STATUSES: &[&str] = &["idle", "queued", "running", "waiting", "paused"];
 
 fn is_protected_loop_status(status: &str) -> bool {
     PROTECTED_LOOP_STATUSES.contains(&status)
@@ -318,7 +321,10 @@ mod tests {
     fn test_is_protected_loop_status() {
         assert!(is_protected_loop_status("running"));
         assert!(is_protected_loop_status("queued"));
+        assert!(is_protected_loop_status("paused"));
         assert!(!is_protected_loop_status("completed"));
+        assert!(!is_protected_loop_status("failed"));
+        assert!(!is_protected_loop_status("interrupted"));
         assert!(!is_protected_loop_status("terminal"));
     }
 

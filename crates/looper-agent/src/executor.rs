@@ -51,6 +51,15 @@ impl From<StartInput> for RunInput {
     }
 }
 
+/// SAFETY: `Repositories` holds `rusqlite::Connection` (`Send` but not `Sync` due
+/// to internal `RefCell`). All access is serialized through `Mutex`. Same pattern
+/// as `looper_scheduler::SendRepos` / runner `unsafe impl Send`.
+#[derive(Clone)]
+struct SendAgentRepos(Arc<std::sync::Mutex<Repositories>>);
+// SAFETY: see struct docs — Mutex serializes all Connection access.
+unsafe impl Send for SendAgentRepos {}
+unsafe impl Sync for SendAgentRepos {}
+
 /// The main executor — creates and manages agent executions.
 pub struct ConfiguredExecutor {
     pub config: ExecutorConfig,
@@ -71,13 +80,21 @@ impl ConfiguredExecutor {
 
     /// Start a new execution and return a handle.
     pub async fn start(&self, input: impl Into<RunInput>) -> Result<Execution, AgentError> {
-        let input = input.into();
+        let mut input = input.into();
         if input.prompt.is_empty() {
             return Err(AgentError::InvalidInput("prompt is required".into()));
         }
         if input.working_directory.is_empty() {
             return Err(AgentError::InvalidInput("working_directory is required".into()));
         }
+
+        // Runners historically omit execution_id (StartInput has no field). An empty
+        // PRIMARY KEY collapses every execution into one row via INSERT OR REPLACE,
+        // leaving status stuck at "running" and orphan recovery targeting the wrong PID.
+        if input.execution_id.trim().is_empty() {
+            input.execution_id = uuid::Uuid::new_v4().to_string();
+        }
+        let execution_id = input.execution_id.clone();
 
         let prompt = append_completion_instruction(&input.prompt);
         let native_resume_prompt = input.native_resume_prompt.as_ref().map(|p| append_completion_instruction(p));
@@ -90,8 +107,8 @@ impl ConfiguredExecutor {
         let log_dir_path = std::path::Path::new(&self.log_dir).join("loops").join(&input.loop_id).join(&input.run_id);
         tokio::fs::create_dir_all(&log_dir_path).await.map_err(AgentError::Io)?;
 
-        let stdout_log = log_dir_path.join(format!("{}.stdout.log", input.execution_id));
-        let stderr_log = log_dir_path.join(format!("{}.stderr.log", input.execution_id));
+        let stdout_log = log_dir_path.join(format!("{execution_id}.stdout.log"));
+        let stderr_log = log_dir_path.join(format!("{execution_id}.stderr.log"));
 
         // For Claude Code, wrap with script(1) on macOS to provide a PTY.
         // claude --print uses block buffering when stdout is a pipe (not a TTY),
@@ -102,8 +119,7 @@ impl ConfiguredExecutor {
         let script_output = if script_wrapper {
             let dir = std::path::Path::new(&self.log_dir).join("loops").join(&input.loop_id).join(&input.run_id);
             let _ = std::fs::create_dir_all(&dir);
-            let path = dir.join(format!("{}.script.log", input.execution_id));
-            path
+            dir.join(format!("{execution_id}.script.log"))
         } else {
             std::path::PathBuf::new()
         };
@@ -181,21 +197,24 @@ impl ConfiguredExecutor {
         let stdout_log_file = tokio::fs::File::create(&stdout_log).await.map_err(AgentError::Io)?;
         let stderr_log_file = tokio::fs::File::create(&stderr_log).await.map_err(AgentError::Io)?;
 
-        let execution_id = input.execution_id.clone();
         let vendor_str = self.config.vendor.as_str().to_string();
         let cwd = input.working_directory.clone();
 
         let command_json = serde_json::json!({
             "command": spawn_cmd.binary,
             "args": spawn_cmd.args,
+            "pid": pid,
         })
         .to_string();
 
-        // Get the PGID (process group ID) for later cleanup via killpg
-        let pgid = unsafe { nix::libc::getpgid(0) };
+        // Child calls setpgid(0, 0) in pre_exec, so its process group id equals its pid.
+        // NEVER use getpgid(0) here — that is the *parent* (looperd) PGID; orphan recovery
+        // would then SIGTERM/SIGKILL the daemon process group on restart.
+        let child_pgid = pid as i64;
         let metadata = serde_json::json!({
             "idempotencyKey": input.idempotency_key,
-            "process_group": pgid,
+            "pid": pid,
+            "process_group": child_pgid,
             "timeoutPolicy": {
                 "maxRuntime": input.timeout.as_secs(),
                 "idleTimeout": input.heartbeat_timeout.as_secs(),
@@ -256,10 +275,11 @@ impl ConfiguredExecutor {
             done: Arc::new(Mutex::new(false)),
             config: self.config.clone(),
             input: input.clone(),
-            execution_id,
+            execution_id: execution_id.clone(),
             max_output_bytes: input.max_output_bytes,
             script_wrapper,
             script_output,
+            repos: SendAgentRepos(Arc::clone(&self.repos)),
         };
 
         // Spawn the run loop as a background task so it reads stdout/stderr,
@@ -272,7 +292,7 @@ impl ConfiguredExecutor {
         Ok(execution)
     }
 
-    /// Persist execution result to the database.
+    /// Persist execution result to the database (merge UPDATE — never wipe identity cols).
     pub async fn persist_result(
         &self,
         execution_id: &str,
@@ -281,35 +301,29 @@ impl ConfiguredExecutor {
         error_msg: Option<String>,
         parse_status: &CompletionParseStatus,
     ) {
-        let now = chrono::Utc::now();
-        let record = AgentExecutionRecord {
-            id: execution_id.to_string(),
-            status: result.status.clone(),
-            summary: Some(result.summary.clone()),
-            parse_status: Some(parse_status.as_str().to_string()),
-            completion_signal: result.completion_signal.clone(),
-            error_message: error_msg,
-            native_session_id,
-            heartbeat_count: result.heartbeat_count,
-            last_heartbeat_at: result.last_progress_at.clone(),
-            ended_at: Some(now.to_rfc3339()),
-            updated_at: now.to_rfc3339(),
-            ..default_execution_record()
-        };
-        let _ = self.repos.lock().map(|g| g.agent_executions.upsert(&record));
+        persist_terminal_status(
+            &self.repos,
+            execution_id,
+            result,
+            native_session_id.as_deref(),
+            error_msg.as_deref(),
+            Some(parse_status.as_str()),
+        );
     }
 
-    /// Persist killed status to the database.
+    /// Persist killed/cancelling status to the database without wiping the row.
     pub async fn persist_kill(&self, execution_id: &str, reason: &str) {
-        let now = chrono::Utc::now();
-        let record = AgentExecutionRecord {
-            id: execution_id.to_string(),
-            status: "cancelling".to_string(),
-            updated_at: now.to_rfc3339(),
-            ..default_execution_record()
-        };
-        let _ = self.repos.lock().map(|g| g.agent_executions.upsert(&record));
-        tracing::info!("Persisted kill status for execution {} (reason: {})", execution_id, reason);
+        let now = chrono::Utc::now().to_rfc3339();
+        match self.repos.lock() {
+            Ok(g) => {
+                if let Err(e) = g.agent_executions.update_status(execution_id, "cancelling", &now) {
+                    tracing::warn!("persist_kill failed for {execution_id}: {e}");
+                } else {
+                    tracing::info!("Persisted kill status for execution {execution_id} (reason: {reason})");
+                }
+            }
+            Err(e) => tracing::warn!("persist_kill lock poisoned for {execution_id}: {e}"),
+        }
     }
 
     /// Resolve spawn command with native resume consideration.
@@ -387,8 +401,11 @@ impl ConfiguredExecutor {
     }
 }
 
-/// A running execution handle. Does NOT contain Repositories — all DB persistence
-/// is handled by `ConfiguredExecutor` to avoid `!Send` issues with rusqlite::Connection.
+/// A running execution handle.
+///
+/// Holds `Arc<Mutex<Repositories>>` so the background `run_loop` can mark the
+/// execution terminal when the agent exits — callers historically never called
+/// `persist_result`, which left rows stuck at `status=running` forever.
 #[derive(Clone)]
 #[allow(dead_code)]
 pub struct Execution {
@@ -409,6 +426,8 @@ pub struct Execution {
     script_wrapper: bool,
     /// Path to script(1) output file for PTY capture.
     script_output: std::path::PathBuf,
+    /// Shared DB handle (Send wrapper around Mutex — see `SendAgentRepos`).
+    repos: SendAgentRepos,
 }
 
 impl Execution {
@@ -616,10 +635,8 @@ impl Execution {
                 };
                 let (parse_status, completion_payload) = parse_completion(&combined_with_pty);
 
-                let _native_sid = s.native_session_id.clone().or_else(|| extract_native_session_id(&combined_with_pty));
-
                 let elapsed = start.elapsed().as_secs() as i64;
-
+                let native_sid = s.native_session_id.clone().or_else(|| extract_native_session_id(&combined_with_pty));
                 let result_val = AgentResult {
                     status: final_status.to_string(),
                     summary: completion_payload.as_ref().map(|p| p.summary.clone()).unwrap_or_default(),
@@ -642,6 +659,16 @@ impl Execution {
                     last_progress_at: Some(s.last_output_time.to_rfc3339()),
                     pid: s.pid.unwrap_or(0),
                 };
+
+                // Chokepoint: always mark terminal in DB when the child exits.
+                persist_terminal_status(
+                    &self.repos.0,
+                    &self.execution_id,
+                    &result_val,
+                    native_sid.as_deref(),
+                    None,
+                    Some(parse_status.as_str()),
+                );
 
                 let mut r = result.lock().await;
                 *r = Some(result_val.clone());
@@ -678,6 +705,7 @@ impl Execution {
         let (parse_status, completion_payload) = parse_completion(&combined_with_pty);
 
         let elapsed = start.elapsed().as_secs() as i64;
+        let native_sid = s.native_session_id.clone().or_else(|| extract_native_session_id(&combined_with_pty));
 
         let result_val = AgentResult {
             status: final_status.to_string(),
@@ -702,6 +730,15 @@ impl Execution {
             pid: s.pid.unwrap_or(0),
         };
 
+        persist_terminal_status(
+            &self.repos.0,
+            &self.execution_id,
+            &result_val,
+            native_sid.as_deref(),
+            None,
+            Some(parse_status.as_str()),
+        );
+
         let mut r = result.lock().await;
         *r = Some(result_val.clone());
         drop(r);
@@ -710,6 +747,11 @@ impl Execution {
         *d = true;
 
         result_val
+    }
+
+    /// Execution id assigned at start (always non-empty after start()).
+    pub fn execution_id(&self) -> &str {
+        &self.execution_id
     }
 }
 
@@ -720,33 +762,52 @@ fn append_completion_instruction(prompt: &str) -> String {
     p
 }
 
-fn default_execution_record() -> AgentExecutionRecord {
+/// Merge-update terminal fields on the agent_executions row (never INSERT OR REPLACE wipe).
+fn persist_terminal_status(
+    repos: &Arc<std::sync::Mutex<Repositories>>,
+    execution_id: &str,
+    result: &AgentResult,
+    native_session_id: Option<&str>,
+    error_msg: Option<&str>,
+    parse_status: Option<&str>,
+) {
+    if execution_id.is_empty() {
+        tracing::error!("persist_terminal_status called with empty execution_id — skipping");
+        return;
+    }
     let now = chrono::Utc::now().to_rfc3339();
-    AgentExecutionRecord {
-        id: String::new(),
-        project_id: None,
-        loop_id: None,
-        run_id: None,
-        vendor: String::new(),
-        status: String::new(),
-        pid: None,
-        command_json: None,
-        cwd: None,
-        summary: None,
-        parse_status: None,
-        completion_signal: None,
-        output_json: None,
-        error_message: None,
-        native_session_id: None,
-        native_resume_mode: None,
-        native_resume_status: None,
-        native_resume_error: None,
-        heartbeat_count: 0,
-        last_heartbeat_at: None,
-        started_at: now.clone(),
-        ended_at: None,
-        metadata_json: None,
-        created_at: now.clone(),
-        updated_at: now,
+    let parse = parse_status.unwrap_or(result.parse_status.as_str());
+    let error = match error_msg {
+        Some(m) if !m.is_empty() => Some(m),
+        _ if matches!(result.status.as_str(), "failed" | "timeout" | "killed") && !result.summary.is_empty() => {
+            Some(result.summary.as_str())
+        }
+        _ => None,
+    };
+    match repos.lock() {
+        Ok(g) => {
+            if let Err(e) = g.agent_executions.update_terminal(
+                execution_id,
+                &result.status,
+                Some(result.summary.as_str()).filter(|s| !s.is_empty()),
+                Some(parse).filter(|s| !s.is_empty()),
+                result.completion_signal.as_deref(),
+                error,
+                native_session_id,
+                result.heartbeat_count,
+                result.last_progress_at.as_deref(),
+                &now,
+                &now,
+            ) {
+                tracing::warn!("persist_terminal_status failed for {execution_id}: {e}");
+            } else {
+                tracing::info!(
+                    "agent_execution terminal: id={execution_id} status={} elapsed={}s",
+                    result.status,
+                    result.elapsed_runtime_seconds
+                );
+            }
+        }
+        Err(e) => tracing::warn!("persist_terminal_status lock poisoned for {execution_id}: {e}"),
     }
 }

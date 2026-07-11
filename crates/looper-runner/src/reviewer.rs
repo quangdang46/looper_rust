@@ -986,216 +986,208 @@ impl ReviewerScheduler for Reviewer {
                 });
 
                 {
-                        tracing::info!("Reviewer eligible PR set size={}", prs.len());
-                        // Convert discovered PRs into queue items
-                        let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                        let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
-                        if let Ok(guard) = self.repos.0.lock() {
-                            let all_loops: Vec<LoopRecord> = guard.loops.list().unwrap_or_default();
-                            // Pre-fetch existing active loops for this project to avoid duplicates
-                            let existing_loops: Vec<LoopRecord> = all_loops
-                                .iter()
-                                .filter(|l| {
-                                    l.project_id == input.project_id
-                                        && l.target_type == "pull_request"
-                                        && !matches!(
-                                            l.status.as_str(),
-                                            "completed" | "failed" | "cancelled" | "terminated"
-                                        )
-                                })
-                                .cloned()
-                                .collect();
-                            let completed_pr_numbers: std::collections::HashSet<i64> = all_loops
-                                .iter()
-                                .filter(|l| {
-                                    l.project_id == input.project_id
-                                        && l.r#type == "reviewer"
-                                        && l.status == "completed"
-                                        && l.pr_number.is_some()
-                                })
-                                .filter_map(|l| l.pr_number)
-                                .collect();
-                            for (i, pr) in prs.iter().enumerate() {
-                                tracing::debug!("Reviewer processing PR #{}/{} (number={})", i + 1, prs.len(), pr.number);
-                                let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
-                                if completed_pr_numbers.contains(&pr.number) {
-                                    tracing::debug!(
-                                        "Reviewer skipping PR #{} (reviewer loop already completed)",
-                                        pr.number
-                                    );
-                                    continue;
-                                }
-                                // Anti-thrash: active or already-completed queue for this PR.
-                                let blocks = guard.queue.find_active_by_dedupe(&dedupe_key).ok().flatten().is_some()
-                                    || guard
-                                        .queue
-                                        .list()
-                                        .ok()
-                                        .map(|items| {
-                                            items
-                                                .iter()
-                                                .any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
-                                        })
-                                        .unwrap_or(false);
-                                if blocks {
-                                    tracing::debug!(
-                                        "Reviewer skipping PR #{} (dedupe active/completed)",
-                                        pr.number
-                                    );
-                                    continue;
-                                }
-                                // Check if a loop already exists for this PR
-                                if existing_loops.iter().any(|l| l.pr_number == Some(pr.number)) {
-                                    tracing::debug!(
-                                        "Reviewer: loop already exists for PR #{}, skipping loop creation",
-                                        pr.number
-                                    );
-                                    // Still need to ensure a queue item exists (upsert handles dedup)
-                                    // Find the existing loop to reference
-                                    if let Some(existing_loop) =
-                                        existing_loops.iter().find(|l| l.pr_number == Some(pr.number))
-                                    {
-                                        let loop_id = existing_loop.id.clone();
-                                        let queue_item = QueueItemRecord {
-                                            id: Uuid::new_v4().to_string(),
-                                            project_id: Some(input.project_id.clone()),
-                                            loop_id: Some(loop_id),
-                                            r#type: "reviewer".into(),
-                                            target_type: "pull_request".into(),
-                                            target_id: pr.number.to_string(),
-                                            repo: Some(input.repo.clone()),
-                                            pr_number: Some(pr.number),
-                                            dedupe_key,
-                                            priority: 1,
-                                            status: "queued".into(),
-                                            available_at: now_iso.clone(),
-                                            attempts: 0,
-                                            max_attempts: 3,
-                                            claimed_by: None,
-                                            claimed_at: None,
-                                            started_at: None,
-                                            finished_at: None,
-                                            lock_key: None,
-                                            payload_json: Some(
-                                                serde_json::json!({
-                                                    "title": pr.title,
-                                                    "url": pr.url,
-                                                    "author": pr.author,
-                                                    "head_ref": pr.head_ref_name,
-                                                    "base_ref": pr.base_ref_name,
-                                                })
-                                                .to_string(),
-                                            ),
-                                            last_error: None,
-                                            last_error_kind: None,
-                                            created_at: now_iso.clone(),
-                                            updated_at: now_iso.clone(),
-                                        };
-                                        match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
-                                            Ok((item, is_new)) => {
-                                                discovered_items.push(item);
-                                                tracing::info!(
-                                                    "Reviewer enqueue PR #{}: is_new={} (total now={})",
-                                                    pr.number,
-                                                    is_new,
-                                                    discovered_items.len()
-                                                );
-                                            }
-                                            Err(e) => tracing::warn!(
-                                                "Failed to enqueue reviewer item for PR #{}: {}",
-                                                pr.number,
-                                                e
-                                            ),
-                                        }
-                                    }
-                                    continue;
-                                }
-                                // Create a loop record first (FK constraint on queue_items.loop_id)
-                                let (loop_id, loop_rec) = {
-                                    let lid = Uuid::new_v4().to_string();
-                                    let loop_seq = match guard.loops.allocate_seq() {
-                                        Ok(s) => s,
-                                        Err(e) => {
-                                            tracing::warn!("Failed to allocate loop seq for PR #{}: {e}", pr.number);
-                                            continue;
-                                        }
-                                    };
-                                    let r = LoopRecord {
-                                        id: lid.clone(),
-                                        seq: loop_seq,
-                                        project_id: input.project_id.clone(),
-                                        r#type: "review".into(),
+                    tracing::info!("Reviewer eligible PR set size={}", prs.len());
+                    // Convert discovered PRs into queue items
+                    let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                    let mut discovered_items: Vec<QueueItemRecord> = Vec::new();
+                    if let Ok(guard) = self.repos.0.lock() {
+                        let all_loops: Vec<LoopRecord> = guard.loops.list().unwrap_or_default();
+                        // Pre-fetch existing active loops for this project to avoid duplicates
+                        let existing_loops: Vec<LoopRecord> = all_loops
+                            .iter()
+                            .filter(|l| {
+                                l.project_id == input.project_id
+                                    && l.target_type == "pull_request"
+                                    && !matches!(l.status.as_str(), "completed" | "failed" | "cancelled" | "terminated")
+                            })
+                            .cloned()
+                            .collect();
+                        let completed_pr_numbers: std::collections::HashSet<i64> = all_loops
+                            .iter()
+                            .filter(|l| {
+                                l.project_id == input.project_id
+                                    && l.r#type == "reviewer"
+                                    && l.status == "completed"
+                                    && l.pr_number.is_some()
+                            })
+                            .filter_map(|l| l.pr_number)
+                            .collect();
+                        for (i, pr) in prs.iter().enumerate() {
+                            tracing::debug!("Reviewer processing PR #{}/{} (number={})", i + 1, prs.len(), pr.number);
+                            let dedupe_key = format!("reviewer-{}-{}", input.project_id, pr.number);
+                            if completed_pr_numbers.contains(&pr.number) {
+                                tracing::debug!(
+                                    "Reviewer skipping PR #{} (reviewer loop already completed)",
+                                    pr.number
+                                );
+                                continue;
+                            }
+                            // Anti-thrash: active or already-completed queue for this PR.
+                            let blocks = guard.queue.find_active_by_dedupe(&dedupe_key).ok().flatten().is_some()
+                                || guard
+                                    .queue
+                                    .list()
+                                    .ok()
+                                    .map(|items| {
+                                        items.iter().any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
+                                    })
+                                    .unwrap_or(false);
+                            if blocks {
+                                tracing::debug!("Reviewer skipping PR #{} (dedupe active/completed)", pr.number);
+                                continue;
+                            }
+                            // Check if a loop already exists for this PR
+                            if existing_loops.iter().any(|l| l.pr_number == Some(pr.number)) {
+                                tracing::debug!(
+                                    "Reviewer: loop already exists for PR #{}, skipping loop creation",
+                                    pr.number
+                                );
+                                // Still need to ensure a queue item exists (upsert handles dedup)
+                                // Find the existing loop to reference
+                                if let Some(existing_loop) =
+                                    existing_loops.iter().find(|l| l.pr_number == Some(pr.number))
+                                {
+                                    let loop_id = existing_loop.id.clone();
+                                    let queue_item = QueueItemRecord {
+                                        id: Uuid::new_v4().to_string(),
+                                        project_id: Some(input.project_id.clone()),
+                                        loop_id: Some(loop_id),
+                                        r#type: "reviewer".into(),
                                         target_type: "pull_request".into(),
-                                        target_id: Some(pr.number.to_string()),
+                                        target_id: pr.number.to_string(),
                                         repo: Some(input.repo.clone()),
                                         pr_number: Some(pr.number),
+                                        dedupe_key,
+                                        priority: 1,
                                         status: "queued".into(),
-                                        config_json: None,
-                                        metadata_json: None,
-                                        last_run_at: None,
-                                        next_run_at: None,
+                                        available_at: now_iso.clone(),
+                                        attempts: 0,
+                                        max_attempts: 3,
+                                        claimed_by: None,
+                                        claimed_at: None,
+                                        started_at: None,
+                                        finished_at: None,
+                                        lock_key: None,
+                                        payload_json: Some(
+                                            serde_json::json!({
+                                                "title": pr.title,
+                                                "url": pr.url,
+                                                "author": pr.author,
+                                                "head_ref": pr.head_ref_name,
+                                                "base_ref": pr.base_ref_name,
+                                            })
+                                            .to_string(),
+                                        ),
+                                        last_error: None,
+                                        last_error_kind: None,
                                         created_at: now_iso.clone(),
                                         updated_at: now_iso.clone(),
                                     };
-                                    (lid, r)
-                                };
-                                if let Err(e) = guard.loops.upsert(&loop_rec) {
-                                    tracing::warn!("Failed to create loop for PR #{}: {e}", pr.number);
-                                    continue;
+                                    match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
+                                        Ok((item, is_new)) => {
+                                            discovered_items.push(item);
+                                            tracing::info!(
+                                                "Reviewer enqueue PR #{}: is_new={} (total now={})",
+                                                pr.number,
+                                                is_new,
+                                                discovered_items.len()
+                                            );
+                                        }
+                                        Err(e) => tracing::warn!(
+                                            "Failed to enqueue reviewer item for PR #{}: {}",
+                                            pr.number,
+                                            e
+                                        ),
+                                    }
                                 }
-                                let queue_item = QueueItemRecord {
-                                    id: Uuid::new_v4().to_string(),
-                                    project_id: Some(input.project_id.clone()),
-                                    loop_id: Some(loop_id),
-                                    r#type: "reviewer".into(),
+                                continue;
+                            }
+                            // Create a loop record first (FK constraint on queue_items.loop_id)
+                            let (loop_id, loop_rec) = {
+                                let lid = Uuid::new_v4().to_string();
+                                let loop_seq = match guard.loops.allocate_seq() {
+                                    Ok(s) => s,
+                                    Err(e) => {
+                                        tracing::warn!("Failed to allocate loop seq for PR #{}: {e}", pr.number);
+                                        continue;
+                                    }
+                                };
+                                let r = LoopRecord {
+                                    id: lid.clone(),
+                                    seq: loop_seq,
+                                    project_id: input.project_id.clone(),
+                                    r#type: "review".into(),
                                     target_type: "pull_request".into(),
-                                    target_id: pr.number.to_string(),
+                                    target_id: Some(pr.number.to_string()),
                                     repo: Some(input.repo.clone()),
                                     pr_number: Some(pr.number),
-                                    dedupe_key,
-                                    priority: 1,
                                     status: "queued".into(),
-                                    available_at: now_iso.clone(),
-                                    attempts: 0,
-                                    max_attempts: 3,
-                                    claimed_by: None,
-                                    claimed_at: None,
-                                    started_at: None,
-                                    finished_at: None,
-                                    lock_key: None,
-                                    payload_json: Some(
-                                        serde_json::json!({
-                                            "title": pr.title,
-                                            "url": pr.url,
-                                            "author": pr.author,
-                                            "head_ref": pr.head_ref_name,
-                                            "base_ref": pr.base_ref_name,
-                                        })
-                                        .to_string(),
-                                    ),
-                                    last_error: None,
-                                    last_error_kind: None,
+                                    config_json: None,
+                                    metadata_json: None,
+                                    last_run_at: None,
+                                    next_run_at: None,
                                     created_at: now_iso.clone(),
                                     updated_at: now_iso.clone(),
                                 };
-                                match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
-                                    Ok((item, is_new)) => {
-                                        discovered_items.push(item);
-                                        tracing::info!(
-                                            "Reviewer enqueue PR #{}: is_new={} (total now={})",
-                                            pr.number,
-                                            is_new,
-                                            discovered_items.len()
-                                        );
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Failed to enqueue reviewer item for PR #{}: {}", pr.number, e)
-                                    }
+                                (lid, r)
+                            };
+                            if let Err(e) = guard.loops.upsert(&loop_rec) {
+                                tracing::warn!("Failed to create loop for PR #{}: {e}", pr.number);
+                                continue;
+                            }
+                            let queue_item = QueueItemRecord {
+                                id: Uuid::new_v4().to_string(),
+                                project_id: Some(input.project_id.clone()),
+                                loop_id: Some(loop_id),
+                                r#type: "reviewer".into(),
+                                target_type: "pull_request".into(),
+                                target_id: pr.number.to_string(),
+                                repo: Some(input.repo.clone()),
+                                pr_number: Some(pr.number),
+                                dedupe_key,
+                                priority: 1,
+                                status: "queued".into(),
+                                available_at: now_iso.clone(),
+                                attempts: 0,
+                                max_attempts: 3,
+                                claimed_by: None,
+                                claimed_at: None,
+                                started_at: None,
+                                finished_at: None,
+                                lock_key: None,
+                                payload_json: Some(
+                                    serde_json::json!({
+                                        "title": pr.title,
+                                        "url": pr.url,
+                                        "author": pr.author,
+                                        "head_ref": pr.head_ref_name,
+                                        "base_ref": pr.base_ref_name,
+                                    })
+                                    .to_string(),
+                                ),
+                                last_error: None,
+                                last_error_kind: None,
+                                created_at: now_iso.clone(),
+                                updated_at: now_iso.clone(),
+                            };
+                            match guard.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
+                                Ok((item, is_new)) => {
+                                    discovered_items.push(item);
+                                    tracing::info!(
+                                        "Reviewer enqueue PR #{}: is_new={} (total now={})",
+                                        pr.number,
+                                        is_new,
+                                        discovered_items.len()
+                                    );
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to enqueue reviewer item for PR #{}: {}", pr.number, e)
                                 }
                             }
-                            drop(guard);
-                            return ReviewerDiscoveryResult { queue_items: discovered_items };
                         }
+                        drop(guard);
+                        return ReviewerDiscoveryResult { queue_items: discovered_items };
+                    }
                 }
             }
         }

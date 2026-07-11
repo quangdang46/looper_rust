@@ -88,159 +88,168 @@ impl PlannerScheduler for Planner {
                 if current_login.is_empty() {
                     // Fall through to existing queue merge below.
                 } else {
-                match gw.list_open_issues(ListOpenIssuesInput {
-                    repo: input.repo.clone(),
-                    cwd: ".".to_string(),
-                    limit: 50,
-                    assignee: current_login.clone(),
-                    label: crate::types::spec_labels::PLAN.to_string(),
-                    labels: vec![],
-                }) {
-                    Ok(issues) => {
-                        tracing::info!(
+                    match gw.list_open_issues(ListOpenIssuesInput {
+                        repo: input.repo.clone(),
+                        cwd: ".".to_string(),
+                        limit: 50,
+                        assignee: current_login.clone(),
+                        label: crate::types::spec_labels::PLAN.to_string(),
+                        labels: vec![],
+                    }) {
+                        Ok(issues) => {
+                            tracing::info!(
                             "Planner GitHub discovery — {} candidate issue(s) with looper:plan assigned to @{current_login}",
                             issues.len()
                         );
-                        let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                            let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
 
-                        for issue in issues {
-                            // Defense-in-depth: assignee must include current user.
-                            if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
-                                tracing::debug!(
-                                    "Planner skipping issue #{} (not assigned to @{current_login})",
-                                    issue.number
-                                );
-                                continue;
-                            }
-                            let dedupe_key = format!("planner-{}-issue-{}", input.project_id, issue.number);
-
-                            // Dedup: skip if queue item with this dedupe_key already exists (active or completed)
-                            let exists = match self.repos.0.lock() {
-                                Ok(g) => {
-                                    if let Ok(Some(_)) = g.queue.find_active_by_dedupe(&dedupe_key) {
-                                        true
-                                    } else if let Ok(items) = g.queue.list() {
-                                        items.iter().any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
-                                    } else {
-                                        false
-                                    }
-                                }
-                                Err(_) => false,
-                            };
-                            if exists {
-                                tracing::debug!("Planner skipping issue #{} (already queued/completed)", issue.number);
-                                continue;
-                            }
-
-                            // Permission check: only allow authorized users to trigger planning
-                            if let Some(ref gw) = self.github {
-                                if !crate::permissions::user_authorized_for_dispatch(
-                                    &issue.author,
-                                    &input.repo,
-                                    &self.config.dispatch_config,
-                                    gw.as_ref(),
-                                ) {
-                                    tracing::info!(
-                                        "Planner: issue #{} author '{}' not authorized, skipping",
-                                        issue.number,
-                                        issue.author
+                            for issue in issues {
+                                // Defense-in-depth: assignee must include current user.
+                                if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
+                                    tracing::debug!(
+                                        "Planner skipping issue #{} (not assigned to @{current_login})",
+                                        issue.number
                                     );
                                     continue;
                                 }
-                            }
+                                let dedupe_key = format!("planner-{}-issue-{}", input.project_id, issue.number);
 
-                            // Create a loop for this issue.
-                            let loop_id = Uuid::new_v4().to_string();
-                            let loop_seq = self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok());
-                            if let Some(seq) = loop_seq {
-                                let new_loop = LoopRecord {
-                                    id: loop_id.clone(),
-                                    seq,
-                                    project_id: input.project_id.clone(),
-                                    r#type: "planner".into(),
-                                    target_type: "issue".into(),
-                                    target_id: Some(issue.number.to_string()),
-                                    repo: Some(input.repo.clone()),
-                                    pr_number: None,
-                                    status: "active".into(),
-                                    config_json: None,
-                                    metadata_json: Some(
-                                        serde_json::json!({
-                                            "issue_number": issue.number,
-                                            "issue_title": issue.title.clone(),
-                                            "discovered_via": "planner",
-                                        })
-                                        .to_string(),
-                                    ),
-                                    last_run_at: None,
-                                    next_run_at: None,
-                                    created_at: now_iso.clone(),
-                                    updated_at: now_iso.clone(),
+                                // Dedup: skip if queue item with this dedupe_key already exists (active or completed)
+                                let exists = match self.repos.0.lock() {
+                                    Ok(g) => {
+                                        if let Ok(Some(_)) = g.queue.find_active_by_dedupe(&dedupe_key) {
+                                            true
+                                        } else if let Ok(items) = g.queue.list() {
+                                            items.iter().any(|q| q.dedupe_key == dedupe_key && q.status == "completed")
+                                        } else {
+                                            false
+                                        }
+                                    }
+                                    Err(_) => false,
                                 };
-                                if let Ok(g) = self.repos.0.lock() {
-                                    if let Err(e) = g.loops.upsert(&new_loop) {
-                                        tracing::warn!("Planner loop upsert failed for issue #{}: {e}", issue.number);
+                                if exists {
+                                    tracing::debug!(
+                                        "Planner skipping issue #{} (already queued/completed)",
+                                        issue.number
+                                    );
+                                    continue;
+                                }
+
+                                // Permission check: only allow authorized users to trigger planning
+                                if let Some(ref gw) = self.github {
+                                    if !crate::permissions::user_authorized_for_dispatch(
+                                        &issue.author,
+                                        &input.repo,
+                                        &self.config.dispatch_config,
+                                        gw.as_ref(),
+                                    ) {
+                                        tracing::info!(
+                                            "Planner: issue #{} author '{}' not authorized, skipping",
+                                            issue.number,
+                                            issue.author
+                                        );
                                         continue;
                                     }
                                 }
-                            }
 
-                            // Create a queue item pointing at the loop.
-                            let queue_item = QueueItemRecord {
-                                id: Uuid::new_v4().to_string(),
-                                project_id: Some(input.project_id.clone()),
-                                loop_id: Some(loop_id.clone()),
-                                r#type: "planner".into(),
-                                target_type: "issue".into(),
-                                target_id: issue.number.to_string(),
-                                repo: Some(input.repo.clone()),
-                                pr_number: None,
-                                dedupe_key: dedupe_key.clone(),
-                                priority: 10,
-                                status: "queued".into(),
-                                available_at: now_iso.clone(),
-                                attempts: 0,
-                                max_attempts: 3,
-                                claimed_by: None,
-                                claimed_at: None,
-                                started_at: None,
-                                finished_at: None,
-                                lock_key: Some(format!("planner-{}-issue-{}", input.project_id, issue.number)),
-                                payload_json: Some(
-                                    serde_json::json!({
-                                        "issue_number": issue.number,
-                                        "issue_title": issue.title.clone(),
-                                        "url": issue.url.clone(),
-                                    })
-                                    .to_string(),
-                                ),
-                                last_error: None,
-                                last_error_kind: None,
-                                created_at: now_iso.clone(),
-                                updated_at: now_iso.clone(),
-                            };
-                            match self.repos.0.lock() {
-                                Ok(g) => match g.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
-                                    Ok((inserted, _is_new)) => {
-                                        tracing::info!(
-                                            "Planner enqueued issue #{} (item {})",
-                                            issue.number,
-                                            inserted.id
-                                        );
-                                        new_queue_items.push(inserted);
+                                // Create a loop for this issue.
+                                let loop_id = Uuid::new_v4().to_string();
+                                let loop_seq = self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok());
+                                if let Some(seq) = loop_seq {
+                                    let new_loop = LoopRecord {
+                                        id: loop_id.clone(),
+                                        seq,
+                                        project_id: input.project_id.clone(),
+                                        r#type: "planner".into(),
+                                        target_type: "issue".into(),
+                                        target_id: Some(issue.number.to_string()),
+                                        repo: Some(input.repo.clone()),
+                                        pr_number: None,
+                                        status: "active".into(),
+                                        config_json: None,
+                                        metadata_json: Some(
+                                            serde_json::json!({
+                                                "issue_number": issue.number,
+                                                "issue_title": issue.title.clone(),
+                                                "discovered_via": "planner",
+                                            })
+                                            .to_string(),
+                                        ),
+                                        last_run_at: None,
+                                        next_run_at: None,
+                                        created_at: now_iso.clone(),
+                                        updated_at: now_iso.clone(),
+                                    };
+                                    if let Ok(g) = self.repos.0.lock() {
+                                        if let Err(e) = g.loops.upsert(&new_loop) {
+                                            tracing::warn!(
+                                                "Planner loop upsert failed for issue #{}: {e}",
+                                                issue.number
+                                            );
+                                            continue;
+                                        }
                                     }
+                                }
+
+                                // Create a queue item pointing at the loop.
+                                let queue_item = QueueItemRecord {
+                                    id: Uuid::new_v4().to_string(),
+                                    project_id: Some(input.project_id.clone()),
+                                    loop_id: Some(loop_id.clone()),
+                                    r#type: "planner".into(),
+                                    target_type: "issue".into(),
+                                    target_id: issue.number.to_string(),
+                                    repo: Some(input.repo.clone()),
+                                    pr_number: None,
+                                    dedupe_key: dedupe_key.clone(),
+                                    priority: 10,
+                                    status: "queued".into(),
+                                    available_at: now_iso.clone(),
+                                    attempts: 0,
+                                    max_attempts: 3,
+                                    claimed_by: None,
+                                    claimed_at: None,
+                                    started_at: None,
+                                    finished_at: None,
+                                    lock_key: Some(format!("planner-{}-issue-{}", input.project_id, issue.number)),
+                                    payload_json: Some(
+                                        serde_json::json!({
+                                            "issue_number": issue.number,
+                                            "issue_title": issue.title.clone(),
+                                            "url": issue.url.clone(),
+                                        })
+                                        .to_string(),
+                                    ),
+                                    last_error: None,
+                                    last_error_kind: None,
+                                    created_at: now_iso.clone(),
+                                    updated_at: now_iso.clone(),
+                                };
+                                match self.repos.0.lock() {
+                                    Ok(g) => match g.queue.upsert_active_by_dedupe_or_get_existing(&queue_item) {
+                                        Ok((inserted, _is_new)) => {
+                                            tracing::info!(
+                                                "Planner enqueued issue #{} (item {})",
+                                                issue.number,
+                                                inserted.id
+                                            );
+                                            new_queue_items.push(inserted);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "Planner queue upsert failed for issue #{}: {e}",
+                                                issue.number
+                                            )
+                                        }
+                                    },
                                     Err(e) => {
-                                        tracing::warn!("Planner queue upsert failed for issue #{}: {e}", issue.number)
+                                        tracing::warn!("Planner lock failed: {e}");
                                     }
-                                },
-                                Err(e) => {
-                                    tracing::warn!("Planner lock failed: {e}");
                                 }
                             }
                         }
+                        Err(e) => tracing::warn!("Planner GitHub issue discovery failed: {e}"),
                     }
-                    Err(e) => tracing::warn!("Planner GitHub issue discovery failed: {e}"),
-                }
                 } // end else current_login non-empty
             }
         }
@@ -369,14 +378,10 @@ impl PlannerScheduler for Planner {
                 if issue_number <= 0 {
                     return None;
                 }
-                gw.view_issue(ViewIssueInput {
-                    repo: repo.to_string(),
-                    issue_number,
-                    cwd: ".".to_string(),
-                })
-                .ok()
-                .map(|d| d.title)
-                .filter(|t| !t.is_empty())
+                gw.view_issue(ViewIssueInput { repo: repo.to_string(), issue_number, cwd: ".".to_string() })
+                    .ok()
+                    .map(|d| d.title)
+                    .filter(|t| !t.is_empty())
             });
             let from_meta = match self.repos.0.lock() {
                 Ok(g) => match g.loops.get_by_id(&loop_id) {
@@ -768,9 +773,7 @@ The spec file path MUST be included in the PR body as:
                                         timeout: None,
                                     })
                                 {
-                                    if let Some(existing) =
-                                        open_prs.iter().find(|pr| pr.head_ref_name == branch_name)
-                                    {
+                                    if let Some(existing) = open_prs.iter().find(|pr| pr.head_ref_name == branch_name) {
                                         adopted_pr = Some(existing.number);
                                         tracing::info!(
                                             "Planner adopting existing PR #{} for branch {branch_name}",

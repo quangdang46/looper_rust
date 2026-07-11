@@ -317,8 +317,7 @@ impl Worker {
                             (None, None)
                         }
                     };
-                    let work_branch =
-                        existing_branch.clone().unwrap_or_else(|| format!("worker/{loop_id}"));
+                    let work_branch = existing_branch.clone().unwrap_or_else(|| format!("worker/{loop_id}"));
                     // Persist for open-pr step.
                     if let Ok(guard) = self.repos.0.lock() {
                         if let Ok(Some(mut r)) = guard.runs.get_by_id(&run.id) {
@@ -408,8 +407,7 @@ impl Worker {
                     // Plan via agent
                     if let Some(ref agent) = self.agent {
                         let (wb, epr, _) = worker_checkpoint(self, &run.id);
-                        let plan_wt =
-                            resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
+                        let plan_wt = resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                         // Create working directory if it doesn't exist
                         let _ = std::fs::create_dir_all(&plan_wt);
                         let input = looper_agent::executor::StartInput {
@@ -520,8 +518,7 @@ impl Worker {
                     // Execute via agent
                     if let Some(ref agent) = self.agent {
                         let (wb, epr, _) = worker_checkpoint(self, &run.id);
-                        let exec_wt =
-                            resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
+                        let exec_wt = resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                         // Create working directory if it doesn't exist
                         let _ = std::fs::create_dir_all(&exec_wt);
                         let input = looper_agent::executor::StartInput {
@@ -586,8 +583,7 @@ impl Worker {
                     // Use resolve_worker_wt() to get the correct worktree path,
                     // matching PLAN and EXECUTE steps.
                     let (wb, epr, _) = worker_checkpoint(self, &run.id);
-                    let worktree_path =
-                        resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
+                    let worktree_path = resolve_worker_wt(self, item, loop_id, wb.as_deref(), epr);
                     let _ = std::fs::create_dir_all(&worktree_path);
 
                     // Detect project type and run appropriate validation
@@ -824,9 +820,8 @@ impl Worker {
                                     .as_ref()
                                     .and_then(|v| v.get("push_existing").and_then(|b| b.as_bool()))
                                     .unwrap_or(false);
-                                let prn = cp
-                                    .as_ref()
-                                    .and_then(|v| v.get("existing_pr_number").and_then(|n| n.as_i64()));
+                                let prn =
+                                    cp.as_ref().and_then(|v| v.get("existing_pr_number").and_then(|n| n.as_i64()));
                                 (branch, push_ex, prn)
                             };
                             // Commit + push (fatal on push failure) from the
@@ -874,17 +869,13 @@ impl Worker {
                                 });
                             }
                             let pr_number = if push_existing {
-                                let n = existing_pr.ok_or_else(|| {
-                                    "push_existing set but existing_pr_number missing".to_string()
-                                })?;
+                                let n = existing_pr
+                                    .ok_or_else(|| "push_existing set but existing_pr_number missing".to_string())?;
                                 // Strip spec-ready — implementation is in progress on same PR.
                                 let _ = github.remove_issue_labels(looper_github::types::IssueLabelsInput {
                                     repo: item.repo.clone().unwrap_or_default(),
                                     issue_number: n,
-                                    labels: vec![
-                                        spec_labels::SPEC_READY.into(),
-                                        spec_labels::SPEC_REVIEWING.into(),
-                                    ],
+                                    labels: vec![spec_labels::SPEC_READY.into(), spec_labels::SPEC_REVIEWING.into()],
                                     cwd: ".".to_string(),
                                 });
                                 let _ = github.create_issue_comment(IssueCommentInput {
@@ -1074,109 +1065,110 @@ impl WorkerScheduler for Worker {
             if current_login.is_empty() {
                 // Fall through to empty return after block.
             } else {
-            let gh_input = ListOpenIssuesInput {
-                repo: repo.clone(),
-                cwd: ".".to_string(),
-                limit: 50,
-                assignee: current_login.clone(),
-                label: spec_labels::WORKER_READY.to_string(),
-                labels: vec![],
-            };
-            match github.list_open_issues(gh_input) {
-                Ok(issues) => {
-                    tracing::info!(
-                        "Worker GitHub discovery — {} candidate issue(s) with {} assigned to @{current_login}",
-                        issues.len(),
-                        spec_labels::WORKER_READY
-                    );
-                    let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-                    for issue in issues {
-                        if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
-                            continue;
-                        }
-                        let dedupe_key = format!("worker-{}-issue-{}", input.project_id, issue.number);
-                        let exists = self
-                            .repos
-                            .0
-                            .lock()
-                            .ok()
-                            .and_then(|g| g.queue.find_active_by_dedupe(&dedupe_key).ok().flatten())
-                            .is_some();
-                        if exists {
-                            continue;
-                        }
-                        let loop_id = Uuid::new_v4().to_string();
-                        let loop_seq = self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok()).unwrap_or(0);
-                        let new_loop = LoopRecord {
-                            id: loop_id.clone(),
-                            seq: loop_seq,
-                            project_id: input.project_id.clone(),
-                            r#type: "worker".into(),
-                            target_type: "issue".into(),
-                            target_id: Some(issue.number.to_string()),
-                            repo: Some(repo.clone()),
-                            pr_number: None,
-                            status: "active".into(),
-                            config_json: None,
-                            metadata_json: Some(
-                                serde_json::json!({
-                                    "issue_number": issue.number,
-                                    "issue_title": issue.title.clone(),
-                                    "discovered_via": "worker",
-                                })
-                                .to_string(),
-                            ),
-                            last_run_at: None,
-                            next_run_at: None,
-                            created_at: now_iso.clone(),
-                            updated_at: now_iso.clone(),
-                        };
-                        if let Ok(g) = self.repos.0.lock() {
-                            let _ = g.loops.upsert(&new_loop);
-                        }
-                        let item = QueueItemRecord {
-                            id: Uuid::new_v4().to_string(),
-                            project_id: Some(input.project_id.clone()),
-                            loop_id: Some(loop_id.clone()),
-                            r#type: "worker".to_string(),
-                            target_type: "issue".to_string(),
-                            target_id: issue.number.to_string(),
-                            repo: Some(repo.clone()),
-                            pr_number: None,
-                            dedupe_key,
-                            priority: 50,
-                            status: "queued".to_string(),
-                            available_at: now_iso.clone(),
-                            attempts: 0,
-                            max_attempts: 3,
-                            claimed_by: None,
-                            claimed_at: None,
-                            started_at: None,
-                            finished_at: None,
-                            lock_key: None,
-                            payload_json: None,
-                            last_error: None,
-                            last_error_kind: None,
-                            created_at: now_iso.clone(),
-                            updated_at: now_iso.clone(),
-                        };
-                        if let Ok(g) = self.repos.0.lock() {
-                            if let Ok((inserted, _new)) = g.queue.create_or_get_active_by_dedupe(&item) {
-                                tracing::info!("Worker enqueued issue #{} (item {})", issue.number, inserted.id);
-                                new_queue_items.push(inserted);
+                let gh_input = ListOpenIssuesInput {
+                    repo: repo.clone(),
+                    cwd: ".".to_string(),
+                    limit: 50,
+                    assignee: current_login.clone(),
+                    label: spec_labels::WORKER_READY.to_string(),
+                    labels: vec![],
+                };
+                match github.list_open_issues(gh_input) {
+                    Ok(issues) => {
+                        tracing::info!(
+                            "Worker GitHub discovery — {} candidate issue(s) with {} assigned to @{current_login}",
+                            issues.len(),
+                            spec_labels::WORKER_READY
+                        );
+                        let now_iso = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+                        for issue in issues {
+                            if !issue.assignees.iter().any(|a| a.eq_ignore_ascii_case(&current_login)) {
+                                continue;
                             }
+                            let dedupe_key = format!("worker-{}-issue-{}", input.project_id, issue.number);
+                            let exists = self
+                                .repos
+                                .0
+                                .lock()
+                                .ok()
+                                .and_then(|g| g.queue.find_active_by_dedupe(&dedupe_key).ok().flatten())
+                                .is_some();
+                            if exists {
+                                continue;
+                            }
+                            let loop_id = Uuid::new_v4().to_string();
+                            let loop_seq =
+                                self.repos.0.lock().ok().and_then(|g| g.loops.allocate_seq().ok()).unwrap_or(0);
+                            let new_loop = LoopRecord {
+                                id: loop_id.clone(),
+                                seq: loop_seq,
+                                project_id: input.project_id.clone(),
+                                r#type: "worker".into(),
+                                target_type: "issue".into(),
+                                target_id: Some(issue.number.to_string()),
+                                repo: Some(repo.clone()),
+                                pr_number: None,
+                                status: "active".into(),
+                                config_json: None,
+                                metadata_json: Some(
+                                    serde_json::json!({
+                                        "issue_number": issue.number,
+                                        "issue_title": issue.title.clone(),
+                                        "discovered_via": "worker",
+                                    })
+                                    .to_string(),
+                                ),
+                                last_run_at: None,
+                                next_run_at: None,
+                                created_at: now_iso.clone(),
+                                updated_at: now_iso.clone(),
+                            };
+                            if let Ok(g) = self.repos.0.lock() {
+                                let _ = g.loops.upsert(&new_loop);
+                            }
+                            let item = QueueItemRecord {
+                                id: Uuid::new_v4().to_string(),
+                                project_id: Some(input.project_id.clone()),
+                                loop_id: Some(loop_id.clone()),
+                                r#type: "worker".to_string(),
+                                target_type: "issue".to_string(),
+                                target_id: issue.number.to_string(),
+                                repo: Some(repo.clone()),
+                                pr_number: None,
+                                dedupe_key,
+                                priority: 50,
+                                status: "queued".to_string(),
+                                available_at: now_iso.clone(),
+                                attempts: 0,
+                                max_attempts: 3,
+                                claimed_by: None,
+                                claimed_at: None,
+                                started_at: None,
+                                finished_at: None,
+                                lock_key: None,
+                                payload_json: None,
+                                last_error: None,
+                                last_error_kind: None,
+                                created_at: now_iso.clone(),
+                                updated_at: now_iso.clone(),
+                            };
+                            if let Ok(g) = self.repos.0.lock() {
+                                if let Ok((inserted, _new)) = g.queue.create_or_get_active_by_dedupe(&item) {
+                                    tracing::info!("Worker enqueued issue #{} (item {})", issue.number, inserted.id);
+                                    new_queue_items.push(inserted);
+                                }
+                            }
+                            found_issues.push(WorkerIssueEntry {
+                                number: issue.number,
+                                title: issue.title,
+                                body: issue.body,
+                            });
                         }
-                        found_issues.push(WorkerIssueEntry {
-                            number: issue.number,
-                            title: issue.title,
-                            body: issue.body,
-                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!("Worker GitHub discovery failed for {}: {}", repo, e);
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("Worker GitHub discovery failed for {}: {}", repo, e);
-                }
-            }
             } // end current_login non-empty
         } else {
             tracing::debug!("GitHub not configured, returning empty discovery for {}", repo);

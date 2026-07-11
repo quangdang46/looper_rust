@@ -5,12 +5,7 @@ use looper_scheduler::scheduler::SendRepos;
 use std::sync::Arc;
 
 /// Mark a queue item terminal (`completed` / `failed` / `cancelled`).
-pub fn mark_queue_terminal(
-    repos: &Arc<SendRepos>,
-    item_id: &str,
-    status: &str,
-    last_error: Option<String>,
-) {
+pub fn mark_queue_terminal(repos: &Arc<SendRepos>, item_id: &str, status: &str, last_error: Option<String>) {
     let now = Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     let Ok(guard) = repos.0.lock() else {
         tracing::warn!("mark_queue_terminal: lock poisoned (item={item_id})");

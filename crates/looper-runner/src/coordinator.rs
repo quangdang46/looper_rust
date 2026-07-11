@@ -418,9 +418,8 @@ impl CoordinatorScheduler for Coordinator {
                                 continue;
                             }
 
-                            let has_worker_ready = detail.labels.iter().any(|l| {
-                                l == "looper:worker-ready" || l == "looper:implement"
-                            });
+                            let has_worker_ready =
+                                detail.labels.iter().any(|l| l == "looper:worker-ready" || l == "looper:implement");
                             if !has_worker_ready {
                                 tracing::info!(
                                     "Dispatch: issue #{} has dispatch/implement, adding looper:worker-ready",

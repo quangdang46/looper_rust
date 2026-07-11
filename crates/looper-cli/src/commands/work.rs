@@ -115,23 +115,12 @@ pub async fn admit_role(
         }
         "planner" | "reviewer" | "worker" | "fixer" => {}
         other => {
-            return Err(CliError::config(format!(
-                "unknown role '{other}' (want planner|reviewer|worker|fixer)"
-            )));
+            return Err(CliError::config(format!("unknown role '{other}' (want planner|reviewer|worker|fixer)")));
         }
     }
 
-    let input = AdmitWorkInput {
-        role: role.to_string(),
-        issue_number: issue,
-        pr_number: pr,
-        repo,
-        priority,
-    };
-    let result = client
-        .admit_work(project, &input)
-        .await
-        .map_err(|e| CliError::daemon_lifecycle(e.to_string()))?;
+    let input = AdmitWorkInput { role: role.to_string(), issue_number: issue, pr_number: pr, repo, priority };
+    let result = client.admit_work(project, &input).await.map_err(|e| CliError::daemon_lifecycle(e.to_string()))?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
@@ -170,17 +159,7 @@ pub async fn handle(client: &DaemonAPIClient, args: &WorkArgs, json: bool) -> Re
                 .project
                 .as_deref()
                 .ok_or_else(|| CliError::config("provide --project (or use: work start --role …)"))?;
-            admit_role(
-                client,
-                project,
-                "worker",
-                args.issue,
-                args.pr,
-                args.repo.clone(),
-                args.priority,
-                json,
-            )
-            .await
+            admit_role(client, project, "worker", args.issue, args.pr, args.repo.clone(), args.priority, json).await
         }
     }
 }
@@ -198,8 +177,7 @@ mod tests {
 
     #[test]
     fn parse_work_start_planner() {
-        let w =
-            Wrap::try_parse_from(["t", "start", "--project", "p", "--role", "planner", "--issue", "12"]).unwrap();
+        let w = Wrap::try_parse_from(["t", "start", "--project", "p", "--role", "planner", "--issue", "12"]).unwrap();
         match w.args.cmd {
             Some(WorkSubcommand::Start(a)) => {
                 assert_eq!(a.project, "p");

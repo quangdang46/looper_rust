@@ -1485,7 +1485,7 @@ fn test_agent_executions_upsert_and_get() {
             native_resume_error: None,
             started_at: t.clone(),
             ended_at: None,
-            metadata_json: None,
+            metadata_json: Some(r#"{"process_group":12345}"#.into()),
             created_at: t.clone(),
             updated_at: t,
         })
@@ -1493,6 +1493,117 @@ fn test_agent_executions_upsert_and_get() {
     let got = repos.agent_executions.get_by_id("ae-1").unwrap().unwrap();
     assert_eq!(got.vendor, "claude");
     assert_eq!(got.status, "running");
+}
+
+#[test]
+fn test_agent_executions_update_terminal_preserves_identity() {
+    let (repos, _dir) = setup();
+    let t = now();
+    repos
+        .agent_executions
+        .upsert(&AgentExecutionRecord {
+            id: "ae-term".into(),
+            project_id: None,
+            loop_id: None,
+            run_id: None,
+            vendor: "claude-code".into(),
+            status: "running".into(),
+            pid: Some(99999),
+            command_json: Some(r#"{"command":"claude"}"#.into()),
+            cwd: Some("/tmp/worktree".into()),
+            summary: None,
+            parse_status: None,
+            completion_signal: None,
+            heartbeat_count: 0,
+            last_heartbeat_at: None,
+            output_json: Some(r#"{"stdoutLogPath":"/tmp/a.log"}"#.into()),
+            error_message: None,
+            native_session_id: None,
+            native_resume_mode: Some("checkpoint_restart".into()),
+            native_resume_status: Some("unavailable".into()),
+            native_resume_error: None,
+            started_at: t.clone(),
+            ended_at: None,
+            metadata_json: Some(r#"{"process_group":99999,"pid":99999}"#.into()),
+            created_at: t.clone(),
+            updated_at: t.clone(),
+        })
+        .unwrap();
+
+    let ended = now();
+    repos
+        .agent_executions
+        .update_terminal(
+            "ae-term",
+            "completed",
+            Some("wrote the file"),
+            Some("parsed"),
+            Some("__LOOPER_RESULT__="),
+            None,
+            Some("sess-abc"),
+            7,
+            Some(&ended),
+            &ended,
+            &ended,
+        )
+        .unwrap();
+
+    let got = repos.agent_executions.get_by_id("ae-term").unwrap().unwrap();
+    assert_eq!(got.status, "completed");
+    assert_eq!(got.summary.as_deref(), Some("wrote the file"));
+    assert_eq!(got.heartbeat_count, 7);
+    assert_eq!(got.native_session_id.as_deref(), Some("sess-abc"));
+    assert_eq!(got.ended_at.as_deref(), Some(ended.as_str()));
+    // Identity columns must survive terminal update (no INSERT OR REPLACE wipe)
+    assert_eq!(got.vendor, "claude-code");
+    assert_eq!(got.pid, Some(99999));
+    assert_eq!(got.cwd.as_deref(), Some("/tmp/worktree"));
+    assert!(got.metadata_json.as_deref().unwrap().contains("99999"));
+    assert!(got.output_json.as_deref().unwrap().contains("stdoutLogPath"));
+    // No longer active
+    assert!(repos.agent_executions.list_active().unwrap().is_empty());
+}
+
+#[test]
+fn test_agent_executions_update_status_cancelling() {
+    let (repos, _dir) = setup();
+    let t = now();
+    repos
+        .agent_executions
+        .upsert(&AgentExecutionRecord {
+            id: "ae-kill".into(),
+            project_id: None,
+            loop_id: None,
+            run_id: None,
+            vendor: "claude".into(),
+            status: "running".into(),
+            pid: Some(1),
+            command_json: None,
+            cwd: Some("/tmp".into()),
+            summary: None,
+            parse_status: None,
+            completion_signal: None,
+            heartbeat_count: 0,
+            last_heartbeat_at: None,
+            output_json: None,
+            error_message: None,
+            native_session_id: None,
+            native_resume_mode: None,
+            native_resume_status: None,
+            native_resume_error: None,
+            started_at: t.clone(),
+            ended_at: None,
+            metadata_json: None,
+            created_at: t.clone(),
+            updated_at: t.clone(),
+        })
+        .unwrap();
+    let t2 = now();
+    repos.agent_executions.update_status("ae-kill", "cancelling", &t2).unwrap();
+    let got = repos.agent_executions.get_by_id("ae-kill").unwrap().unwrap();
+    assert_eq!(got.status, "cancelling");
+    assert_eq!(got.cwd.as_deref(), Some("/tmp"));
+    assert_eq!(got.pid, Some(1));
 }
 
 #[test]
