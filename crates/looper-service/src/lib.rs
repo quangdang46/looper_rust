@@ -15,15 +15,19 @@
 //! - [`ProjectService`](project_service::ProjectService) — Add, remove, list,
 //!   sync projects.  Handles ID normalization, reviewer auto-merge validation,
 //!   and discovery of worktrees / pull requests.
+//! - [`AdmitWorkService`](admit_work::AdmitWorkService) — Admit role work:
+//!   create/reuse loop + claimable queue item (no HTTP/tick).
 
 #[allow(unused_imports)]
 use {serde as _, uuid as _};
 
+pub mod admit_work;
 pub mod error;
 pub mod loop_service;
 pub mod project_service;
 pub mod run_service;
 
+pub use admit_work::{AdmitWorkInput, AdmitWorkResult, AdmitWorkService};
 pub use error::{Result, ServiceError};
 pub use loop_service::{
     CreateInput, LoopService, PauseInput, PauseResult, TerminateInput, TerminateResult, TransitionInput,

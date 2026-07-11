@@ -623,7 +623,7 @@ fn test_queue_create_or_get_active_by_dedupe_inserts() {
 fn test_queue_create_or_get_active_by_dedupe_dedupes() {
     let (repos, _dir) = setup();
     let (_, lid) = insert_project_and_loop(&repos);
-    // Dedupe unique index only covers type IN ('reviewer', 'fixer')
+    // Active dedupe unique index covers planner|reviewer|worker|fixer (V5).
     let input1 = QueueItemRecord {
         loop_id: Some(lid.clone()),
         dedupe_key: "dup-key".into(),

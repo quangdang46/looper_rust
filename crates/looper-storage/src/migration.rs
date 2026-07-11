@@ -15,6 +15,11 @@ fn get_migrations() -> Vec<Migration> {
         Migration::unapplied("V3__runs_agent_columns", include_str!("../migrations/V3__runs_agent_columns.sql"))
             .unwrap(),
         Migration::unapplied("V4__outcomes", include_str!("../migrations/V4__outcomes.sql")).unwrap(),
+        Migration::unapplied(
+            "V5__queue_active_dedupe_all_roles",
+            include_str!("../migrations/V5__queue_active_dedupe_all_roles.sql"),
+        )
+        .unwrap(),
     ]
 }
 

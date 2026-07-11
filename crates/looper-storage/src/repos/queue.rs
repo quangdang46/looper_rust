@@ -89,7 +89,17 @@ impl QueueRepository {
         }
     }
 
+    /// Insert a queue item, or return the existing active row with the same
+    /// `dedupe_key` (`status IN ('queued','running')`).
+    ///
+    /// Uses a lookup first for types without a race window concern, then
+    /// INSERT; concurrent races are resolved via the partial unique index
+    /// `idx_queue_items_one_active_dedupe` (planner|reviewer|worker|fixer).
     pub fn create_or_get_active_by_dedupe(&self, record: &QueueItemRecord) -> Result<(QueueItemRecord, bool)> {
+        if let Some(existing) = self.find_active_by_dedupe(&record.dedupe_key)? {
+            return Ok((existing, false));
+        }
+
         match self.conn.execute(
             "INSERT INTO queue_items (id, project_id, loop_id, type, target_type, target_id, repo, pr_number, dedupe_key, priority, status, available_at, attempts, max_attempts, claimed_by, claimed_at, started_at, finished_at, lock_key, payload_json, last_error, last_error_kind, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)",
@@ -122,7 +132,7 @@ impl QueueRepository {
         match self.conn.execute(
             "INSERT INTO queue_items (id, project_id, loop_id, type, target_type, target_id, repo, pr_number, dedupe_key, priority, status, available_at, attempts, max_attempts, claimed_by, claimed_at, started_at, finished_at, lock_key, payload_json, last_error, last_error_kind, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
-             ON CONFLICT(dedupe_key) WHERE type IN ('reviewer','fixer') AND status IN ('queued','running') DO UPDATE SET
+             ON CONFLICT(dedupe_key) WHERE type IN ('planner','reviewer','worker','fixer') AND status IN ('queued','running') DO UPDATE SET
                project_id=excluded.project_id, loop_id=excluded.loop_id, type=excluded.type,
                target_type=excluded.target_type, target_id=excluded.target_id, repo=excluded.repo,
                pr_number=excluded.pr_number, priority=excluded.priority, status=excluded.status,

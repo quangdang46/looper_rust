@@ -28,11 +28,15 @@ impl LoopType {
     }
 
     /// Which target types are valid for this loop type.
+    ///
+    /// Planner may target a project (legacy discovery-wide) or a specific
+    /// issue (issue → spec PR flow / admit-work). Reviewer/worker/fixer
+    /// operate on pull requests or issues.
     pub fn allowed_target_types(self) -> &'static [LoopTargetType] {
         use LoopTargetType::*;
         use LoopType::*;
         match self {
-            Planner => &[Project],
+            Planner => &[Project, Issue],
             Reviewer => &[PullRequest, Issue],
             Worker => &[PullRequest, Issue],
             Fixer => &[PullRequest, Issue],
@@ -83,11 +87,11 @@ mod tests {
     use crate::LoopTargetType;
 
     #[test]
-    fn test_planner_only_project() {
+    fn test_planner_project_and_issue() {
         let lt = LoopType::Planner;
         assert!(lt.supports_target_type(LoopTargetType::Project));
+        assert!(lt.supports_target_type(LoopTargetType::Issue));
         assert!(!lt.supports_target_type(LoopTargetType::PullRequest));
-        assert!(!lt.supports_target_type(LoopTargetType::Issue));
     }
 
     #[test]
