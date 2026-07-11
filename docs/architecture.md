@@ -667,17 +667,20 @@ Main binary kết nối tất cả crate lại. Bootstrap sequence 14 bước nh
 
 ### 8.8 looper-cli (CLI Binary)
 
-Giao tiếp với daemon qua REST API. Subcommands:
+Giao tiếp với daemon qua REST API (default base URL `http://127.0.0.1:7391`). Primary surface (`looper --help`):
 - `health`, `version`, `shutdown`, `reload`
-- `projects` (add, remove, list, sync)
-- `loops` (list, get, create, stop, close)
-- `runs` (list, get, start)
-- `queue` (list, stats)
-- `events` (list, stream)
-- `locks` (list, release)
-- `config` (get, set)
-- `daemon` (start, stop, restart, status, logs, install)
+- `projects` (list, add, get, remove, sync) — project needs resolvable GitHub `owner/name` (`--repo-url` or detect from path)
+- `loops` (list, create, get, pause, resume, terminate)
+- `runs` (list, start, get, cancel)
+- `queue` (list, enqueue, dequeue)
+- `events` (list)
+- `locks` (list, acquire, release)
+- `config` (get, agent) · `config-local` (get, set, unset, edit, migrate)
+- `daemon` (start, stop, restart, status, logs, install, uninstall)
 - `autoupgrade` (check, status, upgrade)
+- `worktree` (cleanup) · `ps` (list) · `stop` · `jump` · `pr` · `bootstrap`
+
+Hidden stubs (if invoked) return unsupported / non-zero. See root `README.md` CLI section for operator-facing examples.
 
 ### 8.9 looper-net (Loopernet Cloud)
 

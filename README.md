@@ -27,7 +27,7 @@ This installs three binaries to `~/.local/bin/`:
 
 | Binary | Role |
 |--------|------|
-| `looper` | CLI client (35+ subcommands) |
+| `looper` | CLI client (talks to the daemon REST API) |
 | `looperd` | Daemon (long-running background process) |
 | `loopernet` | Cloud coordination server (multi-node mode) |
 
@@ -96,8 +96,8 @@ Looper is a Cargo workspace of 16 crates organized in a dependency chain, topped
          ▼                              ▼
 ┌─────────────────┐          ┌─────────────────────┐
 │  looper (CLI)   │          │  loopernet (cloud)  │
-│  status / queue  │          │  multi-node coord.  │
-│  logs / config   │          │  claim routing      │
+│  health / projects│         │  multi-node coord.  │
+│  loops / queue    │          │  claim routing      │
 └─────────────────┘          └─────────────────────┘
 ```
 
@@ -166,7 +166,7 @@ Issues and PRs are slotted into three queues:
 |-------|------|-------------|
 | Auto | From config | Auto-discovered repos matched by label/author |
 | Planned | `looper:plan` label | Issues explicitly tagged for Looper |
-| Manual | CLI-triggered | Ad-hoc runs via `looper run` |
+| Manual | CLI / API | Ad-hoc queue items via `looper queue enqueue` (scheduler-driven) |
 
 ### 5. Persistence
 
@@ -176,55 +176,137 @@ All state is stored in a local SQLite database: queue entries, run history, agen
 
 ## CLI Usage
 
+The `looper` CLI is a REST client for `looperd`. Default daemon URL:
+
+```text
+http://127.0.0.1:7391
+```
+
+Override with global `--daemon-url` (or auth with `--token`). Most commands also accept `--json` for machine-readable output.
+
+> **Honesty note:** Only the commands below are on the primary surface (`looper --help`). Hidden/stub subcommands (if any) exit non-zero as unsupported — do not treat them as working. There is no Go-era `looper status`, `looper run <issue-url>`, `looper network *`, `looper webhook *`, `looper inspect`, or `looper upgrade` command.
+
+### Global options
+
+| Flag | Meaning |
+|------|---------|
+| `--daemon-url <URL>` | Daemon API base (default `http://127.0.0.1:7391`) |
+| `--token <TOKEN>` | Bearer token for daemon auth |
+| `--json` | JSON output |
+| `--no-auto-upgrade` | Skip startup auto-upgrade check |
+
+### Daemon lifecycle
+
 ```bash
-# Status & health
-looper status                          # Daemon health, queue depth, agent status
-looper status --json                   # Machine-readable output
+looper daemon start                    # Start looperd in the background
+looper daemon stop                     # Stop the daemon
+looper daemon restart
+looper daemon status                   # Is the process running?
+looper daemon logs [N]                 # Tail recent log lines
+looper daemon install                  # launchd (macOS) / systemd (Linux)
+looper daemon uninstall
 
-# Run management
-looper run <issue-url>                 # Start a loop on a GitHub issue
-looper run cancel <run-id>             # Cancel a running loop
-looper run list                        # List recent runs and their states
-looper run logs <run-id>               # Tail agent output for a run
+# Or run the binary in the foreground:
+looperd
+```
 
-# Queue inspection
-looper queue list                      # Show queued items (auto/planned/manual)
-looper queue clear                     # Clear pending queue entries
+### Health & version
 
-# Configuration
-looper config get <key>                # Read a config value
-looper config set <key> <value>        # Write a config value
-looper config view                     # Dump full config (with secrets masked)
+```bash
+looper health                          # GET /health — must work against default 7391
+looper health --json
+looper version
+looper shutdown                        # Ask daemon to shut down via API
+looper reload                          # Reload daemon config via API
+```
 
-# Daemon lifecycle
-looper daemon start                    # Start the background daemon
-looper daemon stop                     # Graceful shutdown
-looper daemon restart                  # Restart the daemon
-looper daemon logs                     # Follow daemon logs (SSE stream)
+### Projects (GitHub repo binding required)
 
-# Network mode (multi-node)
-looper network join <url> --name <name> --key <key>
-looper network leave
-looper network status
-looper network members
+Work discovery and GitHub gateway calls need a **resolvable GitHub repo** (`owner/name`) on the project. Set it with `--repo-url`, or pass a local `--path` whose `remote.origin.url` is a github.com remote so the daemon can auto-detect `metadata.repo`. Without that binding, admit-work / discovery fail closed.
 
-# Webhook management
-looper webhook enable                  # Enable webhook forwarding
-looper webhook disable                 # Disable webhook forwarding
-looper webhook status                  # Show webhook configuration
+```bash
+looper projects add myapp \
+  --path /path/to/checkout \
+  --repo-url owner/repo \
+  --default-branch main
 
-# Git worktree management
-looper worktree cleanup                # Clean up orphaned worktrees
+looper projects list
+looper projects get myapp
+looper projects sync myapp             # Discover worktrees / PRs
+looper projects remove myapp
+```
 
-# Diagnostics
-looper inspect <run-or-loop-id>        # Deep inspection of a loop/run
-looper failures                        # Show recent failures with diagnostics
-looper upgrade                         # Self-upgrade to latest release
+### Loops, runs, queue
+
+Primary workflow today: register a project, label issues `looper:plan` (or `dispatch/plan`), and let the scheduler tick. Low-level CRUD:
+
+```bash
+# Loops
+looper loops list <project>
+looper loops get <project> <seq>
+looper loops create <project> --type <type> [--target <target>] [--metadata <json>]
+looper loops terminate <project> <seq>
+
+# Runs (per loop seq)
+looper runs list <project> <seq>
+looper runs get <project> <seq> <run-id>
+looper runs start <project> <seq> <run-id> --step <step> [--vendor <v>] [--model <m>]
+looper runs cancel <project> <seq>
+
+# Queue
+looper queue list <project>
+looper queue enqueue <project> --type <type> [--loop-seq <n>] [--priority <p>] [--payload <json>]
+looper queue dequeue <project> <item-id>   # single item only
+```
+
+Active loops at a glance / stop by sequence:
+
+```bash
+looper ps list
+looper stop stop <seq> [-p <project>]      # terminate loop by seq
+looper jump jump <seq> [-p <project>]      # print worktree path for a loop
+```
+
+### Config
+
+```bash
+# Daemon-side (via API)
+looper config get                      # Full daemon config
+looper config agent <project>          # Agent config for a project
+
+# Local file config (no daemon required)
+looper config-local get <key>          # e.g. server.host
+looper config-local set <key> <value>
+looper config-local unset <key>
+looper config-local edit
+looper config-local migrate
+```
+
+### Events, locks, worktrees, PR, bootstrap, upgrade
+
+```bash
+looper events list <project>
+looper locks list
+looper locks acquire <resource> [--ttl <secs>]
+looper locks release <resource>
+
+looper worktree cleanup [--dry-run] [--project-id <id>] [--retention-days <n>]
+
+looper pr list [-p <project>]
+looper pr show ...
+looper pr status ...
+
+looper bootstrap run                   # First-run checks (gh auth, etc.)
+looper bootstrap status
+
+looper autoupgrade check               # Check GitHub releases
+looper autoupgrade status
+looper autoupgrade upgrade             # Manual upgrade path when available
 ```
 
 ### Output formats
 
-Every command supports `--json` for machine-readable output. The default format is human-friendly tables and trees.
+Prefer `--json` for scripts. Human output is plain text tables / messages.
 
 ---
 
@@ -244,7 +326,7 @@ The daemon searches for `looper.toml` (or `.yaml`, `.json`) in order:
 ### Security features
 
 - Config files with `world-readable` permissions trigger a warning on Unix
-- Secrets in config values are masked in `looper config view` output
+- Prefer `looper config get` / `looper config-local get` for inspecting config; avoid putting secrets in committed files
 - Sensitive environment variables are stripped before agent subprocess execution
 - API authentication via Bearer tokens
 
@@ -365,7 +447,7 @@ cargo clippy --workspace -- -D warnings  # Full lint
 | `looper-webhook` | ~400 | Webhook forwarding, event routing, secret rotation |
 | `looper-infra` | ~600 | Bootstrap, runtime lifecycle, file lock, SIGTERM/SIGINT, notifications |
 | `looperd` | ~50 | Daemon binary entry point · wires 16 crates together |
-| `looper-cli` | ~3,000 | CLI binary, 35+ subcommands, daemon client via reqwest, auto-upgrade |
+| `looper-cli` | ~3,000 | CLI binary (clap), daemon client via reqwest, autoupgrade |
 | `looper-net` | ~3,000 | loopernet cloud server, node registration, claim routing, heartbeat |
 | `diffanchor` | ~400 | Diff parsing, anchor validation for agent patches |
 
@@ -415,13 +497,15 @@ cp target/release/looperd target/release/looper-cli target/release/looper ~/.loc
 
 ## Quick Start
 ```bash
-# Start daemon
+# Start daemon (API on http://127.0.0.1:7391)
 looper daemon start
+looper health
 
-# Add a project
-curl -X POST http://127.0.0.1:8080/api/projects \
-  -H "Content-Type: application/json" \
-  -d '{"name":"my-project","repo_url":"owner/repo","path":"/path/to/repo","default_branch":"main"}'
+# Add a project with a resolvable GitHub repo binding
+looper projects add my-project \
+  --path /path/to/repo \
+  --repo-url owner/repo \
+  --default-branch main
 
 # Label an issue with `looper:plan` to trigger the pipeline
 ```

@@ -116,7 +116,7 @@ Controls the Looper API server binding and behavior.
 ```toml
 [server]
 host = "0.0.0.0"
-port = 8080
+port = 7391
 cors-enabled = true
 allowed-origins = ["https://app.looper.dev"]
 ```

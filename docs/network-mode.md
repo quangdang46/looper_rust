@@ -645,7 +645,7 @@ server {
 
 ### Daemon Configuration (`looperd`)
 
-Network participation is enabled via the `looper-config` system. The daemon mode (`DaemonMode`) defaults to `Local`; set to `Cloud` for network mode. Network join configuration is provided at the CLI level in the `looper-cli` client.
+Network participation is enabled via the `looper-config` system. The daemon mode (`DaemonMode`) defaults to `Local`; set to `Cloud` for network mode. There is currently no primary-surface `looper network *` CLI — configure cloud join via daemon config / loopernet ops, not a Go-era network subcommand.
 
 ### Database Schema
 
