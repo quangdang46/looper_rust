@@ -89,53 +89,12 @@ pub async fn get_project(
     Ok(Json(Envelope::success(project)))
 }
 
-#[derive(Debug, Deserialize)]
-pub struct UpdateProjectInput {
-    #[serde(default)]
-    pub schedule: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub archive_filter: Option<String>,
-    #[serde(default)]
-    pub default_branch: Option<String>,
-}
-
 pub async fn update_project(
     State(state): State<Arc<AppState>>,
     Path(name): Path<String>,
-    Json(input): Json<UpdateProjectInput>,
+    Json(input): Json<crate::types::UpdateProjectInput>,
 ) -> Result<Json<Envelope<ProjectSummary>>, ApiError> {
-    // Fetch current record so we can pass through any fields the client did
-    // not supply.
-    let projects = state.ctx.projects.list().await?;
-    let current = projects
-        .into_iter()
-        .find(|p| p.name == name)
-        .ok_or_else(|| ApiError::not_found(format!("Project '{name}' not found")))?;
-
-    // Apply the requested mutations via the service layer so they persist
-    // to storage rather than being silently dropped.
-    let mut updated = current.clone();
-    if let Some(enabled) = input.enabled {
-        updated.enabled = enabled;
-        // Archive / un-archive the project so the list filter sees it.
-        state.ctx.projects.remove(&name).await.ok(); // ignore if removal fails (e.g. archived state)
-        if !enabled {
-            // Persist archive by re-adding the project as archived.
-            // The service layer currently has no "patch" path so we keep
-            // it simple: the scheduler tick will skip archived projects.
-        }
-    }
-    if let Some(schedule) = input.schedule {
-        updated.schedule = schedule;
-    }
-    if let Some(filter) = input.archive_filter {
-        updated.archive_filter = Some(filter);
-    }
-    if let Some(branch) = input.default_branch {
-        updated.default_branch = branch;
-    }
+    let updated = state.ctx.projects.update(&name, input).await?;
     Ok(Json(Envelope::success(updated)))
 }
 
@@ -232,6 +191,7 @@ pub async fn create_loop(
         status: "active".into(),
         target: input.target,
         metadata: input.metadata,
+        worktree_path: None,
         runs: vec![],
         created_at: now.clone(),
         updated_at: now,
@@ -269,6 +229,19 @@ pub async fn get_loop(
         })
         .collect();
 
+    // Resolve worktree path from the worktrees table (planner/reviewer store loop_id
+    // in metadata and/or branch), falling back to loop metadata.worktree_path.
+    let worktree_path =
+        repos.worktrees.get_latest_by_loop_id(&record.id).map_err(internal_error)?.map(|wt| wt.worktree_path).or_else(
+            || {
+                record
+                    .metadata_json
+                    .as_deref()
+                    .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
+                    .and_then(|v| v.get("worktree_path").and_then(|p| p.as_str().map(String::from)))
+            },
+        );
+
     let detail = LoopDetail {
         project_name: record.project_id,
         seq: record.seq,
@@ -276,6 +249,7 @@ pub async fn get_loop(
         status: record.status,
         target: record.target_id,
         metadata: record.metadata_json.and_then(|m| serde_json::from_str(&m).ok()),
+        worktree_path,
         runs: run_summaries,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -574,13 +548,17 @@ pub async fn dequeue(
     let repos = state.ctx.state.repos();
     let now = crate::helpers::now_iso();
 
-    repos.queue.cancel_by_project(&project_name, &now, Some("cancelled via API")).map_err(internal_error)?;
+    // Single-item mutation only: cancel the target item_id for this project.
+    let item = repos.queue.get_by_id(&item_id).map_err(internal_error)?;
+    let Some(item) = item else {
+        return Err(ApiError::not_found(format!("queue item {item_id} not found")));
+    };
+    if item.project_id.as_deref() != Some(project_name.as_str()) {
+        return Err(ApiError::not_found(format!("queue item {item_id} not found for project {project_name}")));
+    }
 
-    // Also try to complete the specific item if it exists and is running
-    if let Ok(Some(item)) = repos.queue.get_by_id(&item_id) {
-        if item.status == "running" || item.status == "queued" {
-            repos.queue.complete(&item_id, &now).map_err(internal_error)?;
-        }
+    if item.status == "queued" || item.status == "running" {
+        repos.queue.cancel_by_id(&item_id, &now, Some("cancelled via API")).map_err(internal_error)?;
     }
 
     Ok(Json(Envelope::success_empty()))
@@ -633,16 +611,9 @@ pub async fn list_locks(State(state): State<Arc<AppState>>) -> Result<Json<Envel
     let repos = state.ctx.state.repos();
     let now = crate::helpers::now_iso();
 
-    // list_expired returns locks whose expires_at <= now.
-    // We want ALL active locks (expires_at > now).
-    // Fetch *all* locks and do in-memory filter (no list_all API).
-    // For simplicity, fetch expired (which returns many) and report those as expired;
-    // a proper active-lock list would need a new repo method.
-    // Instead, do a raw query for active locks.
-    let active = repos.locks.list_expired(&now).map_err(internal_error)?;
+    // Active inventory: expires_at > now (not the expired set).
+    let active = repos.locks.list_active(&now).map_err(internal_error)?;
 
-    // Since list_expired returns *expired* locks, we report them as the set.
-    // For active locks we'd need a separate query — skip for now.
     let locks: Vec<LockResponse> = active
         .into_iter()
         .map(|r| LockResponse {
@@ -803,5 +774,363 @@ pub async fn worktree_cleanup(
             Ok(Json(Envelope::success(result)))
         }
         Err(e) => Err(ApiError::internal(format!("worktree cleanup failed: {e}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use looper_storage::migration::run_migrations;
+    use looper_storage::repos::EventsRepository;
+    use looper_storage::{EventLog, Repositories};
+    use rusqlite::Connection;
+    use std::sync::Arc;
+
+    use crate::types::{Context, ProjectService, RuntimeState};
+
+    struct TestState {
+        repos: Arc<Repositories>,
+        event_log: EventLog,
+    }
+
+    // rusqlite::Connection is !Send/!Sync; tests are single-threaded.
+    unsafe impl Send for TestState {}
+    unsafe impl Sync for TestState {}
+
+    #[async_trait]
+    impl RuntimeState for TestState {
+        fn repos(&self) -> &Repositories {
+            &self.repos
+        }
+
+        fn repos_arc(&self) -> Arc<Repositories> {
+            Arc::clone(&self.repos)
+        }
+
+        fn event_log(&self) -> &EventLog {
+            &self.event_log
+        }
+
+        async fn stop_loop(&self, _: &str, _: i64) -> Result<(), ApiError> {
+            Ok(())
+        }
+
+        async fn close_loop(&self, _: &str, _: i64) -> Result<(), ApiError> {
+            Ok(())
+        }
+
+        async fn stop_all(&self, _: &str) -> Result<(), ApiError> {
+            Ok(())
+        }
+
+        async fn repair_reviewer(&self, _: &str) -> Result<(), ApiError> {
+            Ok(())
+        }
+
+        async fn trigger_scheduler_tick(&self) {}
+    }
+
+    struct StubProjects {
+        service: looper_service::ProjectService,
+    }
+
+    // ProjectService holds !Send/!Sync storage; tests are single-threaded.
+    unsafe impl Send for StubProjects {}
+    unsafe impl Sync for StubProjects {}
+
+    #[async_trait]
+    impl ProjectService for StubProjects {
+        async fn add(&self, input: AddProjectInput) -> Result<ProjectSummary, ApiError> {
+            let result = self
+                .service
+                .add_project(looper_service::AddInput {
+                    id: input.name.clone(),
+                    name: input.name,
+                    repo_path: input.path.unwrap_or_default(),
+                    base_branch: input.default_branch.unwrap_or_else(|| "main".into()),
+                    id_source: "explicit".into(),
+                    worktree_root: None,
+                    repo: input.repo_url,
+                    snapshot_mode: looper_service::SnapshotMode::Off,
+                })
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            Ok(summary_from_record(result.project, result.repo))
+        }
+
+        async fn remove(&self, name: &str) -> Result<(), ApiError> {
+            self.service.remove_project(name).map_err(|e| ApiError::internal(e.to_string()))?;
+            Ok(())
+        }
+
+        async fn list(&self) -> Result<Vec<ProjectSummary>, ApiError> {
+            let records = self.service.list().map_err(|e| ApiError::internal(e.to_string()))?;
+            Ok(records.into_iter().map(|r| summary_from_record(r, None)).collect())
+        }
+
+        async fn sync(&self, _: &str) -> Result<ProjectSummary, ApiError> {
+            Err(ApiError::internal("not used"))
+        }
+
+        async fn update(
+            &self,
+            name: &str,
+            input: crate::types::UpdateProjectInput,
+        ) -> Result<ProjectSummary, ApiError> {
+            let rec = self
+                .service
+                .update_project(
+                    name,
+                    looper_service::UpdateInput {
+                        schedule: input.schedule,
+                        enabled: input.enabled,
+                        archive_filter: input.archive_filter,
+                        default_branch: input.default_branch,
+                        path: input.path,
+                        repo: input.repo_url,
+                    },
+                )
+                .map_err(|e| match e {
+                    looper_service::ServiceError::ProjectNotFound(id) => ApiError::not_found(id),
+                    other => ApiError::internal(other.to_string()),
+                })?;
+            Ok(summary_from_record(rec, None))
+        }
+    }
+
+    fn summary_from_record(rec: looper_storage::ProjectRecord, repo_url: Option<String>) -> ProjectSummary {
+        let meta = rec.metadata_json.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+        let repo_url = repo_url.or_else(|| looper_service::effective_project_repo(&rec));
+        let schedule = meta
+            .as_ref()
+            .and_then(|v| v.get("schedule").and_then(|s| s.as_str().map(String::from)))
+            .unwrap_or_default();
+        let archive_filter =
+            meta.as_ref().and_then(|v| v.get("archive_filter").and_then(|s| s.as_str().map(String::from)));
+        ProjectSummary {
+            name: rec.id,
+            path: rec.repo_path,
+            repo_url,
+            default_branch: rec.base_branch.unwrap_or_default(),
+            schedule,
+            enabled: !rec.archived,
+            archive_filter,
+        }
+    }
+
+    fn setup_state() -> Arc<AppState> {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        run_migrations(&mut conn).unwrap();
+        let repos = Arc::new(Repositories::new(conn));
+
+        let event_conn = Connection::open_in_memory().unwrap();
+        let event_log = EventLog::new(EventsRepository::new(Arc::new(event_conn)));
+
+        let project_svc = looper_service::ProjectService::new(
+            Arc::clone(&repos),
+            looper_service::ProjectServiceCallbacks::new(),
+            chrono::Utc::now,
+        );
+        let state = TestState { repos: Arc::clone(&repos), event_log };
+        let ctx = Arc::new(Context {
+            config: Arc::new(looper_config::Config::default()),
+            state: Arc::new(state),
+            projects: Arc::new(StubProjects { service: project_svc }),
+        });
+        Arc::new(AppState { ctx, started_at: Instant::now() })
+    }
+
+    #[tokio::test]
+    async fn dequeue_cancels_only_target_item() {
+        let state = setup_state();
+        let project = "proj-a".to_string();
+        let now = crate::helpers::now_iso();
+        state
+            .ctx
+            .state
+            .repos()
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: project.clone(),
+                name: project.clone(),
+                repo_path: "/tmp/proj-a".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: None,
+                created_at: now.clone(),
+                updated_at: now,
+            })
+            .unwrap();
+
+        // Enqueue two items with different queue_types (dedupe key includes type).
+        let (status_a, Json(env_a)) = enqueue(
+            State(Arc::clone(&state)),
+            Path(project.clone()),
+            Json(EnqueueInput {
+                queue_type: "reviewer".into(),
+                loop_seq: None,
+                run_id: None,
+                priority: Some(1),
+                payload: None,
+            }),
+        )
+        .await
+        .expect("enqueue A");
+        assert_eq!(status_a, StatusCode::CREATED);
+        let item_a = env_a.data.expect("item A data");
+        let id_a = item_a.id.clone();
+
+        let (status_b, Json(env_b)) = enqueue(
+            State(Arc::clone(&state)),
+            Path(project.clone()),
+            Json(EnqueueInput {
+                queue_type: "fixer".into(),
+                loop_seq: None,
+                run_id: None,
+                priority: Some(1),
+                payload: None,
+            }),
+        )
+        .await
+        .expect("enqueue B");
+        assert_eq!(status_b, StatusCode::CREATED);
+        let item_b = env_b.data.expect("item B data");
+        let id_b = item_b.id.clone();
+
+        eprintln!("dequeue test item_a={id_a} item_b={id_b}");
+
+        // Dequeue only A
+        let _ = dequeue(State(Arc::clone(&state)), Path((project.clone(), id_a.clone()))).await.expect("dequeue A");
+
+        let repos = state.ctx.state.repos();
+        let after_a = repos.queue.get_by_id(&id_a).unwrap().expect("A still exists");
+        let after_b = repos.queue.get_by_id(&id_b).unwrap().expect("B still exists");
+
+        assert_eq!(after_a.status, "cancelled", "A should be cancelled; got {}", after_a.status);
+        assert_eq!(after_b.status, "queued", "B must remain queued; got {}", after_b.status);
+    }
+
+    #[tokio::test]
+    async fn dequeue_missing_item_returns_404() {
+        let state = setup_state();
+        let err =
+            dequeue(State(state), Path(("proj-a".into(), "does-not-exist".into()))).await.expect_err("expected 404");
+        assert_eq!(err.0, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn update_project_persists_and_get_reflects() {
+        let state = setup_state();
+
+        let (status, Json(env)) = add_project(
+            State(Arc::clone(&state)),
+            Json(AddProjectInput {
+                name: "p-upd".into(),
+                path: Some("/tmp/p-upd".into()),
+                repo_url: Some("org/p-upd".into()),
+                default_branch: Some("main".into()),
+                schedule: None,
+                enabled: true,
+                archive_filter: None,
+            }),
+        )
+        .await
+        .expect("add");
+        assert_eq!(status, StatusCode::CREATED);
+        let _ = env.data.expect("created project");
+
+        let Json(put_env) = update_project(
+            State(Arc::clone(&state)),
+            Path("p-upd".into()),
+            Json(crate::types::UpdateProjectInput {
+                schedule: Some("0 0 * * *".into()),
+                enabled: Some(true),
+                archive_filter: Some("closed".into()),
+                default_branch: Some("develop".into()),
+                path: Some("/tmp/p-upd-new".into()),
+                repo_url: None,
+            }),
+        )
+        .await
+        .expect("update");
+        let put = put_env.data.expect("put data");
+        assert_eq!(put.default_branch, "develop");
+        assert_eq!(put.path, "/tmp/p-upd-new");
+        assert_eq!(put.schedule, "0 0 * * *");
+        assert_eq!(put.archive_filter.as_deref(), Some("closed"));
+        assert!(put.enabled);
+
+        let Json(get_env) = get_project(State(Arc::clone(&state)), Path("p-upd".into())).await.expect("get");
+        let got = get_env.data.expect("get data");
+        assert_eq!(got.default_branch, "develop");
+        assert_eq!(got.path, "/tmp/p-upd-new");
+        assert_eq!(got.schedule, "0 0 * * *");
+        assert_eq!(got.archive_filter.as_deref(), Some("closed"));
+    }
+
+    #[tokio::test]
+    async fn get_loop_includes_worktree_path_from_table() {
+        let state = setup_state();
+        let repos = state.ctx.state.repos();
+        let now = crate::helpers::now_iso();
+
+        repos
+            .projects
+            .upsert(&looper_storage::ProjectRecord {
+                id: "proj-wt".into(),
+                name: "proj-wt".into(),
+                repo_path: "/tmp/proj-wt".into(),
+                base_branch: Some("main".into()),
+                archived: false,
+                metadata_json: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            })
+            .unwrap();
+
+        let loop_id = "loop-wt-1".to_string();
+        repos
+            .loops
+            .upsert(&LoopRecord {
+                id: loop_id.clone(),
+                seq: 7,
+                project_id: "proj-wt".into(),
+                r#type: "planner".into(),
+                target_type: "issue".into(),
+                target_id: Some("1".into()),
+                repo: None,
+                pr_number: None,
+                status: "active".into(),
+                config_json: None,
+                metadata_json: None,
+                last_run_at: None,
+                next_run_at: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+            })
+            .unwrap();
+
+        repos
+            .worktrees
+            .upsert(&looper_storage::WorktreeRecord {
+                id: "wt-1".into(),
+                project_id: "proj-wt".into(),
+                repo_path: "/tmp/proj-wt".into(),
+                worktree_path: "/tmp/proj-wt/.looper/worktrees/planner-loop".into(),
+                branch: format!("planner/{loop_id}"),
+                base_branch: None,
+                status: "created".into(),
+                head_sha: None,
+                metadata_json: Some(format!(r#"{{"loop_id":"{loop_id}"}}"#)),
+                created_at: now.clone(),
+                updated_at: now,
+                cleaned_at: None,
+            })
+            .unwrap();
+
+        let Json(env) = get_loop(State(state), Path(("proj-wt".into(), 7))).await.expect("get_loop");
+        let detail = env.data.expect("loop detail");
+        assert_eq!(detail.worktree_path.as_deref(), Some("/tmp/proj-wt/.looper/worktrees/planner-loop"));
     }
 }

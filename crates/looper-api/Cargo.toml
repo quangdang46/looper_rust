@@ -29,3 +29,7 @@ tokio-stream.workspace = true
 async-trait.workspace = true
 looper-infra = { path = "../looper-infra" }
 futures.workspace = true
+
+[dev-dependencies]
+rusqlite = { workspace = true, features = ["bundled"] }
+tokio = { workspace = true, features = ["full", "test-util", "macros"] }

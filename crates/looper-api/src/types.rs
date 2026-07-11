@@ -75,6 +75,9 @@ pub trait ProjectService: Send + Sync {
 
     /// Sync a project's worktree / PR discovery.
     async fn sync(&self, name: &str) -> Result<ProjectSummary, ApiError>;
+
+    /// Patch mutable project fields and persist them.
+    async fn update(&self, name: &str, input: UpdateProjectInput) -> Result<ProjectSummary, ApiError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +128,24 @@ pub struct AddProjectInput {
     pub enabled: bool,
     #[serde(default)]
     pub archive_filter: Option<String>,
+}
+
+/// Partial project update (PUT /api/projects/{name}).
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct UpdateProjectInput {
+    #[serde(default)]
+    pub schedule: Option<String>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[serde(default)]
+    pub archive_filter: Option<String>,
+    #[serde(default)]
+    pub default_branch: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Explicit GitHub `owner/name` (or github.com URL) for metadata.repo.
+    #[serde(default)]
+    pub repo_url: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -229,6 +250,9 @@ pub struct LoopDetail {
     pub status: String,
     pub target: Option<String>,
     pub metadata: Option<serde_json::Value>,
+    /// Absolute worktree path from the `worktrees` table (when present).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
     pub runs: Vec<RunSummary>,
     pub created_at: String,
     pub updated_at: String,

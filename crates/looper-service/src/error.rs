@@ -35,6 +35,12 @@ pub enum ServiceError {
     #[error("project is managed by config and cannot be removed: {0}")]
     ConfigManagedProject(String),
 
+    /// Project has no resolvable GitHub `owner/name` for gateway / admit-work / discovery.
+    ///
+    /// Message is intentionally actionable (how to set `metadata.repo` or path).
+    #[error("{0}")]
+    ProjectRepoUnresolved(String),
+
     #[error("reviewer auto-merge validation failed: {0}")]
     ReviewerAutoMergeValidation(String),
 

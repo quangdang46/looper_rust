@@ -146,28 +146,17 @@ impl ProjectService {
             input.id.clone()
         };
 
-        // Auto-detect repo (Phase 1c)
-        let repo = if let Some(ref detect_fn) = self.callbacks.detect_repo {
-            match detect_fn(&input.repo_path) {
-                Ok(Some(r)) => Some(r),
-                Ok(None) => {
-                    warnings.push("Could not detect GitHub repo from git remote".into());
-                    None
-                }
-                Err(e) => {
-                    warnings.push(format!("Could not detect GitHub repo: {e}"));
-                    None
-                }
-            }
-        } else {
-            input.repo.clone()
-        };
+        // Auto-detect repo (Phase 1c).
+        // Canonical: explicit `input.repo` (owner/name or github URL) wins;
+        // otherwise call `detect_repo` on the local checkout when wired.
+        let repo = resolve_repo_for_add(&input, &self.callbacks, &mut warnings);
 
         // ── Phase 2: Reviewer Auto-Merge Validation ────────────────────
         // (Stubbed — will be wired when callbacks are available)
         // Not a blocker for Phase 4.
 
         // ── Phase 3: Build Metadata & Upsert ───────────────────────────
+        // Persist `metadata.repo` as GitHub `owner/name` for gh gateway.
 
         let metadata = json!({
             "repo": repo,
@@ -313,6 +302,116 @@ impl ProjectService {
         Ok(active)
     }
 
+    // ── UpdateProject ───────────────────────────────────────────────────
+
+    /// Patch mutable project fields and persist via upsert.
+    ///
+    /// Supported mutations: `default_branch` (base_branch), `enabled` (archived),
+    /// `schedule` / `archive_filter` (stored in `metadata_json`), `path` (repo_path),
+    /// `repo` (metadata.repo — explicit owner/name; re-detect when path changes).
+    pub fn update_project(&self, identifier: &str, input: UpdateInput) -> Result<ProjectRecord> {
+        let now = (self.now)();
+        let now_iso = now.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
+
+        if identifier.is_empty() {
+            return Err(ServiceError::InvalidProjectID("identifier is empty".into()));
+        }
+
+        // Resolve by id first, then by name (including archived so we can re-enable).
+        let project = match self.repos.projects.get_by_id(identifier)? {
+            Some(p) => p,
+            None => {
+                let all = self.repos.projects.list()?;
+                let matches: Vec<_> =
+                    all.iter().filter(|p| p.name.to_lowercase().trim() == identifier.to_lowercase().trim()).collect();
+                if matches.len() == 1 {
+                    matches[0].clone()
+                } else if matches.len() > 1 {
+                    return Err(ServiceError::AmbiguousProjectIdentifier(identifier.to_string()));
+                } else {
+                    return Err(ServiceError::ProjectNotFound(identifier.to_string()));
+                }
+            }
+        };
+
+        let path_changed = input.path.as_ref().is_some_and(|p| p != &project.repo_path);
+        let mut updated = project;
+        if let Some(branch) = input.default_branch {
+            updated.base_branch = Some(branch);
+        }
+        if let Some(path) = input.path {
+            updated.repo_path = path;
+        }
+        if let Some(enabled) = input.enabled {
+            updated.archived = !enabled;
+        }
+
+        // Resolve metadata.repo: explicit repo wins; else re-detect when path changes.
+        let explicit_repo = input.repo.as_ref().and_then(|r| {
+            let t = r.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(normalize_repo_spec(t))
+            }
+        });
+        let detected_repo = if explicit_repo.is_none() && path_changed {
+            if let Some(ref detect_fn) = self.callbacks.detect_repo {
+                match detect_fn(&updated.repo_path) {
+                    Ok(Some(r)) => Some(normalize_repo_spec(&r)),
+                    Ok(None) => {
+                        warn!(
+                            project_id = %updated.id,
+                            "update: could not re-detect GitHub repo after path change"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        warn!(
+                            project_id = %updated.id,
+                            "update: detect_repo failed after path change: {e}"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let new_repo = explicit_repo.or(detected_repo);
+
+        // Merge schedule / archive_filter / repo into metadata_json without dropping keys.
+        let needs_meta_merge = input.schedule.is_some() || input.archive_filter.is_some() || new_repo.is_some();
+        if needs_meta_merge {
+            let mut meta = updated
+                .metadata_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+                .unwrap_or_else(|| json!({}));
+            if !meta.is_object() {
+                meta = json!({});
+            }
+            if let Some(schedule) = input.schedule {
+                meta["schedule"] = json!(schedule);
+            }
+            if let Some(filter) = input.archive_filter {
+                meta["archive_filter"] = json!(filter);
+            }
+            if let Some(repo) = new_repo {
+                meta["repo"] = json!(repo);
+            }
+            updated.metadata_json = Some(meta.to_string());
+        }
+
+        updated.updated_at = now_iso;
+        self.repos.projects.upsert(&updated)?;
+
+        info!(project_id = %updated.id, "project updated");
+        Ok(updated)
+    }
+
     // ── SyncConfigured ──────────────────────────────────────────────────
 
     pub fn sync_configured(&self, cfg: &Config, now: DateTime<Utc>) -> Result<()> {
@@ -337,35 +436,32 @@ impl ProjectService {
             // Check existing
             let existing = self.repos.projects.get_by_id(&project_id)?;
 
-            // Detect repo
+            // Detect repo — prefer fresh detect; preserve existing metadata.repo on failure.
+            let existing_repo = existing.as_ref().and_then(|ex| repo_from_metadata(ex.metadata_json.as_deref()));
             let repo = if let Some(ref detect_fn) = self.callbacks.detect_repo {
                 match detect_fn(&repo_path) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        // Fallback: preserve existing repo metadata
-                        if let Some(ref ex) = existing {
-                            ex.metadata_json
-                                .as_ref()
-                                .and_then(|m| serde_json::from_str::<serde_json::Value>(m).ok())
-                                .and_then(|v| v.get("repo").and_then(|r| r.as_str().map(String::from)))
-                                .or_else(|| {
-                                    warn!(
-                                        project_id = %project_id,
-                                        "could not detect repo and no existing fallback"
-                                    );
-                                    None
-                                })
-                        } else {
+                    Ok(Some(r)) => Some(normalize_repo_spec(&r)),
+                    Ok(None) => {
+                        if existing_repo.is_none() {
                             warn!(
                                 project_id = %project_id,
-                                "could not detect repo for new config project: {e}"
+                                "could not detect repo from git remote and no existing fallback"
                             );
-                            None
                         }
+                        existing_repo
+                    }
+                    Err(e) => {
+                        if existing_repo.is_none() {
+                            warn!(
+                                project_id = %project_id,
+                                "could not detect repo for config project: {e}"
+                            );
+                        }
+                        existing_repo
                     }
                 }
             } else {
-                None
+                existing_repo
             };
 
             let metadata = json!({
@@ -588,6 +684,18 @@ pub struct AddInput {
     pub snapshot_mode: SnapshotMode,
 }
 
+/// Partial update for an existing project. All fields are optional.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateInput {
+    pub schedule: Option<String>,
+    pub enabled: Option<bool>,
+    pub archive_filter: Option<String>,
+    pub default_branch: Option<String>,
+    pub path: Option<String>,
+    /// Explicit GitHub `owner/name` (or URL) → stored as `metadata.repo`.
+    pub repo: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AddResult {
     pub project: ProjectRecord,
@@ -597,6 +705,140 @@ pub struct AddResult {
     pub pending_snapshots: usize,
     pub captured_snapshots: usize,
     pub warnings: Vec<String>,
+}
+
+// ── Repo resolution (shared for admit-work + discovery) ─────────────────
+
+/// Resolve the GitHub `owner/name` for a project.
+///
+/// Canonical sources (in order):
+/// 1. `metadata_json.repo` — preferred; set by detect_repo or explicit `--repo-url`
+/// 2. `repo_path` if it already looks like `owner/name` (not a filesystem path)
+///
+/// Callers that require a repo for GitHub gateway operations (admit-work,
+/// discovery) should use this and fail fast on error rather than silently
+/// skipping.
+pub fn resolve_project_repo(project: &ProjectRecord) -> Result<String> {
+    if let Some(repo) = repo_from_metadata(project.metadata_json.as_deref()) {
+        return Ok(repo);
+    }
+    let rp = project.repo_path.trim();
+    if looks_like_owner_repo(rp) {
+        return Ok(rp.to_string());
+    }
+    Err(ServiceError::ProjectRepoUnresolved(format!(
+        "project '{}' has no resolvable GitHub repo (owner/name). \
+         Set it with `looper projects add --repo-url owner/name` (or pass repo_url on the API), \
+         or ensure local path '{}' is a git checkout whose `remote.origin.url` is a github.com remote \
+         so auto-detect can populate metadata.repo. \
+         Without this, admit-work and discovery cannot call the GitHub gateway.",
+        project.id, project.repo_path
+    )))
+}
+
+/// Best-effort effective repo for list/GET surfaces (no error).
+pub fn effective_project_repo(project: &ProjectRecord) -> Option<String> {
+    resolve_project_repo(project).ok()
+}
+
+/// Extract and normalize `metadata.repo` from a project's metadata_json.
+pub fn repo_from_metadata(metadata_json: Option<&str>) -> Option<String> {
+    let raw = metadata_json?;
+    let v: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let repo = v.get("repo")?;
+    match repo {
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(normalize_repo_spec(s))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Normalize a user-supplied or detected repo to `owner/name` when possible.
+///
+/// Accepts:
+/// - `owner/name`
+/// - `https://github.com/owner/name(.git)`
+/// - `git@github.com:owner/name(.git)`
+pub fn normalize_repo_spec(repo: &str) -> String {
+    let mut s = repo.trim().to_string();
+    if s.ends_with('/') {
+        s.pop();
+    }
+    if let Some(rest) = s.strip_prefix("https://github.com/") {
+        s = rest.to_string();
+    } else if let Some(rest) = s.strip_prefix("http://github.com/") {
+        s = rest.to_string();
+    } else if let Some(rest) = s.strip_prefix("git@github.com:") {
+        s = rest.to_string();
+    }
+    if let Some(stripped) = s.strip_suffix(".git") {
+        s = stripped.to_string();
+    }
+    // Drop trailing path segments beyond owner/name (e.g. /pulls).
+    let parts: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    if parts.len() >= 2 {
+        format!("{}/{}", parts[0], parts[1])
+    } else {
+        s
+    }
+}
+
+/// True when `s` looks like a GitHub `owner/name` slug (not a filesystem path).
+fn looks_like_owner_repo(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || s.starts_with('/') || s.starts_with('.') || s.contains('\\') || s.contains(':') {
+        return false;
+    }
+    let parts: Vec<&str> = s.split('/').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
+}
+
+/// Resolve repo for AddProject: explicit input wins; else detect_repo callback.
+fn resolve_repo_for_add(
+    input: &AddInput,
+    callbacks: &ProjectServiceCallbacks,
+    warnings: &mut Vec<String>,
+) -> Option<String> {
+    if let Some(ref explicit) = input.repo {
+        let trimmed = explicit.trim();
+        if !trimmed.is_empty() {
+            return Some(normalize_repo_spec(trimmed));
+        }
+    }
+
+    if let Some(ref detect_fn) = callbacks.detect_repo {
+        return match detect_fn(&input.repo_path) {
+            Ok(Some(r)) => {
+                let normalized = normalize_repo_spec(&r);
+                if normalized.is_empty() {
+                    warnings.push("Could not detect GitHub repo from git remote".into());
+                    None
+                } else {
+                    Some(normalized)
+                }
+            }
+            Ok(None) => {
+                warnings
+                    .push("Could not detect GitHub repo from git remote — set --repo-url owner/name explicitly".into());
+                None
+            }
+            Err(e) => {
+                warnings.push(format!("Could not detect GitHub repo: {e}. Set --repo-url owner/name explicitly"));
+                None
+            }
+        };
+    }
+
+    None
 }
 
 // ── Validation ──────────────────────────────────────────────────────────
@@ -873,10 +1115,247 @@ mod tests {
     }
 
     #[test]
+    fn test_update_project_persists_mutations() {
+        let repos = repos_setup();
+        let s = svc(repos.clone());
+        s.add_project(AddInput {
+            id: "upd".into(),
+            name: "Upd".into(),
+            repo_path: "/tmp/upd".into(),
+            base_branch: "main".into(),
+            id_source: "explicit".into(),
+            worktree_root: None,
+            repo: Some("org/upd".into()),
+            snapshot_mode: SnapshotMode::Off,
+        })
+        .unwrap();
+
+        let updated = s
+            .update_project(
+                "upd",
+                UpdateInput {
+                    schedule: Some("0 * * * *".into()),
+                    enabled: Some(true),
+                    archive_filter: Some("merged".into()),
+                    default_branch: Some("develop".into()),
+                    path: Some("/tmp/upd-new".into()),
+                    repo: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(updated.base_branch.as_deref(), Some("develop"));
+        assert_eq!(updated.repo_path, "/tmp/upd-new");
+        assert!(!updated.archived);
+
+        let meta: serde_json::Value = serde_json::from_str(updated.metadata_json.as_deref().unwrap()).unwrap();
+        assert_eq!(meta["schedule"], "0 * * * *");
+        assert_eq!(meta["archive_filter"], "merged");
+        // Existing repo key preserved when path changes without detect/explicit
+        assert_eq!(meta["repo"], "org/upd");
+
+        // Reload from storage — GET should reflect PUT
+        let reloaded = repos.projects.get_by_id("upd").unwrap().unwrap();
+        assert_eq!(reloaded.base_branch.as_deref(), Some("develop"));
+        assert_eq!(reloaded.repo_path, "/tmp/upd-new");
+        let meta2: serde_json::Value = serde_json::from_str(reloaded.metadata_json.as_deref().unwrap()).unwrap();
+        assert_eq!(meta2["schedule"], "0 * * * *");
+        assert_eq!(meta2["archive_filter"], "merged");
+    }
+
+    #[test]
+    fn test_update_project_disable_archives() {
+        let repos = repos_setup();
+        let s = svc(repos.clone());
+        s.add_project(AddInput {
+            id: "dis".into(),
+            name: "Dis".into(),
+            repo_path: "/tmp/dis".into(),
+            base_branch: "main".into(),
+            id_source: "explicit".into(),
+            worktree_root: None,
+            repo: None,
+            snapshot_mode: SnapshotMode::Off,
+        })
+        .unwrap();
+
+        let updated = s.update_project("dis", UpdateInput { enabled: Some(false), ..Default::default() }).unwrap();
+        assert!(updated.archived);
+        assert!(s.list().unwrap().is_empty());
+
+        // Re-enable
+        let reenabled = s.update_project("dis", UpdateInput { enabled: Some(true), ..Default::default() }).unwrap();
+        assert!(!reenabled.archived);
+        assert_eq!(s.list().unwrap().len(), 1);
+    }
+
+    #[test]
     fn test_remove_empty_id() {
         let repos = repos_setup();
         let s = svc(repos);
         let err = s.remove_project("").unwrap_err();
         assert!(matches!(err, ServiceError::InvalidProjectID(_)));
+    }
+
+    // ── Repo metadata contract ───────────────────────────────────────
+
+    #[test]
+    fn test_detect_repo_mock_sets_metadata_repo() {
+        let repos = repos_setup();
+        let mut callbacks = ProjectServiceCallbacks::new();
+        callbacks.detect_repo = Some(Arc::new(|path: &str| {
+            assert_eq!(path, "/tmp/my-checkout");
+            Ok(Some("acme/widget".into()))
+        }));
+        let s = ProjectService::new(repos.clone(), callbacks, Utc::now);
+        let result = s
+            .add_project(AddInput {
+                id: "widget".into(),
+                name: "Widget".into(),
+                repo_path: "/tmp/my-checkout".into(),
+                base_branch: "main".into(),
+                id_source: "explicit".into(),
+                worktree_root: None,
+                repo: None,
+                snapshot_mode: SnapshotMode::Off,
+            })
+            .unwrap();
+
+        assert_eq!(result.repo.as_deref(), Some("acme/widget"));
+        let stored = repos.projects.get_by_id("widget").unwrap().unwrap();
+        assert_eq!(repo_from_metadata(stored.metadata_json.as_deref()).as_deref(), Some("acme/widget"));
+        assert_eq!(resolve_project_repo(&stored).unwrap(), "acme/widget");
+    }
+
+    #[test]
+    fn test_explicit_repo_wins_over_detect() {
+        let repos = repos_setup();
+        let mut callbacks = ProjectServiceCallbacks::new();
+        callbacks.detect_repo = Some(Arc::new(|_: &str| Ok(Some("detected/wrong".into()))));
+        let s = ProjectService::new(repos.clone(), callbacks, Utc::now);
+        let result = s
+            .add_project(AddInput {
+                id: "proj".into(),
+                name: "P".into(),
+                repo_path: "/tmp/p".into(),
+                base_branch: "main".into(),
+                id_source: "explicit".into(),
+                worktree_root: None,
+                repo: Some("https://github.com/acme/explicit.git".into()),
+                snapshot_mode: SnapshotMode::Off,
+            })
+            .unwrap();
+        assert_eq!(result.repo.as_deref(), Some("acme/explicit"));
+        let stored = repos.projects.get_by_id("proj").unwrap().unwrap();
+        assert_eq!(resolve_project_repo(&stored).unwrap(), "acme/explicit");
+    }
+
+    #[test]
+    fn test_resolve_project_repo_without_repo_errors_cleanly() {
+        let project = ProjectRecord {
+            id: "lonely".into(),
+            name: "Lonely".into(),
+            repo_path: "/tmp/no-remote".into(),
+            base_branch: Some("main".into()),
+            archived: false,
+            metadata_json: Some(r#"{"repo":null,"source":"api"}"#.into()),
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
+        };
+        let err = resolve_project_repo(&project).unwrap_err();
+        match err {
+            ServiceError::ProjectRepoUnresolved(msg) => {
+                assert!(msg.contains("lonely"), "message should name the project: {msg}");
+                assert!(
+                    msg.contains("repo-url") || msg.contains("metadata.repo") || msg.contains("owner/name"),
+                    "message should be actionable: {msg}"
+                );
+            }
+            other => panic!("expected ProjectRepoUnresolved, got {other:?}"),
+        }
+        assert!(effective_project_repo(&project).is_none());
+    }
+
+    #[test]
+    fn test_resolve_project_repo_falls_back_to_owner_name_path() {
+        let project = ProjectRecord {
+            id: "slug".into(),
+            name: "Slug".into(),
+            repo_path: "acme/slug-repo".into(),
+            base_branch: None,
+            archived: false,
+            metadata_json: None,
+            created_at: "2026-01-01T00:00:00.000Z".into(),
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
+        };
+        assert_eq!(resolve_project_repo(&project).unwrap(), "acme/slug-repo");
+    }
+
+    #[test]
+    fn test_normalize_repo_spec_variants() {
+        assert_eq!(normalize_repo_spec("owner/name"), "owner/name");
+        assert_eq!(normalize_repo_spec("https://github.com/owner/name.git"), "owner/name");
+        assert_eq!(normalize_repo_spec("git@github.com:owner/name.git"), "owner/name");
+        assert_eq!(normalize_repo_spec("  owner/name  "), "owner/name");
+    }
+
+    #[test]
+    fn test_update_project_explicit_repo_sets_metadata() {
+        let repos = repos_setup();
+        let s = svc(repos.clone());
+        s.add_project(AddInput {
+            id: "repo-upd".into(),
+            name: "RepoUpd".into(),
+            repo_path: "/tmp/repo-upd".into(),
+            base_branch: "main".into(),
+            id_source: "explicit".into(),
+            worktree_root: None,
+            repo: None,
+            snapshot_mode: SnapshotMode::Off,
+        })
+        .unwrap();
+
+        let updated = s
+            .update_project(
+                "repo-upd",
+                UpdateInput { repo: Some("https://github.com/acme/updated.git".into()), ..Default::default() },
+            )
+            .unwrap();
+        assert_eq!(repo_from_metadata(updated.metadata_json.as_deref()).as_deref(), Some("acme/updated"));
+        assert_eq!(resolve_project_repo(&updated).unwrap(), "acme/updated");
+    }
+
+    #[test]
+    fn test_update_path_redetects_repo() {
+        let repos = repos_setup();
+        let mut callbacks = ProjectServiceCallbacks::new();
+        callbacks.detect_repo =
+            Some(Arc::new(
+                |path: &str| {
+                    if path == "/tmp/new-checkout" {
+                        Ok(Some("acme/new-repo".into()))
+                    } else {
+                        Ok(None)
+                    }
+                },
+            ));
+        let s = ProjectService::new(repos.clone(), callbacks, Utc::now);
+        s.add_project(AddInput {
+            id: "repath".into(),
+            name: "Repath".into(),
+            repo_path: "/tmp/old".into(),
+            base_branch: "main".into(),
+            id_source: "explicit".into(),
+            worktree_root: None,
+            repo: Some("acme/old-repo".into()),
+            snapshot_mode: SnapshotMode::Off,
+        })
+        .unwrap();
+
+        let updated = s
+            .update_project("repath", UpdateInput { path: Some("/tmp/new-checkout".into()), ..Default::default() })
+            .unwrap();
+        assert_eq!(updated.repo_path, "/tmp/new-checkout");
+        assert_eq!(repo_from_metadata(updated.metadata_json.as_deref()).as_deref(), Some("acme/new-repo"));
     }
 }

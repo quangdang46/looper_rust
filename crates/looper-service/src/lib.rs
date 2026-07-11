@@ -29,7 +29,8 @@ pub use loop_service::{
     CreateInput, LoopService, PauseInput, PauseResult, TerminateInput, TerminateResult, TransitionInput,
 };
 pub use project_service::{
-    AddInput, AddResult, BranchProtection, CallbackResult, ProjectService, ProjectServiceCallbacks, PullRequestEntry,
-    RepositorySettings, SnapshotMode, WorktreeEntry,
+    effective_project_repo, normalize_repo_spec, repo_from_metadata, resolve_project_repo, AddInput, AddResult,
+    BranchProtection, CallbackResult, ProjectService, ProjectServiceCallbacks, PullRequestEntry, RepositorySettings,
+    SnapshotMode, UpdateInput, WorktreeEntry,
 };
 pub use run_service::{CompleteInput, RecordStepInput, RunService, StartInput};

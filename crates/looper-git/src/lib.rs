@@ -24,7 +24,7 @@ pub mod safety;
 pub mod types;
 
 pub use error::{GitError, ProtectedBranchError, RemoteHeadChangedError, Result};
-pub use gateway::Gateway;
+pub use gateway::{parse_github_repo, Gateway};
 pub use safety::{assert_writable_branch, validate_worktree_path, SafetyCheckInput};
 pub use types::{
     build_worktree_directory_name, sanitize_branch_name, CheckoutMode, CleanupWorktreeInput, CommitInput, CommitResult,

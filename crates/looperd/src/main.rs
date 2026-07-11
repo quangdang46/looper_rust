@@ -300,15 +300,8 @@ impl ProjectServiceTrait for DaemonProjectService {
             snapshot_mode: looper_service::SnapshotMode::Async,
         };
         let result = self.service.add_project(service_input).map_err(|e| ApiError::internal(e.to_string()))?;
-        Ok(ProjectSummary {
-            name: result.project.id,
-            path: result.project.repo_path.clone(),
-            repo_url: result.repo,
-            default_branch: result.project.base_branch.unwrap_or_default(),
-            schedule: String::new(),
-            enabled: !result.project.archived,
-            archive_filter: None,
-        })
+        // Surface effective repo (metadata.repo / owner-name path fallback).
+        Ok(project_record_to_summary(result.project))
     }
 
     async fn remove(&self, name: &str) -> Result<(), ApiError> {
@@ -326,25 +319,74 @@ impl ProjectServiceTrait for DaemonProjectService {
         let rec = records.into_iter().find(|r| r.id == name).ok_or_else(|| ApiError::not_found(name))?;
         Ok(project_record_to_summary(rec))
     }
+
+    async fn update(&self, name: &str, input: looper_api::UpdateProjectInput) -> Result<ProjectSummary, ApiError> {
+        let service_input = looper_service::UpdateInput {
+            schedule: input.schedule,
+            enabled: input.enabled,
+            archive_filter: input.archive_filter,
+            default_branch: input.default_branch,
+            path: input.path,
+            repo: input.repo_url,
+        };
+        let rec = self.service.update_project(name, service_input).map_err(|e| match e {
+            looper_service::ServiceError::ProjectNotFound(id) => ApiError::not_found(id),
+            looper_service::ServiceError::AmbiguousProjectIdentifier(id) => {
+                ApiError::bad_request(format!("ambiguous project identifier: {id}"))
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+        Ok(project_record_to_summary(rec))
+    }
 }
 
-/// Convert a ProjectRecord into the API's ProjectSummary, extracting the
-/// repo_url from the metadata_json payload (stored as `{"repo": ...}`).
+/// Convert a ProjectRecord into the API's ProjectSummary, surfacing the
+/// effective GitHub `owner/name` (metadata.repo, with owner/name path fallback)
+/// and optional schedule / archive_filter from metadata_json.
 fn project_record_to_summary(rec: ProjectRecord) -> ProjectSummary {
-    let repo_url = rec
-        .metadata_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| v.get("repo").and_then(|r| r.as_str().map(String::from)));
+    let repo_url = looper_service::effective_project_repo(&rec);
+    let meta = rec.metadata_json.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+    let schedule =
+        meta.as_ref().and_then(|v| v.get("schedule").and_then(|s| s.as_str().map(String::from))).unwrap_or_default();
+    let archive_filter = meta.as_ref().and_then(|v| v.get("archive_filter").and_then(|s| s.as_str().map(String::from)));
     ProjectSummary {
         name: rec.id,
         path: rec.repo_path.clone(),
         repo_url,
         default_branch: rec.base_branch.unwrap_or_default(),
-        schedule: String::new(),
+        schedule,
         enabled: !rec.archived,
-        archive_filter: None,
+        archive_filter,
     }
+}
+
+/// Sync detect of GitHub `owner/name` from a local checkout's `remote.origin.url`.
+/// Used as the ProjectService `detect_repo` callback on project add/sync.
+fn detect_github_repo_sync(repo_path: &str) -> looper_service::CallbackResult<Option<String>> {
+    if repo_path.is_empty() {
+        return Ok(None);
+    }
+    let path = std::path::Path::new(repo_path);
+    if !path.is_dir() {
+        return Ok(None);
+    }
+    let output = std::process::Command::new("git")
+        .args(["config", "--get", "remote.origin.url"])
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| format!("git config --get remote.origin.url failed for '{repo_path}': {e}"))?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let url = String::from_utf8_lossy(&output.stdout);
+    Ok(looper_git::parse_github_repo(url.trim()))
+}
+
+/// Build ProjectServiceCallbacks with git-backed detect_repo (and empty other hooks).
+fn project_service_callbacks() -> looper_service::ProjectServiceCallbacks {
+    let mut callbacks = looper_service::ProjectServiceCallbacks::new();
+    callbacks.detect_repo = Some(Arc::new(|repo_path: &str| detect_github_repo_sync(repo_path)));
+    callbacks
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +582,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         event_log: EventLog::new(EventsRepository::new(Arc::new(open_db(&db_path)?))),
         scheduler: Some(Arc::clone(&scheduler)),
     });
-    let project_svc = ProjectService::new(Arc::clone(&repos), looper_service::ProjectServiceCallbacks::new(), Utc::now);
+    let project_svc = ProjectService::new(Arc::clone(&repos), project_service_callbacks(), Utc::now);
     let projects = Arc::new(DaemonProjectService { service: project_svc });
     let ctx = Arc::new(Context { config: Arc::new(config.clone()), state, projects });
 

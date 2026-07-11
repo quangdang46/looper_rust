@@ -41,37 +41,19 @@ pub fn execute_scheduler_tick(scheduler: &Scheduler, ctx: &Context) -> TickSumma
         summary.projects_processed += 1;
 
         // Resolve the GitHub repo identifier for discovery.
-        // `gh` requires owner/repo format. repo_path is the local clone
-        // path (used by git worktree operations) — we must use
-        // metadata_json["repo"] (or fall back to repo_path when it's
-        // already in owner/repo form) for GitHub calls.
-        let mut repo = String::new();
-        if let Some(meta) = project.metadata_json.as_deref() {
-            let quoted = "\"repo\":";
-            if let Some(pos) = meta.find(quoted) {
-                let after = &meta[pos + quoted.len()..].trim_start();
-                let trimmed = after.trim_start_matches(|c: char| c.is_whitespace());
-                if let Some(val_start) = trimmed.strip_prefix('"') {
-                    if let Some(val_end) = val_start.find('"') {
-                        let val = &val_start[..val_end];
-                        if !val.is_empty() {
-                            repo = val.to_string();
-                        }
-                    }
-                }
+        // `gh` requires owner/repo format. Canonical: metadata.repo, else
+        // repo_path when it is already owner/name (shared with admit-work).
+        let repo = match looper_service::resolve_project_repo(project) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    project_id = %project.id,
+                    "skipping discovery: {e}"
+                );
+                summary.discovery_errors.push(format!("{}: {e}", project.id));
+                continue;
             }
-        }
-        if repo.is_empty() {
-            // Fall back to repo_path if it looks like a GitHub spec
-            // (contains '/' but not a filesystem path).
-            let rp = project.repo_path.as_str();
-            if !rp.is_empty() && rp.contains('/') && !rp.starts_with('/') && !rp.starts_with('.') {
-                repo = rp.to_string();
-            }
-        }
-        if repo.is_empty() {
-            continue;
-        }
+        };
 
         if scheduler.planner_discovery_enabled {
             if let Some(ref planner) = scheduler.handlers.planner {
