@@ -21,6 +21,8 @@ use looper_config::types::DisclosureConfig;
 use looper_git::types::{CheckoutMode, CleanupWorktreeInput, CreateWorktreeInput};
 use looper_git::{build_worktree_directory_name, Gateway as GitGateway};
 
+use crate::fixer_handoff::{ensure_fixer_queue_item, should_enqueue_fixer, FixerEnqueueContext};
+use crate::merge_watch::pr_has_failing_checks;
 use crate::reviewer_criteria;
 use crate::reviewer_criteria::{DefaultVerifier, DiffFile, PRDiff};
 use crate::types::{reviewer_steps, spec_labels, SpecPhase};
@@ -703,12 +705,18 @@ impl Reviewer {
                                     cwd: ".".to_string(),
                                 });
 
-                                // Transition spec-phase label based on review outcome
+                                // Transition spec-phase label based on review outcome; collect
+                                // CI / review_decision for fixer handoff.
+                                let mut review_decision: Option<String> = None;
+                                let mut has_failing_required_checks = false;
                                 if let Ok(pr) = gw.view_pull_request(ViewPullRequestInput {
                                     repo: repo_path.clone(),
                                     pr_number: pr_num,
                                     cwd: ".".to_string(),
                                 }) {
+                                    review_decision = Some(pr.review_decision.clone());
+                                    has_failing_required_checks = pr_has_failing_checks(&pr);
+
                                     let has_spec_reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
                                     if has_spec_reviewing {
                                         let target =
@@ -730,14 +738,70 @@ impl Reviewer {
                                             );
                                         }
                                         tracing::info!("Reviewer: PR #{} spec transitioned to {}", pr_num, target);
-                                    } else {
-                                        // Not a spec PR — code implementation PR.
-                                        // PR is ready for human review — no auto-merge.
+                                    } else if !has_issues && !has_failing_required_checks {
+                                        // Not a spec PR — clean implementation review.
                                         tracing::info!(
                                             "Reviewer: PR #{} approved — ready for human review and manual merge",
                                             pr_num
                                         );
                                     }
+                                }
+
+                                // Reviewer → Fixer handoff: enqueue deduped fixer on issues / CI / CR.
+                                let decision = should_enqueue_fixer(&FixerEnqueueContext {
+                                    has_criteria_issues: has_issues,
+                                    review_decision: review_decision.clone(),
+                                    has_failing_required_checks,
+                                });
+                                if decision.should_enqueue() {
+                                    let project_id = item.project_id.as_deref().unwrap_or("");
+                                    if project_id.is_empty() {
+                                        tracing::warn!(
+                                            pr = pr_num,
+                                            reason = decision.reason(),
+                                            "Reviewer: cannot enqueue fixer — missing project_id"
+                                        );
+                                    } else if let Ok(guard) = self.repos.0.lock() {
+                                        match ensure_fixer_queue_item(
+                                            &guard,
+                                            project_id,
+                                            item.repo.as_deref(),
+                                            pr_num,
+                                            decision.reason(),
+                                        ) {
+                                            Ok(result) => {
+                                                tracing::info!(
+                                                    pr = pr_num,
+                                                    reason = decision.reason(),
+                                                    loop_id = %result.loop_id,
+                                                    queue_id = %result.queue_item.id,
+                                                    dedupe_key = %result.dedupe_key,
+                                                    is_new = result.is_new,
+                                                    "Reviewer: enqueued fixer queue item"
+                                                );
+                                                // Optional signal label for discovery / operators.
+                                                let _ = gw.add_issue_labels(IssueLabelsInput {
+                                                    repo: repo_path.clone(),
+                                                    issue_number: pr_num,
+                                                    labels: vec![spec_labels::NEEDS_FIX.to_string()],
+                                                    cwd: ".".to_string(),
+                                                });
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    pr = pr_num,
+                                                    reason = decision.reason(),
+                                                    "Reviewer: failed to enqueue fixer: {e}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    tracing::info!(
+                                        pr = pr_num,
+                                        reason = decision.reason(),
+                                        "Reviewer: not enqueuing fixer"
+                                    );
                                 }
                             }
                         }

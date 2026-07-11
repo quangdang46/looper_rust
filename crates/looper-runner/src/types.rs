@@ -46,6 +46,8 @@ pub mod spec_labels {
     pub const SPEC_READY: &str = "looper:spec-ready";
     /// Specification review found issues needing human intervention.
     pub const NEEDS_HUMAN: &str = "looper:needs-human";
+    /// Implementation PR needs automated fixer (criteria fail / CI red / CHANGES_REQUESTED).
+    pub const NEEDS_FIX: &str = "looper:needs-fix";
 }
 
 /// Phase of a spec-PR determined by its current labels.
