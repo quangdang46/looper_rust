@@ -1,21 +1,44 @@
-<p align="center">
-  <img src="looper_rust_illustration.webp" alt="looper" width="720">
-</p>
+# looper — Autonomous AI Dev Team for Your GitHub Repos
 
-<p align="center">
-  <b>Autonomous AI Dev Team for Your GitHub Repos.</b>
-</p>
+<div align="center">
+  <img src="looper_rust_illustration.webp" alt="looper — Autonomous AI Dev Team for Your GitHub Repos">
+</div>
 
-<p align="center">
-  <a href="#"><img src="https://img.shields.io/github/v/release/quangdang46/looper_rust?logo=github&label=release" alt="Release"></a>
-  <a href="#"><img src="https://img.shields.io/github/actions/workflow/status/quangdang46/looper_rust/ci.yml?branch=main&logo=github&label=CI" alt="CI"></a>
-  <a href="#"><img src="https://img.shields.io/badge/license-MIT-green" alt="MIT"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Rust-37K%20LOC-orange" alt="LOC"></a>
-</p>
+<div align="center">
+
+![Release](https://img.shields.io/github/v/release/quangdang46/looper_rust?logo=github&label=release)
+![CI](https://img.shields.io/github/actions/workflow/status/quangdang46/looper_rust/ci.yml?branch=main&logo=github&label=CI)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
+![Rust](https://img.shields.io/badge/Rust-37K%20LOC-orange)
+
+</div>
+
+**Autonomous AI Dev Team for Your GitHub Repos.**  
+Monitor repos, plan features, write code, review PRs, and merge — all automated via 5 agent roles. Worktree isolation, multi-vendor support, REST API + daemon.
+
+<div align="center">
 
 ```bash
 curl -fsSL "https://github.com/quangdang46/looper_rust/releases/latest/download/install.sh" | bash
 ```
+
+</div>
+
+---
+
+## 🤖 Agent Quickstart (Daemon Mode)
+
+```bash
+# Start the daemon
+looper daemon start
+
+# Add a project
+looper projects add my-project --path /path/to/repo --repo-url owner/repo
+
+# Label a GitHub issue `looper:plan` — the loop begins
+```
+
+**Daemon mode:** runs in background, polls GitHub for `looper:plan` issues, orchestrates Plan → Review → Work → Fix → Merge cycle automatically.
 
 ---
 
