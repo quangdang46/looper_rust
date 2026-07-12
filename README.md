@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="looper_rust_illustration.png" alt="looper" width="720">
+  <img src="looper_rust_illustration.webp" alt="looper" width="720">
 </p>
 
 <p align="center">
