@@ -31,6 +31,7 @@ async-trait.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 rusqlite.workspace = true
 nix = { workspace = true, features = ["process"] }
+treehouse-core = { workspace = true }
 rust-embed = "8"
 mime_guess = "2"
 axum = { workspace = true }

@@ -78,6 +78,9 @@ futures = "0.3"
 tokio-stream = "0.1"
 async-trait = "0.1"
 
+# Treehouse (worktree pool)
+treehouse-core = { path = "../treehouse_rust/crates/treehouse-core" }
+
 # Unix process group signals
 nix = "0.29"
 
