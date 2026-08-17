@@ -41,70 +41,6 @@ use looper_storage::{repos::events::EventsRepository, run_migrations, EventLog, 
 use rusqlite::Connection;
 use uuid::Uuid;
 
-/// Remove stale worktree directories that weren't cleaned up by their runners.
-fn cleanup_stale_worktrees(
-    max_keep: usize,
-    repos: Option<&std::sync::Arc<std::sync::Mutex<looper_storage::Repositories>>>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Collect worktree roots from DB projects
-    let worktree_roots: Vec<String> = if let Some(repos_arc) = repos {
-        if let Ok(guard) = repos_arc.lock() {
-            if let Ok(projects) = guard.projects.list() {
-                projects
-                    .iter()
-                    .filter(|p| !p.repo_path.is_empty())
-                    .map(|p| format!("{}/.looper/worktrees", p.repo_path))
-                    .collect()
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
-    // Also scan CWD for backward compatibility
-    let mut dirs_to_scan = worktree_roots.clone();
-    dirs_to_scan.push(".".to_string());
-
-    let patterns = &["review-*", "planner-*", "worker-*"];
-    for scan_dir in &dirs_to_scan {
-        let dir = std::path::Path::new(scan_dir);
-        if !dir.exists() || !dir.is_dir() {
-            continue;
-        }
-        for pattern in patterns {
-            let pat = *pattern;
-            let mut entries: Vec<_> = std::fs::read_dir(dir)?
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_dir())
-                .filter(|e| e.file_name().to_string_lossy().starts_with(&pat[..pat.len() - 2]))
-                .collect();
-            entries.sort_by_key(|e| std::fs::metadata(e.path()).ok().and_then(|m| m.modified().ok()));
-            if entries.len() > max_keep {
-                let to_remove = entries.len() - max_keep;
-                tracing::info!(
-                    "Cleaning up {} stale {} worktrees in {} (keeping {} newest)",
-                    to_remove,
-                    pattern,
-                    scan_dir,
-                    max_keep
-                );
-                for entry in entries.iter().take(to_remove) {
-                    let path = entry.path();
-                    let _ = std::process::Command::new("git")
-                        .args(["worktree", "remove", "--force", &path.to_string_lossy()])
-                        .current_dir(scan_dir)
-                        .output();
-                    let _ = std::fs::remove_dir_all(&path);
-                }
-            }
-        }
-    }
-    Ok(())
-}
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
@@ -448,10 +384,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     .map_err(|e| format!("config load: {e}"))?;
 
-    // Clean up stale worktree directories left by previous runs
-    cleanup_stale_worktrees(5, None).unwrap_or_else(|e| {
-        eprintln!("worktree cleanup warning: {e}");
-    });
+    // Worktree cleanup is now handled by pool.gc() during pool initialization (see below)
 
     // Clean up stale agent processes that may have survived a daemon crash
     agent_cleanup::kill_stale_agent_processes();
@@ -737,10 +670,7 @@ async fn perform_graceful_shutdown(
         }
     }
 
-    // 5. Clean stale worktrees
-    let _ = cleanup_stale_worktrees(0, None);
-
-    // 6. Flush WAL
+    // 5. Flush WAL — worktree cleanup handled by pool.gc() on next startup
     if let Ok(conn) = Connection::open(resolve_db_path(&runtime.config.clone())) {
         let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
         drop(conn);
