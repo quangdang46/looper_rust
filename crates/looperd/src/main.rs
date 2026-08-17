@@ -146,6 +146,7 @@ struct DaemonState {
     repos: Arc<Repositories>,
     event_log: EventLog,
     scheduler: Option<Arc<Scheduler>>,
+    pools: std::sync::Mutex<std::collections::HashMap<String, Arc<looper_agent::pool::LooperPool>>>,
 }
 
 // rusqlite::Connection uses RefCell internally (!Sync), making Arc<Repositories>
@@ -171,13 +172,29 @@ impl RuntimeState for DaemonState {
         &self.event_log
     }
 
-    async fn stop_loop(&self, _project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
+    async fn stop_loop(&self, project_name: &str, loop_seq: i64) -> Result<(), ApiError> {
         let rec = self
             .repos
             .loops
             .get_by_seq(loop_seq)
             .map_err(|e| ApiError::internal(format!("get loop: {e}")))?
             .ok_or_else(|| ApiError::not_found(format!("loop seq={loop_seq}")))?;
+
+        // Release worktree from pool if available
+        if let Ok(Some(wt)) = self.repos.worktrees.get_latest_by_loop_id(&rec.id) {
+            if let Ok(pools) = self.pools.lock() {
+                if let Some(pool) = pools.get(project_name) {
+                    if let Err(e) = pool.release(std::path::Path::new(&wt.worktree_path)) {
+                        tracing::warn!(
+                            worktree = %wt.worktree_path,
+                            error = %e,
+                            "failed to release worktree from pool"
+                        );
+                    }
+                }
+            }
+        }
+
         let finished = now_iso();
         // UPDATE status only — avoid INSERT OR REPLACE cascading queue deletes.
         self.repos
@@ -460,6 +477,49 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     let repos = Arc::new(Repositories::open(&db_path)?);
 
+    // Initialize worktree pools for each project
+    let mut pools_map = std::collections::HashMap::new();
+    if let Ok(projects_list) = repos.projects.list() {
+        for proj in &projects_list {
+            if !proj.repo_path.is_empty() {
+                let pool_config = config
+                    .pool
+                    .as_ref()
+                    .map(|p| looper_agent::pool::PoolConfig {
+                        max_trees: p.max_trees,
+                        lock_timeout_secs: p.lock_timeout_secs,
+                        gc_interval_secs: p.gc_interval_secs,
+                    })
+                    .unwrap_or_default();
+                let pool = looper_agent::pool::LooperPool::new(
+                    std::path::Path::new(&proj.repo_path),
+                    proj.metadata_json.as_ref().and_then(|m| {
+                        serde_json::from_str::<serde_json::Value>(m)
+                            .ok()
+                            .and_then(|v| v.get("repo_url").and_then(|u| u.as_str()).map(String::from))
+                    }),
+                    pool_config,
+                );
+                // Run GC on existing pools to reclaim expired leases
+                match pool.gc() {
+                    Ok(gc) if gc.reclaimed > 0 => tracing::info!(
+                        project = %proj.id,
+                        reclaimed = gc.reclaimed,
+                        remaining = gc.remaining,
+                        "pool GC reclaimed worktrees on startup"
+                    ),
+                    Err(e) => tracing::warn!(
+                        project = %proj.id,
+                        error = %e,
+                        "pool GC failed on startup"
+                    ),
+                    _ => {}
+                }
+                pools_map.insert(proj.id.clone(), std::sync::Arc::new(pool));
+            }
+        }
+    }
+
     cleanup_stale_agent_logs();
 
     // Recover orphaned agent executions from DB
@@ -585,6 +645,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         repos: Arc::clone(&repos),
         event_log: EventLog::new(EventsRepository::new(Arc::new(open_db(&db_path)?))),
         scheduler: Some(Arc::clone(&scheduler)),
+        pools: std::sync::Mutex::new(pools_map),
     });
     let project_svc = ProjectService::new(Arc::clone(&repos), project_service_callbacks(), Utc::now);
     let projects = Arc::new(DaemonProjectService { service: project_svc });
