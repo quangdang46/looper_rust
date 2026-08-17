@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web dashboard (React+Vite+TypeScript SPA) ported from Go original
 - Dashboard API compatibility routes (flat `/api/loops`, `/api/status`)
 - Takeover feature: single-PR focus mode (CLI + API + storage)
+- Treehouse-core integration: bounded worktree pools with lease TTL
+- PoolConfig for worktree pool configuration (`[pool]` section)
 - Agent skills ported from Go (looper skill, pr-takeover skill)
 - PR template and code review checklist
 - Pre-commit hook and verify script
@@ -18,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - CLI `takeover` command now functional (was hidden stub)
+- Worktree cleanup delegated to treehouse-core pool.gc()
+- stop_loop now releases worktrees from pool
 
 ## [0.1.0] - 2026-08-17
 
