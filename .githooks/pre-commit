@@ -1,0 +1,21 @@
+#!/bin/bash
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+if ! cargo fmt --check --quiet 2>/dev/null; then
+    echo "❌ Code is not formatted. Run 'cargo fmt' to fix."
+    cargo fmt
+    echo "✅ Code has been auto-formatted."
+    echo "Please review and re-stage your changes."
+    exit 1
+fi
+
+# Run clippy
+if ! cargo clippy --lib -p looper-types -p looper-storage -p looper-api -p looper-cli -- -D warnings 2>/dev/null; then
+    echo "❌ Clippy warnings found. Please fix them."
+    exit 1
+fi
+
+echo "✅ Pre-commit checks passed."
