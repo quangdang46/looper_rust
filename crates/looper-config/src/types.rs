@@ -31,6 +31,7 @@ pub struct Config {
     pub instructions: Option<InstructionsConfig>,
     pub roles: Option<RolesConfig>,
     pub dispatch: Option<DispatchConfig>,
+    pub pool: Option<PoolConfig>,
     #[serde(default)]
     pub projects: Vec<ProjectConfig>,
 }
@@ -538,6 +539,27 @@ impl Default for DispatchConfig {
             autonomous_delay_seconds: 1800,
             slash_commands: vec!["/plan".into(), "/implement".into()],
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pool (worktree pool via treehouse-core)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct PoolConfig {
+    /// Maximum worktrees per project (default: 16).
+    pub max_trees: u32,
+    /// File lock timeout in seconds (default: 10).
+    pub lock_timeout_secs: u64,
+    /// Background GC interval in seconds (default: 300 = 5 min).
+    pub gc_interval_secs: u64,
+}
+
+impl Default for PoolConfig {
+    fn default() -> Self {
+        Self { max_trees: 16, lock_timeout_secs: 10, gc_interval_secs: 300 }
     }
 }
 

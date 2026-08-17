@@ -59,6 +59,7 @@ pub struct PartialConfig {
     pub instructions: Option<PartialInstructionsConfig>,
     pub roles: Option<PartialRolesConfig>,
     pub dispatch: Option<PartialDispatchConfig>,
+    pub pool: Option<crate::types::PoolConfig>,
     #[serde(default)]
     pub projects: Option<Vec<PartialProjectConfig>>,
 }
@@ -696,6 +697,7 @@ impl From<PartialConfig> for Config {
             instructions: partial.instructions.map(Into::into),
             roles: partial.roles.map(Into::into),
             dispatch: partial.dispatch.map(Into::into),
+            pool: partial.pool,
             projects: partial.projects.map(|v| v.into_iter().map(Into::into).collect()).unwrap_or_default(),
         }
     }

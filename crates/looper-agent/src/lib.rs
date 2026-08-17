@@ -20,6 +20,7 @@ pub mod env;
 pub mod error;
 pub mod executor;
 pub mod parse;
+pub mod pool;
 pub mod types;
 
 pub use args::{append_completion_instruction, resolve_command, resolve_spawn, resolve_spawn_with_native_resume};
