@@ -95,8 +95,8 @@ pub enum Command {
     /// Admit fixer work for a PR (Go-compatible: `looper fix --pr N`)
     Fix(commands::fix::FixArgs),
 
-    // -- Disabled stubs (hidden; return unsupported if invoked) --
-    #[command(subcommand, hide = true)]
+    // -- Takeover (single-PR focus mode) --
+    #[command(subcommand)]
     Takeover(commands::takeover::TakeoverCommand),
 
     #[command(subcommand, hide = true)]

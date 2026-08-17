@@ -13,6 +13,7 @@ pub mod resume;
 pub mod retry_policy;
 pub mod run_status;
 pub mod steps;
+pub mod takeover;
 pub mod vendor;
 
 // ── Re-exports ────────────────────────────────────────────────────────────────

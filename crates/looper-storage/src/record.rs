@@ -319,6 +319,24 @@ pub struct OutcomeRecord {
     pub updated_at: String,
 }
 
+/// Takeover session record — single-PR focus mode.
+pub struct TakeoverSessionRecord {
+    pub id: String,
+    pub project_name: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub pr_number: i64,
+    pub status: String,
+    pub started_at: String,
+    pub last_activity: String,
+    pub cycles_completed: i32,
+    pub current_phase: String,
+    pub error_count: i32,
+    pub max_errors: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 /// Helper type for counts-by-status queries.
 pub type StatusCountMap = HashMap<String, i64>;
 

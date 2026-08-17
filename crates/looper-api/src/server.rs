@@ -65,6 +65,9 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         .route("/api/projects/{name}/agent-config", get(routes::get_agent_config))
         // Worktree cleanup
         .route("/api/worktree/cleanup", post(routes::worktree_cleanup))
+        // Takeover routes
+        .route("/api/takeovers", get(routes::list_takeovers))
+        .route("/api/projects/{name}/takeover", post(routes::start_takeover).delete(routes::stop_takeover))
         // Dashboard compatibility routes (flat /api/* paths for the React SPA)
         .merge(dashboard::dashboard_routes())
         // CORS

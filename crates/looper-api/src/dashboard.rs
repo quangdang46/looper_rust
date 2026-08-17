@@ -13,8 +13,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
 use futures::stream::Stream;
+use serde::{Deserialize, Serialize};
 
 use crate::envelope::Envelope;
 use crate::error::ApiError;
@@ -264,10 +264,14 @@ async fn list_loops_flat(
         .into_iter()
         .filter(|r| {
             if let Some(ref pid) = params.project_id {
-                if &r.project_id != pid { return false; }
+                if &r.project_id != pid {
+                    return false;
+                }
             }
             if let Some(ref status_filter) = params.status {
-                if &r.status != status_filter { return false; }
+                if &r.status != status_filter {
+                    return false;
+                }
             }
             true
         })
@@ -287,7 +291,8 @@ async fn get_loop_flat(
     let (project, seq) = parse_selector(&selector)?;
     let repos = state.ctx.state.repos();
     let all_loops = repos.loops.list().map_err(internal_error)?;
-    let record = all_loops.into_iter()
+    let record = all_loops
+        .into_iter()
         .find(|r| r.project_id == project && r.seq == seq)
         .ok_or_else(|| ApiError::not_found(format!("loop {project}:{seq} not found")))?;
 
@@ -300,11 +305,22 @@ async fn start_loop_flat(
 ) -> Json<Envelope<LoopItem>> {
     // TODO: implement resume logic
     Json(Envelope::success(LoopItem {
-        id: "stub:0".into(), seq: 0, project_id: "stub".into(), loop_type: "planner".into(),
-        target_type: "project".into(), status: "idle".into(), display_status: None,
-        attempts: None, max_attempts: None, last_failure_kind: None, last_failure_reason: None,
-        resume_policy: None, last_run_at: None, next_run_at: None,
-        created_at: "".into(), updated_at: "".into(),
+        id: "stub:0".into(),
+        seq: 0,
+        project_id: "stub".into(),
+        loop_type: "planner".into(),
+        target_type: "project".into(),
+        status: "idle".into(),
+        display_status: None,
+        attempts: None,
+        max_attempts: None,
+        last_failure_kind: None,
+        last_failure_reason: None,
+        resume_policy: None,
+        last_run_at: None,
+        next_run_at: None,
+        created_at: "".into(),
+        updated_at: "".into(),
     }))
 }
 
@@ -371,9 +387,7 @@ async fn loop_logs(
     Sse::new(stream)
 }
 
-async fn runs_active(
-    State(state): State<Arc<AppState>>,
-) -> Json<Envelope<ActiveRunsList>> {
+async fn runs_active(State(state): State<Arc<AppState>>) -> Json<Envelope<ActiveRunsList>> {
     let repos = state.ctx.state.repos();
     let all_loops = repos.loops.list().unwrap_or_default();
     let items: Vec<ActiveRunItem> = all_loops
@@ -393,10 +407,7 @@ async fn runs_active(
     Json(Envelope::success(ActiveRunsList { items }))
 }
 
-async fn stop_active_run(
-    State(_state): State<Arc<AppState>>,
-    Path(selector): Path<String>,
-) -> Json<serde_json::Value> {
+async fn stop_active_run(State(_state): State<Arc<AppState>>, Path(selector): Path<String>) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "stopped": true, "loopId": selector }))
 }
 
@@ -406,17 +417,31 @@ async fn agent_models(
     let vendor = params.get("vendor").cloned().unwrap_or_else(|| "claude".into());
     let models = match vendor.as_str() {
         "claude" | "claude-code" => vec![
-            AgentModelEntry { id: "claude-sonnet-4-20250514".into(), label: "Claude Sonnet 4".into(), source: "static".into() },
-            AgentModelEntry { id: "claude-opus-4-20250514".into(), label: "Claude Opus 4".into(), source: "static".into() },
-            AgentModelEntry { id: "claude-haiku-4-5-20251001".into(), label: "Claude Haiku 4.5".into(), source: "static".into() },
+            AgentModelEntry {
+                id: "claude-sonnet-4-20250514".into(),
+                label: "Claude Sonnet 4".into(),
+                source: "static".into(),
+            },
+            AgentModelEntry {
+                id: "claude-opus-4-20250514".into(),
+                label: "Claude Opus 4".into(),
+                source: "static".into(),
+            },
+            AgentModelEntry {
+                id: "claude-haiku-4-5-20251001".into(),
+                label: "Claude Haiku 4.5".into(),
+                source: "static".into(),
+            },
         ],
         "openai" | "codex" => vec![
             AgentModelEntry { id: "gpt-4o".into(), label: "GPT-4o".into(), source: "static".into() },
             AgentModelEntry { id: "o3".into(), label: "o3".into(), source: "static".into() },
         ],
-        "gemini" => vec![
-            AgentModelEntry { id: "gemini-2.5-pro".into(), label: "Gemini 2.5 Pro".into(), source: "static".into() },
-        ],
+        "gemini" => vec![AgentModelEntry {
+            id: "gemini-2.5-pro".into(),
+            label: "Gemini 2.5 Pro".into(),
+            source: "static".into(),
+        }],
         _ => vec![],
     };
     Json(Envelope::success(AgentModelsData {
@@ -426,9 +451,7 @@ async fn agent_models(
     }))
 }
 
-async fn bootstrap_exchange(
-    Json(body): Json<serde_json::Value>,
-) -> Json<Envelope<serde_json::Value>> {
+async fn bootstrap_exchange(Json(body): Json<serde_json::Value>) -> Json<Envelope<serde_json::Value>> {
     let _code = body.get("code").and_then(|v| v.as_str()).unwrap_or("");
     Json(Envelope::success(serde_json::json!({ "token": "local-dashboard-token" })))
 }
@@ -462,7 +485,8 @@ fn record_to_loop_item(r: looper_storage::record::LoopRecord) -> LoopItem {
 /// Parse a loop selector like `"my-project:3"` or `"3"` into (project, seq).
 fn parse_selector(selector: &str) -> Result<(String, i64), ApiError> {
     if let Some((proj, seq_str)) = selector.split_once(':') {
-        let seq: i64 = seq_str.parse().map_err(|_| ApiError::bad_request(format!("invalid seq in selector: {selector}")))?;
+        let seq: i64 =
+            seq_str.parse().map_err(|_| ApiError::bad_request(format!("invalid seq in selector: {selector}")))?;
         Ok((proj.to_string(), seq))
     } else {
         Err(ApiError::bad_request(format!("selector must be 'project:seq', got: {selector}")))

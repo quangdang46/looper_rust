@@ -8,6 +8,7 @@ pub mod projects;
 pub mod pull_request_snapshots;
 pub mod queue;
 pub mod runs;
+pub mod takeover_sessions;
 pub mod webhook_forwarders;
 pub mod webhook_tunnel_hooks;
 pub mod worktrees;
@@ -26,6 +27,7 @@ pub use self::projects::ProjectsRepository;
 pub use self::pull_request_snapshots::PullRequestSnapshotsRepository;
 pub use self::queue::QueueRepository;
 pub use self::runs::RunsRepository;
+pub use self::takeover_sessions::TakeoverSessionsRepository;
 pub use self::webhook_forwarders::WebhookForwardersRepository;
 pub use self::webhook_tunnel_hooks::WebhookTunnelHooksRepository;
 pub use self::worktrees::WorktreesRepository;
@@ -50,6 +52,7 @@ pub struct Repositories {
     pub queue: QueueRepository,
     pub notifications: NotificationsRepository,
     pub outcomes: OutcomesRepository,
+    pub takeover_sessions: TakeoverSessionsRepository,
     pub worktrees: WorktreesRepository,
     pub webhook_forwarders: WebhookForwardersRepository,
     pub webhook_tunnel_hooks: WebhookTunnelHooksRepository,
@@ -71,6 +74,7 @@ impl Repositories {
             queue: QueueRepository::new(Arc::clone(&conn)),
             notifications: NotificationsRepository::new(Arc::clone(&conn)),
             outcomes: OutcomesRepository::new(Arc::clone(&conn)),
+            takeover_sessions: TakeoverSessionsRepository::new(Arc::clone(&conn)),
             worktrees: WorktreesRepository::new(Arc::clone(&conn)),
             webhook_forwarders: WebhookForwardersRepository::new(Arc::clone(&conn)),
             webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(Arc::clone(&conn)),
@@ -99,6 +103,7 @@ impl Repositories {
             queue: QueueRepository::new(make_conn()?),
             notifications: NotificationsRepository::new(make_conn()?),
             outcomes: OutcomesRepository::new(make_conn()?),
+            takeover_sessions: TakeoverSessionsRepository::new(make_conn()?),
             worktrees: WorktreesRepository::new(make_conn()?),
             webhook_forwarders: WebhookForwardersRepository::new(make_conn()?),
             webhook_tunnel_hooks: WebhookTunnelHooksRepository::new(make_conn()?),

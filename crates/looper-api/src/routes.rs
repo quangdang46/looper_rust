@@ -929,6 +929,128 @@ pub async fn worktree_cleanup(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Takeover routes
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct StartTakeoverInput {
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub pr_number: i64,
+    pub max_errors: Option<i32>,
+}
+
+#[derive(Serialize)]
+pub struct TakeoverSessionResponse {
+    pub id: String,
+    pub project_name: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub pr_number: i64,
+    pub status: String,
+    pub started_at: String,
+    pub last_activity: String,
+    pub cycles_completed: i32,
+    pub current_phase: String,
+    pub error_count: i32,
+    pub max_errors: i32,
+}
+
+pub async fn list_takeovers(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Envelope<Vec<TakeoverSessionResponse>>>, ApiError> {
+    let repos = state.ctx.state.repos();
+    let sessions = repos.takeover_sessions.list_active().map_err(internal_error)?;
+    let response: Vec<TakeoverSessionResponse> = sessions
+        .into_iter()
+        .map(|s| TakeoverSessionResponse {
+            id: s.id,
+            project_name: s.project_name,
+            repo_owner: s.repo_owner,
+            repo_name: s.repo_name,
+            pr_number: s.pr_number,
+            status: s.status,
+            started_at: s.started_at,
+            last_activity: s.last_activity,
+            cycles_completed: s.cycles_completed,
+            current_phase: s.current_phase,
+            error_count: s.error_count,
+            max_errors: s.max_errors,
+        })
+        .collect();
+    Ok(Json(Envelope::success(response)))
+}
+
+pub async fn start_takeover(
+    State(state): State<Arc<AppState>>,
+    Path(project_name): Path<String>,
+    Json(input): Json<StartTakeoverInput>,
+) -> Result<(StatusCode, Json<Envelope<TakeoverSessionResponse>>), ApiError> {
+    let repos = state.ctx.state.repos();
+    let now = crate::helpers::now_iso();
+    let id = uuid::Uuid::new_v4().to_string();
+
+    let session = looper_storage::record::TakeoverSessionRecord {
+        id: id.clone(),
+        project_name: project_name.clone(),
+        repo_owner: input.repo_owner,
+        repo_name: input.repo_name,
+        pr_number: input.pr_number,
+        status: "active".into(),
+        started_at: now.clone(),
+        last_activity: now.clone(),
+        cycles_completed: 0,
+        current_phase: "planning".into(),
+        error_count: 0,
+        max_errors: input.max_errors.unwrap_or(5),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+
+    repos.takeover_sessions.upsert(&session).map_err(internal_error)?;
+
+    let response = TakeoverSessionResponse {
+        id: session.id,
+        project_name: session.project_name,
+        repo_owner: session.repo_owner,
+        repo_name: session.repo_name,
+        pr_number: session.pr_number,
+        status: session.status,
+        started_at: session.started_at,
+        last_activity: session.last_activity,
+        cycles_completed: session.cycles_completed,
+        current_phase: session.current_phase,
+        error_count: session.error_count,
+        max_errors: session.max_errors,
+    };
+
+    // Trigger scheduler tick to pick up new takeover
+    state.ctx.state.trigger_scheduler_tick().await;
+
+    Ok((StatusCode::CREATED, Json(Envelope::success(response))))
+}
+
+pub async fn stop_takeover(
+    State(state): State<Arc<AppState>>,
+    Path(project_name): Path<String>,
+) -> Result<Json<Envelope<()>>, ApiError> {
+    let repos = state.ctx.state.repos();
+    let now = crate::helpers::now_iso();
+    let active = repos.takeover_sessions.list_active().map_err(internal_error)?;
+    let session = active
+        .into_iter()
+        .find(|s| s.project_name == project_name)
+        .ok_or_else(|| ApiError::not_found(format!("no active takeover for project '{project_name}'")))?;
+
+    repos.takeover_sessions.update_status(&session.id, "cancelled", &now).map_err(internal_error)?;
+
+    // Terminate any running loops for this project
+    let _ = state.ctx.state.stop_all(&project_name).await;
+
+    Ok(Json(Envelope::success_empty()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

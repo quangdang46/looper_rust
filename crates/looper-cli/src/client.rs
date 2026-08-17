@@ -497,6 +497,48 @@ impl DaemonAPIClient {
     ) -> Result<crate::commands::worktree::WorktreeCleanupResult, CliError> {
         self.post("/api/worktree/cleanup", input).await
     }
+
+    // -- Takeover --
+
+    pub async fn list_takeovers(&self) -> Result<Vec<TakeoverSessionResponse>, CliError> {
+        self.get("/api/takeovers").await
+    }
+
+    pub async fn start_takeover(
+        &self,
+        project: &str,
+        input: &StartTakeoverInput,
+    ) -> Result<TakeoverSessionResponse, CliError> {
+        self.post(&format!("/api/projects/{project}/takeover"), input).await
+    }
+
+    pub async fn stop_takeover(&self, project: &str) -> Result<(), CliError> {
+        self.delete_unit(&format!("/api/projects/{project}/takeover")).await
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TakeoverSessionResponse {
+    pub id: String,
+    pub project_name: String,
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub pr_number: i64,
+    pub status: String,
+    pub started_at: String,
+    pub last_activity: String,
+    pub cycles_completed: i32,
+    pub current_phase: String,
+    pub error_count: i32,
+    pub max_errors: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StartTakeoverInput {
+    pub repo_owner: String,
+    pub repo_name: String,
+    pub pr_number: i64,
+    pub max_errors: Option<i32>,
 }
 
 // ---------------------------------------------------------------------------
