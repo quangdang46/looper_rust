@@ -11,6 +11,7 @@ pub mod dispatch;
 pub mod error;
 pub mod fixer;
 pub mod fixer_handoff;
+pub mod hitl;
 pub mod lifecycle;
 pub mod merge_watch;
 pub mod middleware;
