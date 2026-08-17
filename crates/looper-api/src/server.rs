@@ -6,6 +6,7 @@ use axum::Router;
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 
+use crate::dashboard;
 use crate::error::ApiError;
 use crate::routes;
 use crate::routes::AppState;
@@ -64,6 +65,8 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         .route("/api/projects/{name}/agent-config", get(routes::get_agent_config))
         // Worktree cleanup
         .route("/api/worktree/cleanup", post(routes::worktree_cleanup))
+        // Dashboard compatibility routes (flat /api/* paths for the React SPA)
+        .merge(dashboard::dashboard_routes())
         // CORS
         .layer(CorsLayer::permissive())
         .with_state(state);

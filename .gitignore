@@ -22,3 +22,4 @@ $TEMP_DIR/
 *.db-shm
 *.db-wal
 .looper/
+.tmp

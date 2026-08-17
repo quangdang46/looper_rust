@@ -24,6 +24,7 @@ pub mod helpers;
 pub mod sse;
 pub mod types;
 
+pub mod dashboard;
 pub mod routes;
 pub mod server;
 
