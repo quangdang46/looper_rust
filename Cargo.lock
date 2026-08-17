@@ -1146,6 +1146,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "looper-forge"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "looper-git"
 version = "0.1.0"
 dependencies = [
