@@ -79,13 +79,12 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
     router
 }
 
-/// Start the API server and run until a shutdown signal is received.
-pub async fn serve(
-    ctx: Arc<Context>,
+/// Start the API server with a pre-built router (used when dashboard routes are merged).
+pub async fn serve_with_router(
+    router: Router,
     config: ServerConfig,
     shutdown_rx: oneshot::Receiver<()>,
 ) -> Result<(), ApiError> {
-    let router = build_router(ctx);
     let listener = tokio::net::TcpListener::bind(&config.bind_address)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to bind to {}: {}", config.bind_address, e)))?;
@@ -101,4 +100,14 @@ pub async fn serve(
         .map_err(|e| ApiError::internal(format!("Server error: {e}")))?;
 
     Ok(())
+}
+
+/// Start the API server and run until a shutdown signal is received.
+pub async fn serve(
+    ctx: Arc<Context>,
+    config: ServerConfig,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> Result<(), ApiError> {
+    let router = build_router(ctx);
+    serve_with_router(router, config, shutdown_rx).await
 }

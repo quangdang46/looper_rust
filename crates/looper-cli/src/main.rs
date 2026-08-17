@@ -431,17 +431,9 @@ mod tests {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
         // Primary surface must not advertise disabled stubs or destructive misnomer.
-        for stub in [
-            "takeover",
-            "run-stats",
-            "logs-follow",
-            "netadmin",
-            "labels",
-            "prompt",
-            "feedback",
-            "webhook",
-            "reconcile-stale",
-        ] {
+        for stub in
+            ["run-stats", "logs-follow", "netadmin", "labels", "prompt", "feedback", "webhook", "reconcile-stale"]
+        {
             // clap help lines list subcommands as "  name  description".
             // Do not use bare contains(stub) — prose may mention "reviewer" etc.
             let as_cmd_line = format!("  {stub} ");
@@ -458,12 +450,15 @@ mod tests {
         assert!(help.contains("plan") || help.contains("Plan"));
         assert!(help.contains("review") || help.contains("Review"));
         assert!(help.contains("fix") || help.contains("Fix"));
+        // Takeover is now a real command (not a hidden stub).
+        assert!(help.contains("takeover") || help.contains("Takeover"));
     }
 
     #[test]
     fn stub_subcommands_still_parse_when_invoked() {
         // Hidden but invokable — must parse so handlers can return unsupported.
-        assert!(Cli::try_parse_from(["looper", "takeover", "status", "r1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "takeover", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "takeover", "start", "--repo", "o/r", "--pr", "1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "run-stats", "show", "r1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "logs-follow", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "netadmin", "status"]).is_ok());

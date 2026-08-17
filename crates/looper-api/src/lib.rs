@@ -30,7 +30,7 @@ pub mod server;
 
 pub use envelope::Envelope;
 pub use error::{ApiError, ErrorCode, ErrorInfo};
-pub use server::{build_router, serve, ServerConfig};
+pub use server::{build_router, serve, serve_with_router, ServerConfig};
 pub use types::{
     AcquireLockInput, AddProjectInput, AdmitWorkRequest, AdmitWorkResponse, AgentConfigResponse, ConfigResponse,
     Context, CreateLoopInput, EnqueueInput, EventLogResponse, HealthResponse, LockResponse, LoopDetail, LoopSummary,

@@ -11,6 +11,7 @@
 //! 7. Start API server
 //! 8. Wait for shutdown signal
 
+mod dashboard;
 mod version;
 
 use std::sync::Arc;
@@ -594,9 +595,11 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let port = config.server.as_ref().map(|s| s.port).unwrap_or(7391);
     let api_config = ServerConfig { bind_address: format!("{host}:{port}"), auth_token: None };
 
-    // 11. Start API server
+    // 11. Start API server with dashboard routes
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let api_handle = tokio::spawn(async move { looper_api::serve(ctx, api_config, shutdown_rx).await });
+    let api_router = looper_api::build_router(ctx).merge(dashboard::router());
+    let api_handle =
+        tokio::spawn(async move { looper_api::serve_with_router(api_router, api_config, shutdown_rx).await });
 
     // 12. Complete startup (starts scheduler threads, worktree cleanup)
     runtime.complete_startup().await?;
