@@ -99,7 +99,8 @@ pub enum Command {
     #[command(subcommand)]
     Takeover(commands::takeover::TakeoverCommand),
 
-    #[command(subcommand, hide = true)]
+    /// Show aggregate run statistics
+    #[command(subcommand)]
     RunStats(commands::run_stats::RunStatsCommand),
 
     #[command(subcommand, hide = true)]
@@ -431,9 +432,7 @@ mod tests {
         let mut cmd = Cli::command();
         let help = cmd.render_long_help().to_string();
         // Primary surface must not advertise disabled stubs or destructive misnomer.
-        for stub in
-            ["run-stats", "logs-follow", "netadmin", "labels", "prompt", "feedback", "webhook", "reconcile-stale"]
-        {
+        for stub in ["logs-follow", "netadmin", "labels", "prompt", "feedback", "webhook", "reconcile-stale"] {
             // clap help lines list subcommands as "  name  description".
             // Do not use bare contains(stub) — prose may mention "reviewer" etc.
             let as_cmd_line = format!("  {stub} ");
@@ -459,7 +458,7 @@ mod tests {
         // Hidden but invokable — must parse so handlers can return unsupported.
         assert!(Cli::try_parse_from(["looper", "takeover", "list"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "takeover", "start", "--repo", "o/r", "--pr", "1"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "run-stats", "show", "r1"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "run-stats", "show"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "logs-follow", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "netadmin", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "labels", "status"]).is_ok());
