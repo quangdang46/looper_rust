@@ -280,6 +280,7 @@ impl ConfiguredExecutor {
             script_wrapper,
             script_output,
             repos: SendAgentRepos(Arc::clone(&self.repos)),
+            pool: None,
         };
 
         // Spawn the run loop as a background task so it reads stdout/stderr,
@@ -428,9 +429,41 @@ pub struct Execution {
     script_output: std::path::PathBuf,
     /// Shared DB handle (Send wrapper around Mutex — see `SendAgentRepos`).
     repos: SendAgentRepos,
+    /// Optional worktree pool for automatic release on completion/kill.
+    pool: Option<Arc<crate::pool::LooperPool>>,
 }
 
 impl Execution {
+    /// Set the worktree pool for automatic release on completion/kill.
+    pub fn with_pool(mut self, pool: Arc<crate::pool::LooperPool>) -> Self {
+        self.pool = Some(pool);
+        self
+    }
+
+    /// Release the worktree back to the pool (if pool is set).
+    fn release_worktree(&self) {
+        if let Some(ref pool) = self.pool {
+            let path = std::path::Path::new(&self.input.working_directory);
+            if path.exists() {
+                match pool.release(path) {
+                    Ok(true) => tracing::info!(
+                        worktree = %self.input.working_directory,
+                        "released worktree back to pool"
+                    ),
+                    Ok(false) => tracing::debug!(
+                        worktree = %self.input.working_directory,
+                        "worktree not found in pool (already released?)"
+                    ),
+                    Err(e) => tracing::warn!(
+                        worktree = %self.input.working_directory,
+                        error = %e,
+                        "failed to release worktree"
+                    ),
+                }
+            }
+        }
+    }
+
     /// Wait for the execution to complete and return the result.
     pub async fn wait(&self) -> Result<AgentResult, AgentError> {
         loop {
@@ -459,6 +492,9 @@ impl Execution {
             let _ = killpg(Pid::from_raw(pid as i32), Signal::SIGTERM);
             tracing::info!("Sent SIGTERM to process group {} (reason: {})", pid, reason);
         }
+
+        // Release worktree back to pool after kill
+        self.release_worktree();
 
         Ok(())
     }
@@ -745,6 +781,9 @@ impl Execution {
 
         let mut d = done.lock().await;
         *d = true;
+
+        // Release worktree back to pool after agent exits
+        self.release_worktree();
 
         result_val
     }
