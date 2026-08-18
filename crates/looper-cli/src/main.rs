@@ -459,11 +459,11 @@ mod tests {
         assert!(Cli::try_parse_from(["looper", "takeover", "list"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "takeover", "start", "--repo", "o/r", "--pr", "1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "run-stats", "show"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "logs-follow", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "logs-follow", "run", "r1"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "netadmin", "status"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "labels", "status"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "prompt", "status"]).is_ok());
-        assert!(Cli::try_parse_from(["looper", "feedback", "status"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "labels", "list"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "prompt", "preview"]).is_ok());
+        assert!(Cli::try_parse_from(["looper", "feedback", "submit", "r1", "--message", "test"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "webhook", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "diagnostics", "status"]).is_ok());
         assert!(Cli::try_parse_from(["looper", "reconcile-stale"]).is_ok());

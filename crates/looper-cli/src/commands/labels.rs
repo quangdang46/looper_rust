@@ -1,4 +1,4 @@
-//! Labels — disabled stub (hidden from help).
+//! Label management commands.
 
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -6,21 +6,38 @@ use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum LabelsCommand {
-    Status,
+    /// List looper labels
+    List,
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &LabelsCommand, _json: bool) -> Result<(), CliError> {
-    Err(CliError::unsupported("looper labels"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn labels_is_unsupported() {
-        let client = DaemonAPIClient::new("http://127.0.0.1:7391".into(), None);
-        let err = handle(&client, &LabelsCommand::Status, false).await.unwrap_err();
-        assert!(err.to_string().contains("unsupported"));
+pub async fn handle(client: &DaemonAPIClient, cmd: &LabelsCommand, json: bool) -> Result<(), CliError> {
+    match cmd {
+        LabelsCommand::List => list_labels(json).await,
     }
+}
+
+async fn list_labels(json: bool) -> Result<(), CliError> {
+    let labels = vec![
+        ("looper:plan", "Triggers planner for an issue"),
+        ("looper:review", "Triggers reviewer for a PR"),
+        ("looper:fix", "Triggers fixer for a PR"),
+        ("looper:work", "Triggers worker for an issue"),
+        ("looper:spec-reviewing", "Spec PR is being reviewed"),
+        ("looper:spec-ready", "Spec PR is ready for implementation"),
+    ];
+
+    if json {
+        let items: Vec<serde_json::Value> =
+            labels.iter().map(|(name, desc)| serde_json::json!({"name": name, "description": desc})).collect();
+        println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
+    } else {
+        println!("{:<25} {}", "Label", "Description");
+        println!("{}", "-".repeat(60));
+        for (name, desc) in &labels {
+            println!("{:<25} {}", name, desc);
+        }
+        println!();
+        println!("Usage: Add these labels to GitHub issues/PRs to trigger looper actions.");
+    }
+    Ok(())
 }

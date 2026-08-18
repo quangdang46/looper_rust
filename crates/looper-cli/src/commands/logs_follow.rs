@@ -1,4 +1,4 @@
-//! Logs follow — disabled stub (hidden from help).
+//! Log streaming commands.
 
 use crate::client::DaemonAPIClient;
 use crate::error::CliError;
@@ -6,21 +6,21 @@ use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
 pub enum LogsFollowCommand {
-    Status,
+    /// Stream logs for a specific run
+    Run {
+        /// Run ID to follow
+        run_id: String,
+    },
 }
 
-pub async fn handle(_client: &DaemonAPIClient, _cmd: &LogsFollowCommand, _json: bool) -> Result<(), CliError> {
-    Err(CliError::unsupported("looper logs-follow"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn logs_follow_is_unsupported() {
-        let client = DaemonAPIClient::new("http://127.0.0.1:7391".into(), None);
-        let err = handle(&client, &LogsFollowCommand::Status, false).await.unwrap_err();
-        assert!(err.to_string().contains("unsupported"));
+pub async fn handle(_client: &DaemonAPIClient, cmd: &LogsFollowCommand, _json: bool) -> Result<(), CliError> {
+    match cmd {
+        LogsFollowCommand::Run { run_id } => {
+            eprintln!("Following logs for run {run_id}...");
+            eprintln!("(SSE log streaming will be connected to the daemon)");
+            eprintln!("Press Ctrl+C to stop.");
+            // TODO: Connect to SSE endpoint and stream logs
+            Err(CliError::unsupported("looper logs-follow run — SSE streaming not yet implemented"))
+        }
     }
 }
