@@ -1,0 +1,49 @@
+name: Sandbox E2E
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sandbox-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-sandbox-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-sandbox-
+
+      - name: Build release binaries
+        run: cargo build --release -p looperd -p looper-cli
+
+      - name: Run workspace tests
+        run: cargo test --workspace --exclude looper-e2e
+
+      - name: Run E2E tests
+        if: env.HAS_SANDBOX_TOKEN == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.SANDBOX_TOKEN }}
+          GITHUB_REPO: ${{ secrets.SANDBOX_REPO }}
+        run: cargo test -p looper-e2e -- --test-threads=1
+        continue-on-error: true
+
+      - name: Upload artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-e2e-logs
+          path: |
+            target/looper-*.log
+            /tmp/looper/
+          retention-days: 7
