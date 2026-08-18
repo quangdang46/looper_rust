@@ -62,7 +62,8 @@ async fn list_forwarders(client: &DaemonAPIClient, json: bool) -> Result<(), Cli
     } else if forwarders.is_empty() {
         println!("No webhook forwarders active.");
     } else {
-        println!("{:<20} {:<20} {}", "Project", "Event", "Timestamp");
+        let header = format!("{:<20} {:<20} {}", "Project", "Event", "Timestamp");
+        println!("{header}");
         println!("{}", "-".repeat(55));
         for f in &forwarders {
             println!(

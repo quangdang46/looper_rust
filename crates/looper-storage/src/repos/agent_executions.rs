@@ -86,6 +86,7 @@ impl AgentExecutionsRepository {
     ///
     /// Prefer this over `upsert` + partial defaults — `INSERT OR REPLACE` would
     /// null out project/loop/run/cwd and break orphan recovery / cleanup.
+    #[allow(clippy::too_many_arguments)]
     pub fn update_terminal(
         &self,
         id: &str,

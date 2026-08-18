@@ -52,57 +52,37 @@ pub struct Capabilities {
     pub review_publish: ReviewPublish,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ThreadResolution {
     Native,
     ManualOnly,
+    #[default]
     Disabled,
 }
 
-impl Default for ThreadResolution {
-    fn default() -> Self {
-        Self::Disabled
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkerClaim {
+    #[default]
     AssignSelf,
     PreAssigned,
 }
 
-impl Default for WorkerClaim {
-    fn default() -> Self {
-        Self::AssignSelf
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewDiscovery {
+    #[default]
     ReviewRequest,
     Label,
 }
 
-impl Default for ReviewDiscovery {
-    fn default() -> Self {
-        Self::ReviewRequest
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewPublish {
+    #[default]
     NativeReview,
     CommentOnly,
-}
-
-impl Default for ReviewPublish {
-    fn default() -> Self {
-        Self::NativeReview
-    }
 }
 
 /// Provider kind identifier.
@@ -166,13 +146,14 @@ pub trait Forge: Send + Sync {
 }
 
 /// Registry that resolves project config to the correct forge provider.
+#[derive(Default)]
 pub struct Registry {
     providers: HashMap<String, Arc<dyn Forge>>,
 }
 
 impl Registry {
     pub fn new() -> Self {
-        Self { providers: HashMap::new() }
+        Self::default()
     }
 
     pub fn register(&mut self, name: String, provider: Arc<dyn Forge>) {

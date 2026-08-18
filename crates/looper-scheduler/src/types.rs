@@ -156,16 +156,11 @@ impl Default for SchedulerConfig {
 // Dispatch types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum DispatchMode {
     HumanGated,
+    #[default]
     Autonomous,
-}
-
-impl Default for DispatchMode {
-    fn default() -> Self {
-        Self::Autonomous
-    }
 }
 
 #[derive(Debug, Clone)]

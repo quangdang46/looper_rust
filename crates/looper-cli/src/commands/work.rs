@@ -93,6 +93,7 @@ pub struct RoleIssueArgs {
     pub priority: Option<i64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn admit_role(
     client: &DaemonAPIClient,
     project: &str,

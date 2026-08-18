@@ -982,7 +982,7 @@ impl ReviewerScheduler for Reviewer {
                 prs.retain(|pr| {
                     let reviewing = pr.labels.iter().any(|l| l == spec_labels::SPEC_REVIEWING);
                     let reviewed = pr.labels.iter().any(|l| l == "looper/reviewed");
-                    !(reviewed && !reviewing)
+                    !reviewed || reviewing
                 });
 
                 {

@@ -10,7 +10,7 @@ pub enum LabelsCommand {
     List,
 }
 
-pub async fn handle(client: &DaemonAPIClient, cmd: &LabelsCommand, json: bool) -> Result<(), CliError> {
+pub async fn handle(_client: &DaemonAPIClient, cmd: &LabelsCommand, json: bool) -> Result<(), CliError> {
     match cmd {
         LabelsCommand::List => list_labels(json).await,
     }
@@ -31,7 +31,8 @@ async fn list_labels(json: bool) -> Result<(), CliError> {
             labels.iter().map(|(name, desc)| serde_json::json!({"name": name, "description": desc})).collect();
         println!("{}", serde_json::to_string_pretty(&items).unwrap_or_default());
     } else {
-        println!("{:<25} {}", "Label", "Description");
+        let header = format!("{:<25} {}", "Label", "Description");
+        println!("{header}");
         println!("{}", "-".repeat(60));
         for (name, desc) in &labels {
             println!("{:<25} {}", name, desc);

@@ -18,7 +18,7 @@ use crate::types::{
     LoopSummary, PaginationParams, ProjectSummary, QueueItemResponse, RunDetail, RunSummary, StartRunInput,
     VersionResponse,
 };
-use looper_storage::record::{LockRecord, LoopRecord, QueueItemRecord};
+use looper_storage::record::{LockRecord, QueueItemRecord};
 
 /// Shared application state available to all handlers.
 pub struct AppState {
@@ -1056,6 +1056,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use looper_storage::migration::run_migrations;
+    use looper_storage::record::LoopRecord;
     use looper_storage::repos::EventsRepository;
     use looper_storage::{EventLog, Repositories};
     use rusqlite::Connection;

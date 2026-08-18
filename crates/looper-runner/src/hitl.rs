@@ -120,6 +120,7 @@ pub enum HitlError {
 pub struct GitHubCommentTransport {
     /// The gateway to use for checking comments.
     /// In practice this would be the looper-github Gateway.
+    #[allow(dead_code)]
     gateway: Option<Arc<dyn GitHubGateway>>,
 }
 
