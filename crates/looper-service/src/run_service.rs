@@ -441,7 +441,7 @@ mod tests {
         let run = run_svc
             .start_run(StartInput {
                 loop_id: loop_.id.clone(),
-                current_step: Some("discover".into()),
+                current_step: Some("discover-issues".into()),
                 last_completed_step: None,
                 checkpoint_json: None,
             })
@@ -504,7 +504,7 @@ mod tests {
         let run = run_svc
             .start_run(StartInput {
                 loop_id: loop_.id.clone(),
-                current_step: Some("discover".into()),
+                current_step: Some("discover-issues".into()),
                 last_completed_step: None,
                 checkpoint_json: None,
             })
@@ -513,16 +513,16 @@ mod tests {
             .record_step(RecordStepInput {
                 run_id: run.id.clone(),
                 loop_type: LoopType::Planner,
-                current_step: Some("assess".into()),
-                last_completed_step: Some("discover".into()),
+                current_step: Some("prepare-worktree".into()),
+                last_completed_step: Some("discover-issues".into()),
                 checkpoint_json: Some(r#"{"phase":2}"#.into()),
                 last_heartbeat_at: None,
                 event_type: Some("step_completed".into()),
                 event_payload: None,
             })
             .unwrap();
-        assert_eq!(updated.current_step.as_deref(), Some("assess"));
-        assert_eq!(updated.last_completed_step.as_deref(), Some("discover"));
+        assert_eq!(updated.current_step.as_deref(), Some("prepare-worktree"));
+        assert_eq!(updated.last_completed_step.as_deref(), Some("discover-issues"));
     }
 
     #[test]
