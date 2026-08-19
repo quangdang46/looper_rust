@@ -381,7 +381,7 @@ impl Gateway {
             let lease = format!("refs/heads/{}:{}", input.branch, expected_sha);
             helpers::run_git_cmd(
                 &input.worktree_path,
-                ["push", "--porcelain", &format!("--force-with-lease={}", &lease), "-u", &input.remote, &refspec],
+                ["push", "--porcelain", &format!("--force-with-lease={}", lease), "-u", &input.remote, &refspec],
             )
             .await?;
         } else {

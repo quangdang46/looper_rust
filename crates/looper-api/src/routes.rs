@@ -45,9 +45,11 @@ pub async fn version() -> Json<Envelope<VersionResponse>> {
 }
 
 /// Prometheus metrics endpoint — returns metrics in OpenMetrics text format.
-pub async fn metrics() -> (axum::http::StatusCode, [(axum::http::header::HeaderName, &str); 1], String) {
+pub async fn metrics() -> (axum::http::StatusCode, axum::http::HeaderMap, String) {
     let body = crate::metrics::encode_metrics();
-    (axum::http::StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")], body)
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8".parse().unwrap());
+    (axum::http::StatusCode::OK, headers, body)
 }
 
 pub async fn shutdown(State(_state): State<Arc<AppState>>) -> Json<Envelope<()>> {
