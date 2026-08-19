@@ -27,7 +27,7 @@ pub(crate) struct PlaneIssuesResponse {
 
 /// Convert a Plane issue into a looper-forge Issue.
 pub fn issue_from_plane(p: PlaneIssue) -> Issue {
-    let number = p.identifier.split('-').last().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let number = p.identifier.split('-').next_back().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
 
     let state = match p.state.to_lowercase().as_str() {
         "backlog" | "todo" | "in_progress" | "in review" => IssueState::Open,

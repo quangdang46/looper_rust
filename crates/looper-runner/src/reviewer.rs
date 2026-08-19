@@ -369,7 +369,7 @@ impl Reviewer {
                             project_id: project_id.clone().unwrap_or_default(),
                             repo_path: ".".to_string(),
                             worktree_root: worktree_root.display().to_string(),
-                            branch: format!("review/{}", &run.loop_id),
+                            branch: format!("review/{}", run.loop_id),
                             base_branch: Some("main".to_string()),
                             start_point: Some("main".to_string()),
                             pr_number: None,
