@@ -27,6 +27,7 @@ pub fn build_router(ctx: Arc<Context>) -> Router {
         // Health & admin
         .route("/health", get(routes::health))
         .route("/version", get(routes::version))
+        .route("/metrics", get(routes::metrics))
         .route("/shutdown", post(routes::shutdown))
         .route("/reload", post(routes::reload))
         // Projects

@@ -92,6 +92,7 @@ pub enum ProviderKind {
     GitHub,
     Forgejo,
     Gitea,
+    Plane,
 }
 
 impl fmt::Display for ProviderKind {
@@ -100,6 +101,7 @@ impl fmt::Display for ProviderKind {
             Self::GitHub => write!(f, "github"),
             Self::Forgejo => write!(f, "forgejo"),
             Self::Gitea => write!(f, "gitea"),
+            Self::Plane => write!(f, "plane"),
         }
     }
 }

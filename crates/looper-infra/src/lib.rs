@@ -20,6 +20,7 @@ pub mod daemon_lock;
 pub mod error;
 pub mod forwarder_supervisor;
 pub mod notifications;
+pub mod plugin;
 pub mod recovery;
 pub mod runtime;
 pub mod shell;
@@ -34,3 +35,6 @@ pub use worktree_cleanup::run_cycle;
 pub use circuit_breaker::CircuitBreaker;
 pub use daemon_lock::DaemonLock;
 pub use notifications::{CompositeGateway, Gateway, Notification, NotificationLevel};
+pub use plugin::{
+    DynamicPlugin, ErrorContext, LoopContext, LoopResult, NoopPlugin, Plugin, PluginManager, RunContext, RunResult,
+};

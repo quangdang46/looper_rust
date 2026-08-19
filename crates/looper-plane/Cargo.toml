@@ -1,0 +1,22 @@
+[package]
+name = "looper-plane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Plane project management provider — REST API client for Plane work-items"
+
+[lints]
+workspace = true
+
+[dependencies]
+looper-forge.workspace = true
+async-trait.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

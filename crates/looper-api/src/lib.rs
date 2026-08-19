@@ -25,6 +25,7 @@ pub mod sse;
 pub mod types;
 
 pub mod dashboard;
+pub mod metrics;
 pub mod routes;
 pub mod server;
 

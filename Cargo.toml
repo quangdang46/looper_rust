@@ -20,6 +20,7 @@ members = [
     "crates/looper-e2e",
     "crates/looper-release",
     "crates/looper-forge",
+    "crates/looper-plane",
 ]
 
 [workspace.package]
@@ -91,3 +92,9 @@ notify = "7"
 # File system utilities
 tempfile = "3"
 which = "7"
+
+# Project management providers
+looper-forge = { path = "crates/looper-forge" }
+
+# Metrics
+prometheus = { version = "0.13", default-features = false, features = ["process"] }
