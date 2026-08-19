@@ -304,13 +304,10 @@ fn parse_hunk_header(line: &str) -> Option<(i64, i64, Option<String>)> {
     }
     let rest = line.strip_prefix("@@")?.trim_start();
     // Split at the second @@
-    let (coord_str, heading) = if let Some(idx) = rest.find("@@") {
-        let (coords, head) = rest.split_at(idx);
-        let head = head.strip_prefix("@@").map(|s| s.trim().to_string());
-        (coords.trim(), head.filter(|s| !s.is_empty()))
-    } else {
-        return None;
-    };
+    let idx = rest.find("@@")?;
+    let (coords, head) = rest.split_at(idx);
+    let head = head.strip_prefix("@@").map(|s| s.trim().to_string());
+    let (coord_str, heading) = (coords.trim(), head.filter(|s| !s.is_empty()));
 
     // Parse coordinates: -old_start[,count] +new_start[,count]
     let parts: Vec<&str> = coord_str.split_whitespace().collect();

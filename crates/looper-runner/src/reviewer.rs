@@ -878,7 +878,7 @@ impl Reviewer {
                 project_id: item.project_id.clone().unwrap_or_default(),
                 repo_path: ".".to_string(),
                 worktree_root: ".".to_string(),
-                branch: format!("review/{}", &run.loop_id),
+                branch: format!("review/{}", run.loop_id),
                 base_branch: None,
                 start_point: None,
                 pr_number: None,
@@ -889,7 +889,7 @@ impl Reviewer {
             let _ = self.tokio_handle.block_on(git.cleanup_worktree(CleanupWorktreeInput {
                 repo_path: ".".to_string(),
                 worktree_path: worktree_path.clone(),
-                branch: format!("review/{}", &run.loop_id),
+                branch: format!("review/{}", run.loop_id),
                 protected_branches: vec!["main".to_string(), "master".to_string()],
             }));
             let _ = std::fs::remove_dir_all(&worktree_path);
