@@ -121,10 +121,7 @@ fn resolve_from_existing_parent(path: &Path) -> Option<String> {
             }
         }
         // Walk up
-        let parent = match current.parent() {
-            Some(p) => p.to_path_buf(),
-            None => return None,
-        };
+        let parent = current.parent()?.to_path_buf();
         if parent == current {
             return None;
         }

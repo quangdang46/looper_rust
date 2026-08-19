@@ -88,6 +88,7 @@ mod tests {
     use super::*;
     use crate::notifications::NotificationLevel;
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn test_throttle_blocks_duplicates() {
         let backend = OsascriptBackend::new(None, true);
