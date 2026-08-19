@@ -1,4 +1,3 @@
-#[cfg(unix)]
 use crate::error::CliError;
 use std::path::PathBuf;
 use std::process::Stdio;

@@ -2766,6 +2766,7 @@ dependencies = [
 [[package]]
 name = "treehouse-core"
 version = "0.1.0"
+source = "git+https://github.com/quangdang46/treehouse_rust.git?rev=4dc5d5e#4dc5d5e1e38192297f906c8bb3cdf2820f9c4129"
 dependencies = [
  "chrono",
  "fd-lock",
